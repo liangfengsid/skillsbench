@@ -1312,15 +1312,38 @@ def skill_view(
                     exc_info=True,
                 )
 
+        try:
+            from agent.skill_preprocessing import load_skills_config
+
+            _skills_cfg = load_skills_config()
+        except Exception:
+            _skills_cfg = {}
+
         rendered_content = content
+        if skill_dir and not file_path:
+            try:
+                from agent.skill_step_pools import expand_skill_content_step_pools
+
+                rendered_content = expand_skill_content_step_pools(
+                    rendered_content,
+                    skill_dir,
+                    str(skill_name),
+                    _skills_cfg,
+                )
+            except Exception:
+                logger.debug(
+                    "Step pool expansion failed for %s", skill_name, exc_info=True
+                )
+
         if preprocess:
             try:
                 from agent.skill_preprocessing import preprocess_skill_content
 
                 rendered_content = preprocess_skill_content(
-                    content,
+                    rendered_content,
                     skill_dir,
                     session_id=task_id,
+                    skills_cfg=_skills_cfg,
                 )
             except Exception:
                 logger.debug(

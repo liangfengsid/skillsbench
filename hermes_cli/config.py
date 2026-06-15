@@ -905,6 +905,20 @@ DEFAULT_CONFIG = {
         # External hub installs (trusted/community sources) are always
         # scanned regardless of this setting.
         "guard_agent_created": False,
+        # Optional per-step variant pools inside SKILL.md (HTML markers). When
+        # enabled, skill_view expands markers; use skill_step_variant tool to
+        # record attempts and maintain step_pools.json beside SKILL.md.
+        "step_pools": {
+            "enabled": True,
+            "default_max_variants_per_step": 3,
+            # How JSON variants (after manual_order) are sorted for display / eviction:
+            # laplace — (success+1)/(trials+2), trials=success+fail (default; stable for small n)
+            # raw — success / max(1, trials); no smoothing (harsh on few attempts)
+            # wilson — lower bound of 95% Wilson score interval (conservative vs laplace)
+            # ucb1 — mean + ucb1_c * sqrt(2*ln(max(2,pool_trials))/max(1,trials)); pool_trials = sum(trials)
+            "rank_strategy": "laplace",
+            "ucb1_c": 1.4142135623730951,
+        },
     },
 
     # Honcho AI-native memory -- reads ~/.honcho/config.json as single source of truth.

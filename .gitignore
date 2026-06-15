@@ -70,3 +70,11 @@ mini-swe-agent/
 result
 website/static/api/skills-index.json
 models-dev-upstream/
+
+# Local / generated (SkillsBench runs, one-off scripts, experiments)
+jobs/
+edit_pdf.py
+inspect_pdf.py
+verify_pdf.py
+syzkaller/
+test_edge.mp3

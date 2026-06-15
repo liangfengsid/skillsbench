@@ -685,6 +685,17 @@ def build_skills_system_prompt(
         or ""
     )
     disabled = get_disabled_skill_names()
+    try:
+        from hermes_cli.config import load_config as _load_cfg_sp
+
+        _sp = ((_load_cfg_sp() or {}).get("skills") or {}).get("step_pools") or {}
+        _step_pool_sig = (
+            bool(_sp.get("enabled")),
+            int(_sp.get("default_max_variants_per_step", 5) or 5),
+        )
+    except Exception:
+        _step_pool_sig = (False, 5)
+
     cache_key = (
         str(skills_dir.resolve()),
         tuple(str(d) for d in external_dirs),
@@ -692,6 +703,7 @@ def build_skills_system_prompt(
         tuple(sorted(str(ts) for ts in (available_toolsets or set()))),
         _platform_hint,
         tuple(sorted(disabled)),
+        _step_pool_sig,
     )
     with _SKILLS_PROMPT_CACHE_LOCK:
         cached = _SKILLS_PROMPT_CACHE.get(cache_key)
@@ -864,7 +876,16 @@ def build_skills_system_prompt(
             "first. It has the actual commands (e.g. `hermes config set …`, `hermes tools`, "
             "`hermes setup`) so you don't have to guess or invent workarounds.\n"
             "If a skill has issues, fix it with skill_manage(action='patch').\n"
-            "After difficult/iterative tasks, offer to save as a skill. "
+            + (
+                "When skills.step_pools.enabled is on, expanded skills list **step pools** "
+                "(ordered variants). Try them in sequence; after each attempt call "
+                "`skill_step_variant` with action `record_attempt` so future order improves. "
+                "Add non-baseline variants with `skill_step_variant` action `add_variant`; "
+                "change baseline text inside `<!-- hermes-step -->` markers via `skill_manage` patch.\n"
+                if _step_pool_sig[0]
+                else ""
+            )
+            + "After difficult/iterative tasks, offer to save as a skill. "
             "If a skill you loaded was missing steps, had wrong commands, or needed "
             "pitfalls you discovered, update it before finishing.\n"
             "\n"

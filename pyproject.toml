@@ -97,6 +97,10 @@ rl = [
   "wandb>=0.15.0,<1",
 ]
 yc-bench = ["yc-bench @ git+https://github.com/collinear-ai/yc-bench.git@bfb0c88062450f46341bd9a5298903fc2e952a5c ; python_version >= '3.12'"]
+# SkillsBench (`benchmark/skillsbench`): BenchFlow only — keeps default installs lean.
+# Version aligned with benchmark/skillsbench/pyproject.toml. Not included in [all].
+# The subproject declares requires-python >= 3.12; use 3.12+ when developing tasks there.
+skillsbench = ["benchflow>=0.3.0a7,<1"]
 all = [
   "hermes-agent[modal]",
   "hermes-agent[daytona]",

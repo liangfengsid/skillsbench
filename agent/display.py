@@ -350,6 +350,19 @@ def _resolve_local_edit_paths(tool_name: str, function_args: dict | None) -> lis
     if tool_name == "skill_manage":
         return _resolve_skill_manage_paths(function_args)
 
+    if tool_name == "skill_step_variant":
+        action = function_args.get("action")
+        name = function_args.get("name")
+        if not name or action == "list_pools":
+            return []
+        from tools.skill_manager_tool import _find_skill
+
+        existing = _find_skill(name)
+        if not existing:
+            return []
+        skill_dir = Path(existing["path"])
+        return [skill_dir / "step_pools.json"]
+
     return []
 
 

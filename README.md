@@ -46,6 +46,90 @@ source ~/.bashrc    # reload shell (or: source ~/.zshrc)
 hermes              # start chatting!
 ```
 
+**SkillsBench** (`benchmark/skillsbench/`) is a nested Python subproject (BenchFlow). To add BenchFlow to the same venv as Hermes: `pip install -e ".[skillsbench]"` from the repo root. Task authoring and BenchFlow CLI: `benchmark/skillsbench/README.md` and `benchmark/skillsbench/AGENTS.md`.
+
+### SkillsBench: Hermes batch driver
+
+[`benchmark/scripts/run_skillsbench_with_hermes.py`](benchmark/scripts/run_skillsbench_with_hermes.py) runs `AIAgent.run_conversation()` against SkillsBench tasks (timing, tokens, cost, full `run_conversation` payload in JSONL).
+
+**Defaults** (monorepo layout): `--hermes-root` = this repo root; `--skillsbench-root` = `benchmark/skillsbench/`; `--prompt-tasks-base` = resolved absolute path to `benchmark/skillsbench/tasks/`. Override if your paths differ.
+
+**Requirements:** Hermes venv where `run_agent` imports (same as `hermes` CLI); API keys per your `~/.hermes` config. The script prepends `--hermes-root` to `sys.path` before importing `AIAgent`.
+
+**Examples** (from repo root):
+
+```bash
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --list-tasks
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control \
+  --skill-nudge-interval 10 --memory-nudge-interval 10 \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
+```
+
+Use `python3 benchmark/scripts/run_skillsbench_with_hermes.py --help` for `--model`, `--max-iterations`, `--skip-context-files`, `--skip-memory`, `--log-json-pretty`, etc.
+
+Compare two JSONL logs (e.g. different skill strategies): [`benchmark/scripts/compare_skillsbench_runs.py`](benchmark/scripts/compare_skillsbench_runs.py) — by default uses **`--cohort both-completed`**: only task ids present in **both** logs **and** completed in both, so headline means are over the same symmetric set. `--cohort intersection` uses all overlapping ids (per-side pools can differ). Also prints intersection completion rates, mean ± std / median, paired deltas, optional `--html` / `--json`. `--future-metrics` lists suggested extra log fields.
+
+### HLE (Humanity's Last Exam) with Hermes
+
+Drivers live under [`benchmark/scripts/`](benchmark/scripts/) (not under `benchmark/hle/hle_eval/`). They call in-process `AIAgent` with tools disabled. Install HLE eval dependencies in the same venv as Hermes (see [`benchmark/hle/requirements.txt`](benchmark/hle/requirements.txt) — `datasets`, `numpy`, etc.).
+
+**Generate predictions** (writes `benchmark/hle/hle_<model>_hermes.json` by default; use `--max_samples` for a quick test):
+
+```bash
+pip install -r benchmark/hle/requirements.txt   # once, in your Hermes venv
+DATASET="cais/hle"
+MODEL="gpt-4o-2024-11-20"
+python3 benchmark/scripts/run_model_predictions_hermes.py \
+  --dataset "$DATASET" --model "$MODEL" --num_workers 10 --max_completion_tokens 8192
+# Local JSON instead of HF: --dataset_file benchmark/hle/_smoke_first_question.json --max_samples 1
+```
+
+**Judge predictions** (reads the predictions file; writes `benchmark/hle/judged_<basename>_hermes.json`):
+
+```bash
+python3 benchmark/scripts/run_judge_results_hermes.py \
+  --dataset "$DATASET" \
+  --predictions "benchmark/hle/hle_${MODEL}_hermes.json" \
+  --judge "$MODEL" \
+  --num_workers 10
+```
+
+Prediction filenames replace `/` in `--model` with `_` (e.g. `qwen/qwen3.6-plus` → `hle_qwen_qwen3.6-plus_hermes.json`). Optional: set `HERMES_AGENT_REPO` if `run_agent` is not importable. Shared helper: [`benchmark/scripts/hle_hermes_inprocess.py`](benchmark/scripts/hle_hermes_inprocess.py). More context: [`benchmark/hle/README.md`](benchmark/hle/README.md).
+
+### Skills: step-level variant pools (optional)
+
+Skills can expose **multiple procedural variants per step** instead of a single fixed instruction. When enabled, `skill_view` expands tagged regions in **`SKILL.md`** and merges in data from **`step_pools.json`** next to that file.
+
+**1. Turn it on** in `~/.hermes/config.yaml`:
+
+```yaml
+skills:
+  step_pools:
+    enabled: true
+    default_max_variants_per_step: 5   # optional cap when a step omits max_variants
+    # Optional: how variants sort after manual_order (laplace | raw | wilson | ucb1)
+    # rank_strategy: laplace
+    # ucb1_c: 1.4142135623730951   # only for rank_strategy: ucb1
+```
+
+**2. Mark steps in `SKILL.md`** (baseline text is the content between the tags):
+
+```markdown
+<!-- hermes-step id="install" max_variants="4" -->
+Run `npm ci` in the project root.
+<!-- /hermes-step -->
+```
+
+**3. Store extra variants** (bodies + optional success/fail counts) in **`step_pools.json`** in the same skill directory. Hermes ranks variants (with optional manual order) and trims to `max_variants` or the default above.
+
+**4. At runtime** the agent can maintain pools with the **`skill_step_variant`** tool (skills toolset): `record_attempt`, `add_variant`, `remove_variant`, `patch_variant`, `set_variant_order`, `clear_variant_order`, `list_pools`. Editing is limited to **local** skills under `~/.hermes/skills/`. Change the baseline prose in **`SKILL.md`** with `skill_manage`, not `patch_variant`.
+
+**5. Rank strategy** (`skills.step_pools.rank_strategy`, default `laplace`): after any `manual_order` prefix, remaining variants sort by a numeric score (higher = try earlier). **`laplace`** — smoothed `(success+1)/(trials+2)` for small-sample stability. **`raw`** — empirical `success/max(1,trials)` (no prior; can reorder vs Laplace when trial counts differ). **`wilson`** — conservative 95% Wilson lower bound on the success rate. **`ucb1`** — mean rate plus an exploration bonus using total pool trials and optional `ucb1_c` (default `√2`).
+
+Implementation: [`agent/skill_step_pools.py`](agent/skill_step_pools.py), [`tools/skill_step_variant_tool.py`](tools/skill_step_variant_tool.py).
+
 ---
 
 ## Getting Started
@@ -61,6 +145,8 @@ hermes claw migrate # Migrate from OpenClaw (if coming from OpenClaw)
 hermes update       # Update to the latest version
 hermes doctor       # Diagnose any issues
 ```
+
+
 
 📖 **[Full documentation →](https://hermes-agent.nousresearch.com/docs/)**
 
