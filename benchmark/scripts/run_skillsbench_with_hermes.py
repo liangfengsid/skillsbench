@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -108,7 +109,13 @@ def run_one_task(
     skip_context_files: bool,
     skip_memory: bool,
     save_trajectories: bool,
+    hot_pool_persist: Optional[str] = None,
+    wait_background_review: bool = True,
+    background_review_timeout: Optional[float] = 180.0,
 ) -> Dict[str, Any]:
+    if hot_pool_persist:
+        os.environ["HERMES_HOT_POOL_PERSIST"] = "1"
+        os.environ["HERMES_HOT_POOL_PATH"] = str(Path(hot_pool_persist).expanduser().resolve())
     _ensure_hermes_on_path(hermes_root)
     from run_agent import AIAgent  # type: ignore  # after sys.path
 
@@ -134,6 +141,14 @@ def run_one_task(
         user_message=user_message,
         task_id=hermes_task_id,
     )
+    background_review: Dict[str, Any] = {"spawned": False, "completed": True, "timeout": False}
+    if wait_background_review:
+        background_review = agent.wait_for_background_review(
+            timeout=background_review_timeout,
+        )
+        refreshed = agent.export_hot_pool_telemetry()
+        if refreshed is not None and isinstance(result, dict):
+            result["hot_pool_telemetry"] = refreshed
     elapsed = time.perf_counter() - t0
 
     envelope: Dict[str, Any] = {
@@ -151,8 +166,11 @@ def run_one_task(
             "memory": getattr(agent, "_memory_nudge_interval", None),
         },
         "model": model,
+        "background_review": background_review,
         "run_conversation_result": result,
     }
+    if isinstance(result, dict) and result.get("hot_pool_telemetry"):
+        envelope["hot_pool_telemetry"] = result["hot_pool_telemetry"]
     return envelope
 
 
@@ -253,6 +271,35 @@ def main() -> int:
         help="Append Hermes trajectories to trajectory_samples.jsonl.",
     )
     parser.add_argument(
+        "--hot-pool-persist",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Persist hot skill key points across tasks to PATH (JSON). "
+            "Each task continues the pool like a new user turn. "
+            "Sets HERMES_HOT_POOL_PERSIST=1 and HERMES_HOT_POOL_PATH for the run."
+        ),
+    )
+    parser.add_argument(
+        "--no-wait-background-review",
+        action="store_true",
+        help=(
+            "Return immediately after run_conversation without waiting for the "
+            "end-of-turn skill/memory review thread (daemon; often killed on exit)."
+        ),
+    )
+    parser.add_argument(
+        "--background-review-timeout",
+        type=float,
+        default=180.0,
+        metavar="SEC",
+        help=(
+            "Max seconds to wait for background review after each task "
+            "(default: 180). Ignored with --no-wait-background-review."
+        ),
+    )
+    parser.add_argument(
         "--log-jsonl",
         type=str,
         default=None,
@@ -297,6 +344,22 @@ def main() -> int:
             "the first 10 tasks."
         ),
     )
+    parser.add_argument(
+        "--split-file",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "JSON split from make_skillsbench_splits.py. With --all, run only tasks "
+            "in the selected --split-part instead of the full task list."
+        ),
+    )
+    parser.add_argument(
+        "--split-part",
+        choices=("train", "test", "all"),
+        default="train",
+        help="Which partition to run when --split-file is set (default: train).",
+    )
 
     args = parser.parse_args()
     skillsbench_root = _expand(args.skillsbench_root)
@@ -304,6 +367,26 @@ def main() -> int:
     tasks_dir = skillsbench_root / "tasks"
 
     task_ids = discover_task_ids(tasks_dir)
+    if args.split_file and not args.all:
+        parser.error("--split-file requires --all (or use --task for a single id).")
+    if args.split_file:
+        split_path = Path(args.split_file).expanduser()
+        if not split_path.is_file():
+            parser.error(f"Split file not found: {split_path}")
+        _split_mod_path = _SCRIPT.parent / "make_skillsbench_splits.py"
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("make_skillsbench_splits", _split_mod_path)
+        split_mod = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(split_mod)
+        split_ids = split_mod.resolve_split_task_ids(split_path, args.split_part)
+        unknown = [tid for tid in split_ids if tid not in task_ids]
+        if unknown:
+            preview = ", ".join(unknown[:5]) + (" ..." if len(unknown) > 5 else "")
+            parser.error(f"Split file lists unknown task ids: {preview}")
+        task_ids = split_ids
+
     if not args.list_tasks and not args.all and not args.task:
         parser.error("Specify --task TASK_ID, --all, or --list-tasks.")
     if args.list_tasks:
@@ -380,6 +463,9 @@ def main() -> int:
                 skip_context_files=args.skip_context_files,
                 skip_memory=args.skip_memory,
                 save_trajectories=args.save_trajectories,
+                hot_pool_persist=args.hot_pool_persist,
+                wait_background_review=not args.no_wait_background_review,
+                background_review_timeout=args.background_review_timeout,
             )
             envelope["ts_start_iso"] = ts_start
 

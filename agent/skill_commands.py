@@ -345,6 +345,8 @@ def build_skill_invocation_message(
 def build_preloaded_skills_prompt(
     skill_identifiers: list[str],
     task_id: str | None = None,
+    hot_pool: "HotSkillPool | None" = None,
+    turn: int = 0,
 ) -> tuple[str, list[str], list[str]]:
     """Load one or more skills for session-wide CLI preloading.
 
@@ -367,6 +369,11 @@ def build_preloaded_skills_prompt(
             continue
 
         loaded_skill, skill_dir, skill_name = loaded
+        if hot_pool is not None:
+            try:
+                hot_pool.record_from_loaded_skill(loaded_skill, turn=turn)
+            except Exception:
+                pass
         activation_note = (
             f'[IMPORTANT: The user launched this CLI session with the "{skill_name}" skill '
             "preloaded. Treat its instructions as active guidance for the duration of this "

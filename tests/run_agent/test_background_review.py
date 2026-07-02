@@ -25,6 +25,7 @@ def _bare_agent() -> AIAgent:
     agent._COMBINED_REVIEW_PROMPT = "review both"
     agent.background_review_callback = None
     agent.status_callback = None
+    agent._hot_skill_pool = None
     agent._safe_print = lambda *_args, **_kwargs: None
     return agent
 
@@ -127,3 +128,61 @@ def test_background_review_installs_auto_deny_approval_callback(monkeypatch):
         "Background review leaked its approval callback into the worker "
         "thread's TLS slot; a recycled thread-id could reuse it."
     )
+
+
+def test_wait_for_background_review_joins_thread(monkeypatch):
+    joined = {"called": False}
+
+    class FakeThread:
+        def __init__(self, *, target, daemon=None, name=None):
+            self._target = target
+            self._alive = True
+
+        def start(self):
+            pass  # leave alive until join (simulates in-flight review)
+
+        def is_alive(self):
+            return self._alive
+
+        def join(self, timeout=None):
+            joined["called"] = True
+            joined["timeout"] = timeout
+            self._target()
+            self._alive = False
+
+    class FakeReviewAgent:
+        def __init__(self, **kwargs):
+            self._session_messages = []
+
+        def run_conversation(self, **kwargs):
+            pass
+
+        def shutdown_memory_provider(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(run_agent_module.threading, "Thread", FakeThread)
+    monkeypatch.setattr(run_agent_module, "AIAgent", FakeReviewAgent)
+
+    agent = _bare_agent()
+    AIAgent._spawn_background_review(
+        agent,
+        messages_snapshot=[{"role": "user", "content": "hello"}],
+        review_skills=True,
+    )
+    status = AIAgent.wait_for_background_review(agent, timeout=42.0)
+    assert joined["called"] is True
+    assert joined["timeout"] == 42.0
+    assert status == {"spawned": True, "completed": True, "timeout": False}
+
+
+def test_wait_for_background_review_no_spawn():
+    agent = _bare_agent()
+    agent._background_review_thread = None
+    assert AIAgent.wait_for_background_review(agent) == {
+        "spawned": False,
+        "completed": True,
+        "timeout": False,
+    }

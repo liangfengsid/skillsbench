@@ -50,6 +50,7 @@ Suggested fields for richer strategy comparison (not in current envelopes):
 - **Cache**: ``cache_read_tokens`` / ``cache_write_tokens`` aggregates (already in result but not summarized here — easy to add).
 - **Reasoning tokens**: ``reasoning_tokens`` vs output for cost attribution.
 - **Skill loads**: which skills were injected / ``skill_view`` count per task (Hermes session metadata).
+  Implemented: ``hot_pool_telemetry`` on each JSONL row + ``benchmark/scripts/analyze_hot_pool_runs.py``.
 - **Stable run id**: UUID per invocation to join external verifier tables.
 """
 

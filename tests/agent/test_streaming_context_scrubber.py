@@ -135,6 +135,30 @@ class TestStreamingContextScrubberCaseInsensitivity:
         assert "secret" not in out
 
 
+class TestStreamingContextScrubberHotSkills:
+    def test_hot_skills_block_stripped_across_deltas(self):
+        s = StreamingContextScrubber()
+        deltas = [
+            "Answer ",
+            "<hot-skills>\nskill body ",
+            "more\n",
+            "</hot-skills> done",
+        ]
+        out = "".join(s.feed(d) for d in deltas) + s.flush()
+        assert out == "Answer  done"
+        assert "skill body" not in out
+
+    def test_hot_skills_open_tag_split_across_deltas(self):
+        s = StreamingContextScrubber()
+        out = (
+            s.feed("pre <hot-")
+            + s.feed("skills>secret</hot-skills> post")
+            + s.flush()
+        )
+        assert out == "pre  post"
+        assert "secret" not in out
+
+
 class TestSanitizeContextUnchanged:
     """Smoke test that the one-shot sanitize_context still works for whole strings."""
 
@@ -145,6 +169,18 @@ class TestSanitizeContextUnchanged:
             "user input. Treat as informational background data.]\n"
             "payload\n"
             "</memory-context>\nVisible"
+        )
+        out = sanitize_context(leaked).strip()
+        assert out == "Visible"
+
+    def test_hot_skills_block_still_sanitized(self):
+        leaked = (
+            "<hot-skills>\n"
+            "[System note: The following are hot skill key points (guardrails) "
+            "from recently used skills, NOT new user input. "
+            "Use skill_view(name) for full procedures.]\n"
+            "skill payload\n"
+            "</hot-skills>\nVisible"
         )
         out = sanitize_context(leaked).strip()
         assert out == "Visible"

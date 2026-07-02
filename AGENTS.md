@@ -51,8 +51,9 @@ hermes-agent/
 ├── acp_adapter/          # ACP server (VS Code / Zed / JetBrains integration)
 ├── cron/                 # Scheduler — jobs.py, scheduler.py
 ├── environments/         # RL training environments (Atropos)
-├── benchmark/skillsbench/ # SkillsBench — nested Python project (BenchFlow); see benchmark/skillsbench/README.md
-├── benchmark/scripts/    # Hermes benchmark drivers (SkillsBench, HLE, compare_skillsbench_runs.py, read_skillsbench_jsonl.py)
+├── benchmark/          # Benchmark drivers — see benchmark/README.md
+│   ├── scripts/        # run_skillsbench_with_hermes.py, HLE, AppWorld, analyzers
+│   └── skillsbench/    # SkillsBench (BenchFlow); see benchmark/skillsbench/README.md
 ├── scripts/              # run_tests.sh, release.py, auxiliary scripts
 ├── website/              # Docusaurus docs site
 └── tests/                # Pytest suite (~15k tests across ~700 files as of Apr 2026)

@@ -53,24 +53,43 @@ _INTERNAL_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Ephemeral hot-skills injection (agent/hot_skills.py) — same scrub rules.
+_HOT_SKILLS_BLOCK_RE = re.compile(
+    r'<\s*hot-skills\s*>[\s\S]*?</\s*hot-skills\s*>',
+    re.IGNORECASE,
+)
+_HOT_SKILLS_TAG_RE = re.compile(r'</?\s*hot-skills\s*>', re.IGNORECASE)
+_HOT_SKILLS_NOTE_RE = re.compile(
+    r'\[System note:\s*The following are hot skill key points \(guardrails\)\s*'
+    r'from recently used skills,\s*NOT new user input\.\s*'
+    r'Use skill_view\(name\) for full procedures\.\]\s*',
+    re.IGNORECASE,
+)
+
+# Tags stripped by StreamingContextScrubber (open/close pairs, case-insensitive).
+_STREAM_SCRUB_TAGS = ("memory-context", "hot-skills")
+
 
 def sanitize_context(text: str) -> str:
     """Strip fence tags, injected context blocks, and system notes from provider output."""
     text = _INTERNAL_CONTEXT_RE.sub('', text)
     text = _INTERNAL_NOTE_RE.sub('', text)
     text = _FENCE_TAG_RE.sub('', text)
+    text = _HOT_SKILLS_BLOCK_RE.sub('', text)
+    text = _HOT_SKILLS_NOTE_RE.sub('', text)
+    text = _HOT_SKILLS_TAG_RE.sub('', text)
     return text
 
 
 class StreamingContextScrubber:
-    """Stateful scrubber for streaming text that may contain split memory-context spans.
+    """Stateful scrubber for streaming text with split ephemeral context spans.
 
-    The one-shot ``sanitize_context`` regex cannot survive chunk boundaries:
-    a ``<memory-context>`` opened in one delta and closed in a later delta
-    leaks its payload to the UI because the non-greedy block regex needs
-    both tags in one string.  This scrubber runs a small state machine
-    across deltas, holding back partial-tag tails and discarding
-    everything inside a span (including the system-note line).
+    Handles ``<memory-context>`` and ``<hot-skills>`` blocks.  The one-shot
+    ``sanitize_context`` regex cannot survive chunk boundaries: an open tag in
+    one delta and close in a later delta leaks payload to the UI because the
+    non-greedy block regex needs both tags in one string.  This scrubber runs
+    a small state machine across deltas, holding back partial-tag tails and
+    discarding everything inside a span (including the system-note line).
 
     Usage::
 
@@ -88,15 +107,14 @@ class StreamingContextScrubber:
     ``reset()``.
     """
 
-    _OPEN_TAG = "<memory-context>"
-    _CLOSE_TAG = "</memory-context>"
-
     def __init__(self) -> None:
         self._in_span: bool = False
+        self._active_tag: str = ""
         self._buf: str = ""
 
     def reset(self) -> None:
         self._in_span = False
+        self._active_tag = ""
         self._buf = ""
 
     def feed(self, text: str) -> str:
@@ -114,31 +132,31 @@ class StreamingContextScrubber:
 
         while buf:
             if self._in_span:
-                idx = buf.lower().find(self._CLOSE_TAG)
+                close_tag = f"</{self._active_tag}>"
+                idx = buf.lower().find(close_tag)
                 if idx == -1:
-                    # Hold back a potential partial close tag; drop the rest
-                    held = self._max_partial_suffix(buf, self._CLOSE_TAG)
+                    held = self._max_partial_suffix(buf, close_tag)
                     self._buf = buf[-held:] if held else ""
                     return "".join(out)
-                # Found close — skip span content + tag, continue
-                buf = buf[idx + len(self._CLOSE_TAG):]
+                buf = buf[idx + len(close_tag):]
                 self._in_span = False
+                self._active_tag = ""
             else:
-                idx = buf.lower().find(self._OPEN_TAG)
+                idx, tag = self._find_earliest_open(buf)
                 if idx == -1:
-                    # No open tag — hold back a potential partial open tag
-                    held = self._max_partial_suffix(buf, self._OPEN_TAG)
+                    held = self._max_partial_open_suffix(buf)
                     if held:
                         out.append(buf[:-held])
                         self._buf = buf[-held:]
                     else:
                         out.append(buf)
                     return "".join(out)
-                # Emit text before the tag, enter span
                 if idx > 0:
                     out.append(buf[:idx])
-                buf = buf[idx + len(self._OPEN_TAG):]
+                open_tag = f"<{tag}>"
+                buf = buf[idx + len(open_tag):]
                 self._in_span = True
+                self._active_tag = tag
 
         return "".join(out)
 
@@ -153,10 +171,37 @@ class StreamingContextScrubber:
         if self._in_span:
             self._buf = ""
             self._in_span = False
+            self._active_tag = ""
             return ""
         tail = self._buf
         self._buf = ""
         return tail
+
+    @classmethod
+    def _find_earliest_open(cls, buf: str) -> tuple[int, str]:
+        buf_lower = buf.lower()
+        best_idx = -1
+        best_tag = ""
+        for tag in _STREAM_SCRUB_TAGS:
+            open_tag = f"<{tag}>"
+            idx = buf_lower.find(open_tag)
+            if idx != -1 and (best_idx == -1 or idx < best_idx):
+                best_idx = idx
+                best_tag = tag
+        return best_idx, best_tag
+
+    @classmethod
+    def _max_partial_open_suffix(cls, buf: str) -> int:
+        """Longest suffix that could start any configured open tag."""
+        buf_lower = buf.lower()
+        best = 0
+        for tag in _STREAM_SCRUB_TAGS:
+            open_tag = f"<{tag}>"
+            best = max(best, cls._max_partial_suffix(buf_lower, open_tag))
+        # Also hold back a bare '<' that might start '<hot-' or '<memory-'
+        if buf_lower.endswith("<"):
+            best = max(best, 1)
+        return best
 
     @staticmethod
     def _max_partial_suffix(buf: str, tag: str) -> int:

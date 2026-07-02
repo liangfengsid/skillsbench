@@ -87,6 +87,7 @@ from tools.browser_tool import cleanup_browser
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import StreamingContextScrubber, build_memory_context_block, sanitize_context
+from agent.hot_skills import HotSkillPool
 from agent.retry_utils import jittered_backoff
 from agent.error_classifier import classify_api_error, FailoverReason
 from agent.prompt_builder import (
@@ -1106,6 +1107,7 @@ class AIAgent:
         # existing tool message rather than inserting a new user turn).
         self._pending_steer: Optional[str] = None
         self._pending_steer_lock = threading.Lock()
+        self._background_review_thread: Optional[threading.Thread] = None
 
         # Concurrent-tool worker thread tracking.  `_execute_tool_calls_concurrent`
         # runs each tool on its own ThreadPoolExecutor worker — those worker
@@ -1718,7 +1720,12 @@ class AIAgent:
             skills_config = _agent_cfg.get("skills", {})
             self._skill_nudge_interval = int(skills_config.get("creation_nudge_interval", 10))
         except Exception:
-            pass
+            skills_config = {}
+        # Hot skill pool — LRU of recently viewed skill bodies (ephemeral injection)
+        try:
+            self._hot_skill_pool = HotSkillPool(skills_config if isinstance(skills_config, dict) else None)
+        except Exception:
+            self._hot_skill_pool = HotSkillPool({})
 
         # Tool-use enforcement config: "auto" (default — matches hardcoded
         # model list), true (always), false (never), or list of substrings.
@@ -3341,6 +3348,7 @@ class AIAgent:
                     review_agent._user_profile_enabled = self._user_profile_enabled
                     review_agent._memory_nudge_interval = 0
                     review_agent._skill_nudge_interval = 0
+                    review_agent._hot_skill_pool = self._hot_skill_pool
 
                     review_agent.run_conversation(
                         user_message=prompt,
@@ -3397,7 +3405,48 @@ class AIAgent:
                     pass
 
         t = threading.Thread(target=_run_review, daemon=True, name="bg-review")
+        self._background_review_thread = t
         t.start()
+
+    def wait_for_background_review(
+        self,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Block until the end-of-turn background review thread finishes.
+
+        Background review is spawned as a daemon thread after ``run_conversation``
+        returns. Batch drivers and one-shot scripts must call this before process
+        exit or the review (and any ``skill_manage`` / hot-pool updates) are
+        killed mid-flight.
+
+        Returns a small status dict: ``spawned``, ``completed``, ``timeout``.
+        """
+        t = getattr(self, "_background_review_thread", None)
+        if t is None:
+            return {"spawned": False, "completed": True, "timeout": False}
+        if not t.is_alive():
+            self._background_review_thread = None
+            return {"spawned": True, "completed": True, "timeout": False}
+        t.join(timeout=timeout)
+        still_alive = t.is_alive()
+        if not still_alive:
+            self._background_review_thread = None
+        return {
+            "spawned": True,
+            "completed": not still_alive,
+            "timeout": still_alive,
+        }
+
+    def export_hot_pool_telemetry(self) -> Optional[dict]:
+        """Snapshot hot skill pool telemetry (e.g. after background review)."""
+        pool = getattr(self, "_hot_skill_pool", None)
+        if pool is None or not pool.enabled:
+            return None
+        try:
+            return pool.export_telemetry()
+        except Exception:
+            logger.debug("hot skill pool telemetry export failed", exc_info=True)
+            return None
 
     def _build_memory_write_metadata(
         self,
@@ -8779,6 +8828,35 @@ class AIAgent:
             parent_agent=self,
         )
 
+    def _post_tool_hot_skill_hooks(
+        self,
+        function_name: str,
+        function_args: dict,
+        function_result: str,
+    ) -> None:
+        """Update the hot skill pool after tool execution."""
+        pool = getattr(self, "_hot_skill_pool", None)
+        if pool is None or not pool.enabled:
+            return
+        try:
+            if function_name == "skill_view":
+                sk_name = str((function_args or {}).get("name") or "").strip()
+                in_pool = sk_name in pool._entries if sk_name else False
+                if sk_name and not (function_args or {}).get("file"):
+                    pool.note_skill_view(sk_name, in_pool_before=in_pool)
+                pool.record_from_tool_result(
+                    function_result,
+                    turn=getattr(self, "_user_turn_count", 0),
+                )
+            elif function_name == "skill_manage":
+                pool.record_from_skill_manage(
+                    function_args,
+                    function_result,
+                    turn=getattr(self, "_user_turn_count", 0),
+                )
+        except Exception:
+            logger.debug("hot skill pool update failed", exc_info=True)
+
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str,
                      tool_call_id: Optional[str] = None, messages: list = None) -> str:
         """Invoke a single tool and return the result string. No display logic.
@@ -8797,26 +8875,26 @@ class AIAgent:
         except Exception:
             pass
         if block_message is not None:
-            return json.dumps({"error": block_message}, ensure_ascii=False)
-
-        if function_name == "todo":
+            result = json.dumps({"error": block_message}, ensure_ascii=False)
+        elif function_name == "todo":
             from tools.todo_tool import todo_tool as _todo_tool
-            return _todo_tool(
+            result = _todo_tool(
                 todos=function_args.get("todos"),
                 merge=function_args.get("merge", False),
                 store=self._todo_store,
             )
         elif function_name == "session_search":
             if not self._session_db:
-                return json.dumps({"success": False, "error": "Session database not available."})
-            from tools.session_search_tool import session_search as _session_search
-            return _session_search(
-                query=function_args.get("query", ""),
-                role_filter=function_args.get("role_filter"),
-                limit=function_args.get("limit", 3),
-                db=self._session_db,
-                current_session_id=self.session_id,
-            )
+                result = json.dumps({"success": False, "error": "Session database not available."})
+            else:
+                from tools.session_search_tool import session_search as _session_search
+                result = _session_search(
+                    query=function_args.get("query", ""),
+                    role_filter=function_args.get("role_filter"),
+                    limit=function_args.get("limit", 3),
+                    db=self._session_db,
+                    current_session_id=self.session_id,
+                )
         elif function_name == "memory":
             target = function_args.get("target", "memory")
             from tools.memory_tool import memory_tool as _memory_tool
@@ -8841,26 +8919,28 @@ class AIAgent:
                     )
                 except Exception:
                     pass
-            return result
         elif self._memory_manager and self._memory_manager.has_tool(function_name):
-            return self._memory_manager.handle_tool_call(function_name, function_args)
+            result = self._memory_manager.handle_tool_call(function_name, function_args)
         elif function_name == "clarify":
             from tools.clarify_tool import clarify_tool as _clarify_tool
-            return _clarify_tool(
+            result = _clarify_tool(
                 question=function_args.get("question", ""),
                 choices=function_args.get("choices"),
                 callback=self.clarify_callback,
             )
         elif function_name == "delegate_task":
-            return self._dispatch_delegate_task(function_args)
+            result = self._dispatch_delegate_task(function_args)
         else:
-            return handle_function_call(
+            result = handle_function_call(
                 function_name, function_args, effective_task_id,
                 tool_call_id=tool_call_id,
                 session_id=self.session_id or "",
                 enabled_tools=list(self.valid_tool_names) if self.valid_tool_names else None,
                 skip_pre_tool_call_hook=True,
             )
+
+        self._post_tool_hot_skill_hooks(function_name, function_args, result)
+        return result
 
     @staticmethod
     def _wrap_verbose(label: str, text: str, indent: str = "     ") -> str:
@@ -9556,6 +9636,8 @@ class AIAgent:
             if subdir_hints:
                 function_result += subdir_hints
 
+            self._post_tool_hot_skill_hooks(function_name, function_args, function_result)
+
             tool_msg = {
                 "role": "tool",
                 "content": function_result,
@@ -9902,6 +9984,13 @@ class AIAgent:
         # Track user turns for memory flush and periodic nudge logic
         self._user_turn_count += 1
 
+        _hot_pool_reset = getattr(self, "_hot_skill_pool", None)
+        if _hot_pool_reset is not None:
+            try:
+                _hot_pool_reset.reset_telemetry()
+            except Exception:
+                logger.debug("hot skill pool telemetry reset failed", exc_info=True)
+
         # Reset the streaming context scrubber at the top of each turn so a
         # hung span from a prior interrupted stream can't taint this turn's
         # output.
@@ -10140,6 +10229,26 @@ class AIAgent:
             except Exception:
                 pass
 
+        # Hot skill pool: hydrate from history, refresh stale files, build injection block.
+        _hot_skills_cache = ""
+        _hot_pool = getattr(self, "_hot_skill_pool", None)
+        if _hot_pool is not None and _hot_pool.enabled:
+            try:
+                _hot_pool.on_turn_start(self._user_turn_count)
+                _hot_pool.hydrate_from_history(messages)
+                _hot_pool.refresh_stale_entries(session_id=self.session_id)
+                _hot_pool.evict_by_ttl(_hot_pool.active_turn)
+                _exclude_hot: set = set()
+                if _hot_pool.config.get("skip_if_in_history", True):
+                    _exclude_hot = _hot_pool.skills_in_recent_history(messages)
+                _hot_skills_cache = _hot_pool.build_block(
+                    user_message=original_user_message if isinstance(original_user_message, str) else "",
+                    turn=_hot_pool.active_turn,
+                    exclude_names=_exclude_hot,
+                )
+            except Exception:
+                logger.debug("hot skill pool turn prep failed", exc_info=True)
+
         while (api_call_count < self.max_iterations and self.iteration_budget.remaining > 0) or self._budget_grace_call:
             # Reset per-turn checkpoint dedup so each iteration can take one snapshot
             self._checkpoint_mgr.new_turn()
@@ -10284,12 +10393,19 @@ class AIAgent:
                         _fenced = build_memory_context_block(_ext_prefetch_cache)
                         if _fenced:
                             _injections.append(_fenced)
+                    if _hot_skills_cache:
+                        _injections.append(_hot_skills_cache)
                     if _plugin_user_context:
                         _injections.append(_plugin_user_context)
                     if _injections:
                         _base = api_msg.get("content", "")
                         if isinstance(_base, str):
                             api_msg["content"] = _base + "\n\n" + "\n\n".join(_injections)
+                    if _hot_pool is not None and _hot_pool.enabled:
+                        try:
+                            _hot_pool.note_api_injection(cache_nonempty=bool(_hot_skills_cache))
+                        except Exception:
+                            pass
 
                 # For ALL assistant messages, pass reasoning back to the API
                 # This ensures multi-turn reasoning context is preserved
@@ -13142,6 +13258,12 @@ class AIAgent:
             "cost_status": self.session_cost_status,
             "cost_source": self.session_cost_source,
         }
+        _hot_pool_export = getattr(self, "_hot_skill_pool", None)
+        if _hot_pool_export is not None and _hot_pool_export.enabled:
+            try:
+                result["hot_pool_telemetry"] = _hot_pool_export.export_telemetry()
+            except Exception:
+                logger.debug("hot skill pool telemetry export failed", exc_info=True)
         # If a /steer landed after the final assistant turn (no more tool
         # batches to drain into), hand it back to the caller so it can be
         # delivered as the next user turn instead of being silently lost.

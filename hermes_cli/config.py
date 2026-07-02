@@ -919,6 +919,39 @@ DEFAULT_CONFIG = {
             "rank_strategy": "laplace",
             "ucb1_c": 1.4142135623730951,
         },
+        # LRU pool of recently used skill key points injected ephemerally into the
+        # current turn's user message (API-call time only — preserves prompt cache).
+        # Full procedures remain behind skill_view; authors mark guardrails with
+        # <!-- hermes-hot --> ... <!-- /hermes-hot --> or ## Pitfalls-style headings.
+        "hot_pool": {
+            "enabled": True,
+            # global_pool: flat cap on injected key points (recommended).
+            # per_skill: grid of max_skills × max_points_per_skill.
+            "entry_schedule": "global_pool",
+            "max_entries": 12,
+            "max_skills": 5,
+            "max_pool_skills": 15,
+            "max_chars": 4000,
+            "max_points_per_skill": 8,
+            "max_points_per_skill_inject": 0,
+            "max_chars_per_point": 240,
+            "ttl_turns": 20,
+            "inject_on_turn": True,
+            "skip_if_in_history": True,
+            "history_lookback": 40,
+            "hydrate_from_history": True,
+            "hydrate_limit": 30,
+            "semantic_prefetch": True,
+            "semantic_min_score": 1,
+            "use_hermes_hot_markers": True,
+            "extract_sections": True,
+            "fallback_extract": True,
+            # Persist pool to disk so each new conversation continues the LRU
+            # (sequential SkillsBench tasks). Default path: ~/.hermes/hot_skill_pool.json
+            # Override with persist_path or HERMES_HOT_POOL_PATH.
+            "persist_across_conversations": True,
+            "persist_path": "",
+        },
     },
 
     # Honcho AI-native memory -- reads ~/.honcho/config.json as single source of truth.

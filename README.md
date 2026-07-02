@@ -48,55 +48,9 @@ hermes              # start chatting!
 
 **SkillsBench** (`benchmark/skillsbench/`) is a nested Python subproject (BenchFlow). To add BenchFlow to the same venv as Hermes: `pip install -e ".[skillsbench]"` from the repo root. Task authoring and BenchFlow CLI: `benchmark/skillsbench/README.md` and `benchmark/skillsbench/AGENTS.md`.
 
-### SkillsBench: Hermes batch driver
+### Benchmarks
 
-[`benchmark/scripts/run_skillsbench_with_hermes.py`](benchmark/scripts/run_skillsbench_with_hermes.py) runs `AIAgent.run_conversation()` against SkillsBench tasks (timing, tokens, cost, full `run_conversation` payload in JSONL).
-
-**Defaults** (monorepo layout): `--hermes-root` = this repo root; `--skillsbench-root` = `benchmark/skillsbench/`; `--prompt-tasks-base` = resolved absolute path to `benchmark/skillsbench/tasks/`. Override if your paths differ.
-
-**Requirements:** Hermes venv where `run_agent` imports (same as `hermes` CLI); API keys per your `~/.hermes` config. The script prepends `--hermes-root` to `sys.path` before importing `AIAgent`.
-
-**Examples** (from repo root):
-
-```bash
-python3 benchmark/scripts/run_skillsbench_with_hermes.py --list-tasks
-python3 benchmark/scripts/run_skillsbench_with_hermes.py \
-  --task adaptive-cruise-control \
-  --skill-nudge-interval 10 --memory-nudge-interval 10 \
-  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
-python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
-```
-
-Use `python3 benchmark/scripts/run_skillsbench_with_hermes.py --help` for `--model`, `--max-iterations`, `--skip-context-files`, `--skip-memory`, `--log-json-pretty`, etc.
-
-Compare two JSONL logs (e.g. different skill strategies): [`benchmark/scripts/compare_skillsbench_runs.py`](benchmark/scripts/compare_skillsbench_runs.py) — by default uses **`--cohort both-completed`**: only task ids present in **both** logs **and** completed in both, so headline means are over the same symmetric set. `--cohort intersection` uses all overlapping ids (per-side pools can differ). Also prints intersection completion rates, mean ± std / median, paired deltas, optional `--html` / `--json`. `--future-metrics` lists suggested extra log fields.
-
-### HLE (Humanity's Last Exam) with Hermes
-
-Drivers live under [`benchmark/scripts/`](benchmark/scripts/) (not under `benchmark/hle/hle_eval/`). They call in-process `AIAgent` with tools disabled. Install HLE eval dependencies in the same venv as Hermes (see [`benchmark/hle/requirements.txt`](benchmark/hle/requirements.txt) — `datasets`, `numpy`, etc.).
-
-**Generate predictions** (writes `benchmark/hle/hle_<model>_hermes.json` by default; use `--max_samples` for a quick test):
-
-```bash
-pip install -r benchmark/hle/requirements.txt   # once, in your Hermes venv
-DATASET="cais/hle"
-MODEL="gpt-4o-2024-11-20"
-python3 benchmark/scripts/run_model_predictions_hermes.py \
-  --dataset "$DATASET" --model "$MODEL" --num_workers 10 --max_completion_tokens 8192
-# Local JSON instead of HF: --dataset_file benchmark/hle/_smoke_first_question.json --max_samples 1
-```
-
-**Judge predictions** (reads the predictions file; writes `benchmark/hle/judged_<basename>_hermes.json`):
-
-```bash
-python3 benchmark/scripts/run_judge_results_hermes.py \
-  --dataset "$DATASET" \
-  --predictions "benchmark/hle/hle_${MODEL}_hermes.json" \
-  --judge "$MODEL" \
-  --num_workers 10
-```
-
-Prediction filenames replace `/` in `--model` with `_` (e.g. `qwen/qwen3.6-plus` → `hle_qwen_qwen3.6-plus_hermes.json`). Optional: set `HERMES_AGENT_REPO` if `run_agent` is not importable. Shared helper: [`benchmark/scripts/hle_hermes_inprocess.py`](benchmark/scripts/hle_hermes_inprocess.py). More context: [`benchmark/hle/README.md`](benchmark/hle/README.md).
+Hermes batch drivers (SkillsBench, HLE, AppWorld), hot-pool evaluation, and run comparison live under **`benchmark/`**. See **[`benchmark/README.md`](benchmark/README.md)** for install prerequisites, example commands, and script reference.
 
 ### Skills: step-level variant pools (optional)
 
