@@ -2,6 +2,13 @@
 
 Benchmark for evaluating how well AI agents use skills. 89 tasks, working toward 100+.
 
+## Python environment (Hermes monorepo)
+
+This directory is a **nested Python package** (`skillsbench` in `pyproject.toml`; `requires-python >= 3.12`). Hermes itself supports Python 3.11+, but use **3.12+** when developing or running BenchFlow workflows here.
+
+- **Same venv as Hermes, BenchFlow only:** from the Hermes repo root, `pip install -e ".[skillsbench]"` (or `uv pip install -e ".[skillsbench]"`). That pulls in `benchflow` via the root `hermes-agent` optional extra; it does not install the `skillsbench` package in editable mode.
+- **Full subproject:** `cd benchmark/skillsbench` then `pip install -e .` or `uv sync` (see `pyproject.toml` for dev groups and `uv` sources).
+
 ## Commands
 
 ```bash
@@ -45,6 +52,7 @@ tasks/<task-id>/
 
 ## Key References
 
+- [../../AGENTS.md](../../AGENTS.md) — Hermes repo guide; **Development Environment → SkillsBench: Hermes batch driver** documents `benchmark/scripts/run_skillsbench_with_hermes.py` (defaults, examples, flags).
 - [CONTRIBUTING.md](CONTRIBUTING.md) — full contributor guide, rubrics, authorship policy
 - [rubrics/](rubrics/) — task proposal and implementation review criteria
 - [.claude/skills/skill-creator/SKILL.md](.claude/skills/skill-creator/SKILL.md) — how to write skills
