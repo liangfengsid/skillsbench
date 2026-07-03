@@ -30,7 +30,10 @@ source .venv/bin/activate   # or: source venv/bin/activate
 
 | Script | Purpose |
 |--------|---------|
-| [`run_skillsbench_with_hermes.py`](scripts/run_skillsbench_with_hermes.py) | Run Hermes on SkillsBench tasks; JSONL logs |
+| [`run_skillsbench_with_hermes.py`](scripts/run_skillsbench_with_hermes.py) | Run Hermes on SkillsBench tasks; JSONL logs + host eval |
+| [`evaluate_skillsbench_task.py`](scripts/evaluate_skillsbench_task.py) | Host pytest verifier for one task (used by driver) |
+| [`skillsbench_metrics.py`](scripts/skillsbench_metrics.py) | Build compact `metrics` blocks for JSONL rows |
+| [`aggregate_skillsbench_runs.py`](scripts/aggregate_skillsbench_runs.py) | pass@turn macro/micro rates + tokens from JSONL |
 | [`make_skillsbench_splits.py`](scripts/make_skillsbench_splits.py) | Generate train/val/test split JSON (stratified or category holdout) |
 | [`compare_skillsbench_runs.py`](scripts/compare_skillsbench_runs.py) | Compare two SkillsBench JSONL runs (tokens, cost, API calls) |
 | [`analyze_hot_pool_runs.py`](scripts/analyze_hot_pool_runs.py) | Hot skill pool telemetry + procedure proxies |
@@ -115,8 +118,119 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 | `--no-wait-background-review` | off | Exit without waiting for end-of-turn skill/memory review |
 | `--background-review-timeout SEC` | 180 | Max wait for background review per task |
 | `--stop-on-error` | off | Abort `--all` on first exception |
+| `--evaluate-after-run` / `--no-evaluate-after-run` | on | Host pytest verifier after each agent run |
+| `--evaluate-only` | off | Skip agent; score existing outputs on disk |
+| `--eval-timeout-sec` | 600 | Max seconds per host pytest eval |
+| `--pass-k TURNS` | off | Conversation turns for pass@k (e.g. `1,5,10,70`) |
+| `--print-batch-summary` / `--no-print-batch-summary` | on for `--all` | Aggregate metrics after a multi-task run |
 
 **Background review:** By default the driver waits up to **180s** after each task for end-of-turn skill/memory review (so `skill_manage` and hot-pool updates are not killed when the process exits). JSONL rows include `background_review: {spawned, completed, timeout, actions, telemetry}` where `telemetry.tools` lists review-agent tool calls (e.g. `skill_manage`). The driver appends a SkillsBench-specific review prompt by default (host/container path pitfalls, verification thrashing); use `--no-batch-review-prompt` to disable. Use `--no-wait-background-review` to skip waiting; `--background-review-timeout SEC` to change the limit.
+
+### Performance metrics (eval + pass@k)
+
+**Multi-task runs** — use `--all` with an optional split file. Each task gets its own JSONL row (same file, appended). After the batch finishes, a **batch summary** prints automatically when `--all` is used (disable with `--no-print-batch-summary`).
+
+```bash
+# Train split (65 tasks): pass@k + hot pool learning + full metrics logging
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --split-file benchmark/skillsbench_splits/stratified_v1.json \
+  --split-part train \
+  --pass-k 1,5,10,70 \
+  --model qwen/qwen3.6-plus \
+  --hot-pool \
+  --hot-pool-persist benchmark/runs/stratified_train_pool.json \
+  --log-jsonl benchmark/runs/stratified_train.jsonl \
+  --print-summary
+
+# Aggregate the same JSONL later (or combine multiple run files)
+python3 benchmark/scripts/aggregate_skillsbench_runs.py \
+  benchmark/runs/stratified_train.jsonl \
+  --pass-k 1,5,10,70 \
+  --split-part train \
+  --print-summary \
+  -o benchmark/runs/stratified_train_summary.json
+```
+
+**Final evaluation** — after the conversation ends, host pytest runs against `tests/test_outputs.py` (with `/root/` paths remapped). Logged as `evaluation` on each JSONL row:
+
+| Field | Meaning |
+|-------|---------|
+| `evaluation.task_success` | **Macro** — all verifier tests passed at end of run |
+| `evaluation.reward` | `tests_passed / tests_total` (1.0 when macro pass) |
+| `evaluation.tests_passed` / `tests_total` | **Micro** — per-test-case counts at end of run |
+| `run_conversation_result.total_tokens` | Tokens consumed by the full conversation |
+| `run_conversation_result.cache_read_tokens` | Prompt-cache read tokens |
+| `run_conversation_result.reasoning_tokens` | Reasoning tokens (when provider reports them) |
+| `run_conversation_result.estimated_cost_usd` | Estimated session cost |
+| `metrics.final.tool_calls` | Per-tool invocation counts from message history |
+| `metrics.final.tool_rounds` | Total tool calls in the conversation |
+
+**pass@k (conversation turn k)** — within **one** agent run, the driver evaluates task outputs at the end of agent conversation **turn** *k* (one completed API iteration + tool execution). No reruns and no early termination. Logged as `pass_at_turn` and summarized in `metrics.pass_at_turn`:
+
+```json
+"pass_k_turns": [1, 5, 10, 70],
+"pass_at_turn": {
+  "5": {
+    "turn": 5,
+    "evaluation": { "task_success": false, "tests_passed": 8, "tests_total": 12, "reward": 0.667 },
+    "api_calls": 5,
+    "tokens": { "total": 420000, "input": 380000, "output": 40000, "cache_read": 100000, "reasoning": 5000 },
+    "estimated_cost_usd": 0.12
+  }
+},
+"metrics": {
+  "final": { "task_success": true, "micro_pass_rate": 1.0, "tokens": { "total": 1400000 }, ... },
+  "pass_at_turn": { "5": { "task_success": false, "micro_pass_rate": 0.667, "tokens": { "total": 420000 }, ... } }
+}
+```
+
+```bash
+# Single task — final eval (default) + pass@k at turns 1,5,10,70
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control \
+  --model qwen/qwen3.6-plus \
+  --pass-k 1,5,10,70 \
+  --hot-pool --hot-pool-persist benchmark/skillsbench_hot_pool.json \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl \
+  --print-summary
+
+# Batch with pass@k (one row per task; each row has pass_at_turn snapshots)
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --split-file benchmark/skillsbench_splits/stratified_v1.json \
+  --split-part test \
+  --pass-k 1,5,10,70 \
+  --no-hot-pool \
+  --model qwen/qwen3.6-plus \
+  --log-jsonl benchmark/runs/stratified_test.jsonl
+
+# Aggregate across tasks: macro task pass rate + micro test pass rate at each turn
+python3 benchmark/scripts/aggregate_skillsbench_runs.py \
+  benchmark/runs/stratified_test.jsonl \
+  --pass-k 1,5,10,70 \
+  --print-summary \
+  -o benchmark/runs/stratified_test_summary.json
+
+# Re-score final outputs without re-running the agent
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control --evaluate-only \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
+
+# Agent run only (no pytest)
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control --no-evaluate-after-run \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
+```
+
+**Aggregate output** (`aggregate_skillsbench_runs.py`):
+
+- `pass_k.<turn>.macro_task_pass_rate` — fraction of tasks passing all tests at turn *k*
+- `pass_k.<turn>.micro_test_pass_rate` — Σ passed test cases / Σ total at turn *k*
+- `pass_k.<turn>.tokens_mean_at_turn` / `input_tokens_mean_at_turn` / `api_calls_mean_at_turn`
+- `pass_k.<turn>.estimated_cost_usd_mean_at_turn` / `reward_mean`
+- `final.macro_task_pass_rate` / `micro_test_pass_rate` / `reward_mean`
+- `final.tokens_mean` / `input_tokens_mean` / `api_calls_mean` / `tool_rounds_mean`
+- `final.estimated_cost_usd_mean` / `estimated_cost_usd_sum` / `duration_sec_mean`
+- `final.completion_rate` — fraction of tasks with `completed=true`
 
 ### Train / test splits
 

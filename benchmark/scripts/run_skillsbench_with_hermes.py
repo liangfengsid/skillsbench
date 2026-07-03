@@ -25,6 +25,20 @@ Examples (from Hermes repo root):
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --start-task-index 10 \\
       --log-jsonl ./runs.jsonl  # skip first 10 tasks (sorted order), run the rest
 
+  # pass@k: verifier scores at conversation turns 1,5,10,... within one run (no reruns):
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --task adaptive-cruise-control \\
+      --pass-k 1,5,10,70 \\
+      --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
+
+  # Aggregate pass@k across tasks from JSONL (macro/micro rates at each turn):
+  python3 benchmark/scripts/aggregate_skillsbench_runs.py \\
+      benchmark/runs/batch.jsonl --pass-k 1,5,10,70 --print-summary
+
+  # Re-score task outputs without re-running the agent:
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py \\
+      --task adaptive-cruise-control --evaluate-only \\
+      --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
+
 Environment / API keys follow Hermes (e.g. OPENROUTER_API_KEY); see Hermes docs.
 """
 
@@ -50,6 +64,11 @@ warnings.filterwarnings(
 
 # This file lives at <repo>/benchmark/scripts/<name>.py
 _SCRIPT = Path(__file__).resolve()
+if str(_SCRIPT.parent) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT.parent))
+
+from aggregate_skillsbench_runs import aggregate_records, format_summary_text  # noqa: E402
+from skillsbench_metrics import build_envelope_metrics  # noqa: E402
 
 
 def _benchmark_dir() -> Path:
@@ -189,6 +208,8 @@ def run_one_task(
     wait_background_review: bool = True,
     background_review_timeout: Optional[float] = 180.0,
     batch_review_prompt: bool = True,
+    pass_k_turns: Optional[List[int]] = None,
+    eval_timeout_sec: float = 600.0,
 ) -> Dict[str, Any]:
     apply_hot_pool_cli_overrides(
         hot_pool=hot_pool,
@@ -221,11 +242,31 @@ def run_one_task(
     user_message = build_user_message(prompt_tasks_base, task_id)
     hermes_task_id = f"skillsbench-{task_id}"
 
+    pass_tracker = None
+    if pass_k_turns:
+        _eval_mod = _load_evaluate_module()
+        pass_tracker = _eval_mod.PassAtTurnTracker(
+            task_id=task_id,
+            skillsbench_root=skillsbench_root,
+            pass_k_turns=pass_k_turns,
+            eval_timeout_sec=eval_timeout_sec,
+            evaluate_fn=_eval_mod.evaluate_task_host,
+        )
+        pass_tracker.attach(agent)
+
     t0 = time.perf_counter()
-    result = agent.run_conversation(
-        user_message=user_message,
-        task_id=hermes_task_id,
-    )
+    pass_at_turn: Dict[str, Dict[str, Any]] = {}
+    try:
+        result = agent.run_conversation(
+            user_message=user_message,
+            task_id=hermes_task_id,
+        )
+        if pass_tracker is not None and isinstance(result, dict):
+            final_calls = int(result.get("api_calls") or 0)
+            pass_at_turn = pass_tracker.finalize(final_calls)
+    finally:
+        if pass_tracker is not None:
+            pass_tracker.detach(agent)
     background_review: Dict[str, Any] = {"spawned": False, "completed": True, "timeout": False}
     if wait_background_review:
         background_review = agent.wait_for_background_review(
@@ -257,8 +298,43 @@ def run_one_task(
         "background_review": background_review,
         "run_conversation_result": result,
     }
+    if pass_tracker is not None and pass_at_turn:
+        envelope["pass_k_turns"] = list(pass_k_turns or [])
+        envelope["pass_at_turn"] = pass_at_turn
     if isinstance(result, dict) and result.get("hot_pool_telemetry"):
         envelope["hot_pool_telemetry"] = result["hot_pool_telemetry"]
+    return envelope
+
+
+def _load_evaluate_module():
+    _eval_path = _SCRIPT.parent / "evaluate_skillsbench_task.py"
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("evaluate_skillsbench_task", _eval_path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def evaluate_skillsbench_task(
+    *,
+    task_id: str,
+    skillsbench_root: Path,
+    eval_timeout_sec: float = 600.0,
+) -> Dict[str, Any]:
+    """Host-side SkillsBench pytest verifier (see evaluate_skillsbench_task.py)."""
+    mod = _load_evaluate_module()
+    return mod.evaluate_task_host(
+        task_id=task_id,
+        skillsbench_root=skillsbench_root,
+        timeout_sec=eval_timeout_sec,
+    )
+
+
+def finalize_envelope(envelope: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach compact ``metrics`` block derived from evaluation + run result."""
+    envelope["metrics"] = build_envelope_metrics(envelope)
     return envelope
 
 
@@ -278,13 +354,40 @@ def format_run_summary(envelope: Dict[str, Any]) -> str:
     bg_actions = br.get("actions") or []
     bg_action_count = len(bg_actions)
     bg_action_preview = bg_actions[0] if bg_actions else None
+    ev = envelope.get("evaluation") or {}
+    metrics = envelope.get("metrics") or {}
+    final_m = metrics.get("final") if isinstance(metrics, dict) else {}
+    if not isinstance(final_m, dict):
+        final_m = {}
+    pass_at_turn = envelope.get("pass_at_turn") or {}
+    metrics_pat = metrics.get("pass_at_turn") if isinstance(metrics, dict) else {}
+    pass_k_bits = []
+    turn_keys = sorted(
+        set(pass_at_turn) | set(metrics_pat or {}),
+        key=lambda x: int(x),
+    )
+    for key in turn_keys:
+        block = pass_at_turn.get(key) or (metrics_pat or {}).get(key) or {}
+        pev = (block or {}).get("evaluation") or block or {}
+        pass_k_bits.append(
+            f"pass@{key}={pev.get('task_success')!r}"
+            f"({pev.get('tests_passed')}/{pev.get('tests_total')})"
+        )
     parts = [
         f"duration_sec={envelope.get('duration_sec')!r}",
+        f"eval_success={ev.get('task_success')!r}",
+        f"reward={ev.get('reward')!r}",
+        f"tests_passed={ev.get('tests_passed')!r}",
+        f"tests_total={ev.get('tests_total')!r}",
+        *pass_k_bits,
         f"api_calls={res.get('api_calls')!r}",
         f"input_tokens={res.get('input_tokens')!r}",
         f"output_tokens={res.get('output_tokens')!r}",
         f"total_tokens={res.get('total_tokens')!r}",
+        f"cache_read_tokens={res.get('cache_read_tokens')!r}",
+        f"reasoning_tokens={res.get('reasoning_tokens')!r}",
         f"estimated_cost_usd={res.get('estimated_cost_usd')!r}",
+        f"tool_rounds={final_m.get('tool_rounds')!r}",
         f"completed={res.get('completed')!r}",
         f"interrupted={res.get('interrupted')!r}",
         f"bg_review_spawned={br.get('spawned')!r}",
@@ -441,6 +544,35 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--evaluate-after-run",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run host pytest verifier after each agent run (default: on).",
+    )
+    parser.add_argument(
+        "--evaluate-only",
+        action="store_true",
+        help="Skip the agent; evaluate existing task outputs on disk.",
+    )
+    parser.add_argument(
+        "--eval-timeout-sec",
+        type=float,
+        default=600.0,
+        metavar="SEC",
+        help="Max seconds for host pytest evaluation per task (default: 600).",
+    )
+    parser.add_argument(
+        "--pass-k",
+        type=str,
+        default=None,
+        metavar="TURNS",
+        help=(
+            "Comma-separated agent conversation turns for pass@k metrics "
+            "(e.g. 1,5,10,70). Evaluates task outputs during the run at the end "
+            "of each listed turn — no reruns or early termination."
+        ),
+    )
+    parser.add_argument(
         "--log-jsonl",
         type=str,
         default=None,
@@ -456,6 +588,15 @@ def main() -> int:
         "--print-summary",
         action="store_true",
         help="Print a short stdout summary per task (tokens, cost, duration).",
+    )
+    parser.add_argument(
+        "--print-batch-summary",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "After --all, print aggregate pass@k / token / cost metrics across tasks "
+            "(default: on when --all)."
+        ),
     )
     parser.add_argument(
         "--stop-on-error",
@@ -508,10 +649,12 @@ def main() -> int:
     tasks_dir = skillsbench_root / "tasks"
 
     task_ids = discover_task_ids(tasks_dir)
+    split_file_path: Optional[Path] = None
     if args.split_file and not args.all:
         parser.error("--split-file requires --all (or use --task for a single id).")
     if args.split_file:
         split_path = Path(args.split_file).expanduser()
+        split_file_path = split_path
         if not split_path.is_file():
             parser.error(f"Split file not found: {split_path}")
         _split_mod_path = _SCRIPT.parent / "make_skillsbench_splits.py"
@@ -528,6 +671,8 @@ def main() -> int:
             parser.error(f"Split file lists unknown task ids: {preview}")
         task_ids = split_ids
 
+    if args.evaluate_only and args.all:
+        parser.error("--evaluate-only requires --task (not --all).")
     if not args.list_tasks and not args.all and not args.task:
         parser.error("Specify --task TASK_ID, --all, or --list-tasks.")
     if args.list_tasks:
@@ -581,39 +726,91 @@ def main() -> int:
     if args.hot_pool is False and args.hot_pool_persist:
         parser.error("--hot-pool-persist cannot be used with --no-hot-pool.")
 
+    pass_k_turns: Optional[List[int]] = None
+    if args.pass_k:
+        try:
+            pass_k_turns = _load_evaluate_module().parse_pass_k_values(args.pass_k)
+        except ValueError as exc:
+            parser.error(str(exc))
+
     log_path = Path(args.log_jsonl).expanduser() if args.log_jsonl else None
     pretty_path = Path(args.log_json_pretty).expanduser() if args.log_json_pretty else None
     if pretty_path and len(run_ids) != 1:
         print("--log-json-pretty requires exactly one task (no --all).", file=sys.stderr)
         return 1
 
-    any_failed = False
+    print_batch_summary = args.print_batch_summary
+    if print_batch_summary is None:
+        print_batch_summary = bool(args.all)
 
-    for tid in run_ids:
+    any_failed = False
+    batch_envelopes: List[Dict[str, Any]] = []
+
+    for batch_index, tid in enumerate(run_ids):
         ts_start = datetime.now(timezone.utc).isoformat()
         if args.print_summary:
             print(f"\n=== SkillsBench task: {tid} (start {ts_start}) ===", flush=True)
         try:
-            envelope = run_one_task(
-                task_id=tid,
-                hermes_root=hermes_root,
-                skillsbench_root=skillsbench_root,
-                prompt_tasks_base=args.prompt_tasks_base,
-                model=args.model,
-                skill_nudge_interval=args.skill_nudge_interval,
-                memory_nudge_interval=args.memory_nudge_interval,
-                max_iterations=args.max_iterations,
-                quiet_mode=not args.no_quiet,
-                skip_context_files=args.skip_context_files,
-                skip_memory=args.skip_memory,
-                save_trajectories=args.save_trajectories,
-                hot_pool=args.hot_pool,
-                hot_pool_persist=args.hot_pool_persist,
-                wait_background_review=not args.no_wait_background_review,
-                background_review_timeout=args.background_review_timeout,
-                batch_review_prompt=not args.no_batch_review_prompt,
-            )
-            envelope["ts_start_iso"] = ts_start
+            if args.evaluate_only:
+                t0 = time.perf_counter()
+                evaluation = evaluate_skillsbench_task(
+                    task_id=tid,
+                    skillsbench_root=skillsbench_root,
+                    eval_timeout_sec=args.eval_timeout_sec,
+                )
+                elapsed = time.perf_counter() - t0
+                envelope = {
+                    "schema": "skillsbench.hermes_run.v1",
+                    "ts_start_iso": ts_start,
+                    "ts_end_iso": datetime.now(timezone.utc).isoformat(),
+                    "duration_sec": round(elapsed, 6),
+                    "skillsbench_task_id": tid,
+                    "skillsbench_root": str(skillsbench_root),
+                    "hermes_root": str(hermes_root),
+                    "evaluate_only": True,
+                    "evaluation": evaluation,
+                }
+            else:
+                envelope = run_one_task(
+                    task_id=tid,
+                    hermes_root=hermes_root,
+                    skillsbench_root=skillsbench_root,
+                    prompt_tasks_base=args.prompt_tasks_base,
+                    model=args.model,
+                    skill_nudge_interval=args.skill_nudge_interval,
+                    memory_nudge_interval=args.memory_nudge_interval,
+                    max_iterations=args.max_iterations,
+                    quiet_mode=not args.no_quiet,
+                    skip_context_files=args.skip_context_files,
+                    skip_memory=args.skip_memory,
+                    save_trajectories=args.save_trajectories,
+                    hot_pool=args.hot_pool,
+                    hot_pool_persist=args.hot_pool_persist,
+                    wait_background_review=not args.no_wait_background_review,
+                    background_review_timeout=args.background_review_timeout,
+                    batch_review_prompt=not args.no_batch_review_prompt,
+                    pass_k_turns=pass_k_turns,
+                    eval_timeout_sec=args.eval_timeout_sec,
+                )
+                envelope["ts_start_iso"] = ts_start
+                if args.evaluate_after_run:
+                    envelope["evaluation"] = evaluate_skillsbench_task(
+                        task_id=tid,
+                        skillsbench_root=skillsbench_root,
+                        eval_timeout_sec=args.eval_timeout_sec,
+                    )
+
+            if split_file_path is not None:
+                envelope["split_file"] = str(split_file_path)
+                envelope["split_part"] = args.split_part
+            if len(run_ids) > 1:
+                envelope["batch"] = {
+                    "task_index": batch_index,
+                    "task_count": len(run_ids),
+                }
+
+            envelope = finalize_envelope(envelope)
+            batch_envelopes.append(envelope)
 
             serializable = json_safe(envelope)
             if log_path:
@@ -625,7 +822,6 @@ def main() -> int:
                     encoding="utf-8",
                 )
 
-            res = envelope["run_conversation_result"]
             if args.print_summary:
                 print(format_run_summary(envelope), flush=True)
         except Exception as e:
@@ -644,6 +840,19 @@ def main() -> int:
             traceback.print_exc()
             if args.stop_on_error:
                 return 1
+
+    if print_batch_summary and len(batch_envelopes) > 1:
+        pass_k_for_agg = pass_k_turns or [1]
+        summary = aggregate_records(
+            batch_envelopes,
+            pass_k_values=pass_k_for_agg,
+            split_part=args.split_part if split_file_path else None,
+        )
+        print(
+            f"\n=== SkillsBench batch summary ({len(batch_envelopes)} tasks) ===",
+            flush=True,
+        )
+        print(format_summary_text(summary), flush=True)
 
     if any_failed:
         return 1

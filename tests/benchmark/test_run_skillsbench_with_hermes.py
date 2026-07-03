@@ -36,6 +36,11 @@ def test_format_run_summary_includes_background_review_actions():
     mod = _load_module()
     envelope = {
         "duration_sec": 12.5,
+        "evaluation": {
+            "task_success": True,
+            "tests_passed": 10,
+            "tests_total": 12,
+        },
         "run_conversation_result": {
             "api_calls": 25,
             "input_tokens": 100,
@@ -56,6 +61,8 @@ def test_format_run_summary_includes_background_review_actions():
         },
     }
     summary = mod.format_run_summary(envelope)
+    assert "eval_success=True" in summary
+    assert "tests_passed=10" in summary
     assert "bg_review_actions=1" in summary
     assert "skillsbench-host-verification" in summary
 
