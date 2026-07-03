@@ -53,6 +53,8 @@ tasks/<task-id>/
 ## Key References
 
 - [../../AGENTS.md](../../AGENTS.md) — Hermes repo guide; **Development Environment → SkillsBench: Hermes batch driver** documents `benchmark/scripts/run_skillsbench_with_hermes.py` (defaults, examples, flags).
+- [README.md](README.md) — **Running tasks with Hermes** and **Hot skill key points** (`--hot-pool-persist`, `analyze_hot_pool_runs.py`).
+- [../scripts/analyze_hot_pool_runs.py](../scripts/analyze_hot_pool_runs.py) — hot pool telemetry summary and control/treatment comparison.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — full contributor guide, rubrics, authorship policy
 - [rubrics/](rubrics/) — task proposal and implementation review criteria
 - [.claude/skills/skill-creator/SKILL.md](.claude/skills/skill-creator/SKILL.md) — how to write skills

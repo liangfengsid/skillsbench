@@ -16,7 +16,7 @@ If your checkout is **hermes-agent** with SkillsBench at `benchmark/skillsbench/
 - **BenchFlow in the same venv as Hermes:** from the Hermes repo root: `pip install -e ".[skillsbench]"` — installs the `benchflow` optional extra on `hermes-agent` (aligned with this subproject’s dependency pin).
 - **Editable `skillsbench` + dev tooling:** `cd benchmark/skillsbench` and `pip install -e .` or `uv sync` per that directory’s `pyproject.toml` (includes dev groups / `uv` sources when you opt into them).
 
-The Hermes driver lives in the main repo at [`../scripts/run_skillsbench_with_hermes.py`](../scripts/run_skillsbench_with_hermes.py) (run from Hermes root as `python3 benchmark/scripts/run_skillsbench_with_hermes.py`); see **Running tasks with Hermes** below.
+The Hermes driver lives in the main repo at [`../scripts/run_skillsbench_with_hermes.py`](../scripts/run_skillsbench_with_hermes.py) (run from Hermes root as `python3 benchmark/scripts/run_skillsbench_with_hermes.py`); see **[`../README.md`](../README.md)** (benchmark hub) and **Running tasks with Hermes** below.
 
 ## What is SkillsBench?
 
@@ -83,7 +83,44 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py \
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --log-jsonl ./hermes_skillsbench_runs.jsonl
 ```
 
-Use `python3 benchmark/scripts/run_skillsbench_with_hermes.py --help` for paths (`--skillsbench-root`), model (`--model`), Hermes toggles (`--skip-context-files`, `--skip-memory`, `--max-iterations`, …), and `--log-json-pretty` for a formatted JSON file on single-task runs.
+**Hot skill key points (cross-task pool + telemetry)**
+
+Enable the hot pool in `~/.hermes/config.yaml` (`skills.hot_pool.enabled: true`) or rely on defaults. For sequential runs where each task continues the same key-point pool (like a new user turn), pass a persist file:
+
+```bash
+# Treatment: persist pool across tasks; JSONL includes hot_pool_telemetry per task
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --hot-pool-persist ./benchmark/skillsbench_hot_pool.json \
+  --log-jsonl ./benchmark/runs_hot_pool_treatment.jsonl
+
+# Control: disable hot pool in config (or use a separate HERMES_HOME profile), same task order
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --log-jsonl ./benchmark/runs_hot_pool_control.jsonl
+```
+
+Equivalent env vars (no config edit): `HERMES_HOT_POOL_PERSIST=1` and `HERMES_HOT_POOL_PATH=/path/to/pool.json`.
+
+By default the driver **waits up to 180s** after each task for end-of-turn skill/memory review to finish (so `skill_manage` and hot-pool updates are not killed when the process exits). Use `--no-wait-background-review` to skip; JSONL rows include a `background_review` status object.
+
+Summarize inject counts, carryover, and post-hoc procedure proxies (alignment, guardrails, tool errors):
+
+```bash
+# Single run
+python3 benchmark/scripts/analyze_hot_pool_runs.py \
+  ./benchmark/runs_hot_pool_treatment.jsonl \
+  -o ./benchmark/hot_pool_summary.json
+
+# Control vs treatment
+python3 benchmark/scripts/analyze_hot_pool_runs.py \
+  ./benchmark/runs_hot_pool_control.jsonl \
+  ./benchmark/runs_hot_pool_treatment.jsonl \
+  --label-a control --label-b hot-pool \
+  -o ./benchmark/hot_pool_compare.json
+```
+
+Headline token/API metrics: [`../scripts/compare_skillsbench_runs.py`](../scripts/compare_skillsbench_runs.py). Hot-pool-specific fields live in `hot_pool_telemetry` on each JSONL row (also inside `run_conversation_result`).
+
+Use `python3 benchmark/scripts/run_skillsbench_with_hermes.py --help` for paths (`--skillsbench-root`), model (`--model`), Hermes toggles (`--skip-context-files`, `--skip-memory`, `--max-iterations`, …), `--hot-pool-persist`, and `--log-json-pretty` for a formatted JSON file on single-task runs.
 
 ### Creating Tasks
 
