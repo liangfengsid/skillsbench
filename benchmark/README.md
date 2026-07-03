@@ -56,24 +56,46 @@ Defaults: `--hermes-root` = repo root; `--skillsbench-root` = `benchmark/skillsb
 # List task ids (no Hermes import)
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --list-tasks
 
-# Single task
+# Single task — hot pool on + persist (treatment)
 python3 benchmark/scripts/run_skillsbench_with_hermes.py \
   --task adaptive-cruise-control \
   --model qwen/qwen3.6-plus \
   --skill-nudge-interval 10 \
   --memory-nudge-interval 10 \
+  --hot-pool \
+  --hot-pool-persist benchmark/skillsbench_hot_pool.json \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl \
+  --print-summary
+
+# Single task — hot pool off (control)
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control \
+  --model qwen/qwen3.6-plus \
+  --skill-nudge-interval 10 \
+  --memory-nudge-interval 10 \
+  --no-hot-pool \
   --log-jsonl benchmark/hermes_skillsbench_runs.jsonl \
   --print-summary
 
 # Batch (sorted task order; continues after errors)
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --model qwen/qwen3.6-plus \
+  --hot-pool \
+  --hot-pool-persist benchmark/skillsbench_hot_pool.json \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
+
+# Batch — hot pool off
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --model qwen/qwen3.6-plus \
+  --no-hot-pool \
   --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
 
 # Slice of tasks: [start, end) in sorted order
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --start-task-index 0 --end-task-index 10 \
   --model qwen/qwen3.6-plus \
+  --hot-pool \
+  --hot-pool-persist benchmark/skillsbench_hot_pool.json \
   --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
 ```
 
@@ -87,9 +109,14 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 | `--skip-context-files` | off | Skip AGENTS.md-style context injection |
 | `--skip-memory` | off | Disable persistent memory |
 | `--skill-nudge-interval` / `--memory-nudge-interval` | from config | Override nudge counters after agent init |
+| `--hot-pool` / `--no-hot-pool` | follow config | Force hot skill pool on or off for this run (see below) |
+| `--hot-pool-persist PATH` | off | Load/save hot pool across tasks; requires pool enabled; incompatible with `--no-hot-pool` |
+| `--no-batch-review-prompt` | off | Use default Hermes review prompt instead of SkillsBench batch appendix |
+| `--no-wait-background-review` | off | Exit without waiting for end-of-turn skill/memory review |
+| `--background-review-timeout SEC` | 180 | Max wait for background review per task |
 | `--stop-on-error` | off | Abort `--all` on first exception |
 
-**Background review:** By default the driver waits up to **180s** after each task for end-of-turn skill/memory review (so `skill_manage` and hot-pool updates are not killed when the process exits). JSONL rows include `background_review: {spawned, completed, timeout}`. Use `--no-wait-background-review` to skip; `--background-review-timeout SEC` to change the limit.
+**Background review:** By default the driver waits up to **180s** after each task for end-of-turn skill/memory review (so `skill_manage` and hot-pool updates are not killed when the process exits). JSONL rows include `background_review: {spawned, completed, timeout, actions, telemetry}` where `telemetry.tools` lists review-agent tool calls (e.g. `skill_manage`). The driver appends a SkillsBench-specific review prompt by default (host/container path pitfalls, verification thrashing); use `--no-batch-review-prompt` to disable. Use `--no-wait-background-review` to skip waiting; `--background-review-timeout SEC` to change the limit.
 
 ### Train / test splits
 
@@ -117,14 +144,16 @@ Run a partition with the Hermes driver:
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part train \
+  --hot-pool \
   --hot-pool-persist benchmark/runs/stratified_train_pool.json \
   --log-jsonl benchmark/runs/stratified_train.jsonl \
   --model qwen/qwen3.6-plus
 
-# Test split — frozen pool copied from train artifact; disable updates in config
+# Test split — inject key points from train pool file
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part test \
+  --hot-pool \
   --hot-pool-persist benchmark/runs/stratified_train_pool.json \
   --log-jsonl benchmark/runs/stratified_test.jsonl \
   --model qwen/qwen3.6-plus
@@ -136,29 +165,118 @@ Category-holdout test (unseen domains):
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --split-file benchmark/skillsbench_splits/category_holdout_v1.json \
   --split-part test \
+  --hot-pool \
   --hot-pool-persist benchmark/runs/category_holdout_train_pool.json \
   --log-jsonl benchmark/runs/category_holdout_test.jsonl
 ```
 
 ### Hot skill key points (cross-task pool)
 
-Enable in `~/.hermes/config.yaml` (`skills.hot_pool.enabled: true`) or use defaults. For sequential runs where each task continues the same key-point pool:
+Hot pool injects recently learned skill **key points** ephemerally each API turn (see [`agent/hot_skills.py`](../agent/hot_skills.py)). The driver can override `skills.hot_pool.enabled` in `~/.hermes/config.yaml` without editing config:
+
+| CLI | Effect |
+|-----|--------|
+| *(omit both flags)* | Follow `skills.hot_pool.enabled` in config |
+| `--hot-pool` | Force enable for this run |
+| `--no-hot-pool` | Force disable for this run (also disables persistence) |
+| `--hot-pool-persist PATH` | Load/save pool JSON across tasks (implies pool must be enabled) |
+
+**Treatment** — pool enabled with persistence across a split or batch:
 
 ```bash
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --hot-pool \
   --hot-pool-persist benchmark/skillsbench_hot_pool.json \
   --log-jsonl benchmark/runs_hot_pool_treatment.jsonl \
   --model qwen/qwen3.6-plus
+```
 
-# Control: hot pool off in config or separate HERMES_HOME profile
+**Control** — hot pool off for this run (ignores config and `--hot-pool-persist`):
+
+```bash
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --no-hot-pool \
   --model qwen/qwen3.6-plus \
   --log-jsonl benchmark/runs_hot_pool_control.jsonl
 ```
 
-Env vars (no config edit): `HERMES_HOT_POOL_PERSIST=1`, `HERMES_HOT_POOL_PATH=/path/to/pool.json`.
+Single-task examples:
 
-Implementation: [`agent/hot_skills.py`](../agent/hot_skills.py).
+```bash
+# Hot pool on + persist (A/B treatment arm)
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control \
+  --hot-pool --hot-pool-persist benchmark/skillsbench_hot_pool.json \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
+
+# Hot pool off (control arm)
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control \
+  --no-hot-pool \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
+```
+
+JSONL rows record `hot_pool_enabled` (`true` / `false` / `null`) and `hot_pool_persist`. When the pool is active, `hot_pool_telemetry.inject` shows `point_count`, `skills_injected`, and `points_injected`.
+
+Env vars (set by the driver): `HERMES_HOT_POOL_ENABLED=0|1`, `HERMES_HOT_POOL_PERSIST=1`, `HERMES_HOT_POOL_PATH=/path/to/pool.json`.
+
+### Clean task trees before A/B runs
+
+Hermes runs **write into** `benchmark/skillsbench/tasks/<task-id>/` (solution files, `mass_report.json`, local verify scripts, etc.). Leftover artifacts make iteration counts unreliable — a later run may “verify existing output” in fewer steps while a dirty tree inflates or deflates comparisons.
+
+`benchmark/skillsbench/` is a **nested git checkout**. Reset one task or the whole tree before a clean comparison:
+
+```bash
+cd benchmark/skillsbench
+
+# One task — discard tracked edits and remove untracked agent outputs
+git restore tasks/adaptive-cruise-control
+git clean -fd tasks/adaptive-cruise-control/
+
+# All tasks — same, repo-wide (review untracked list first)
+git restore .
+git clean -fdn    # dry run: shows what would be deleted
+git clean -fd       # destructive: removes agent-generated files under tasks/
+```
+
+Then run from the Hermes repo root. **Copy-paste A/B** on one task after cleanup:
+
+```bash
+# 1) Reset task tree (from Hermes repo root)
+cd benchmark/skillsbench
+git restore tasks/adaptive-cruise-control
+git clean -fd tasks/adaptive-cruise-control/
+cd ../..
+
+# 2) Control — hot pool off
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control \
+  --model qwen/qwen3.6-plus \
+  --skill-nudge-interval 10 \
+  --memory-nudge-interval 10 \
+  --no-hot-pool \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl \
+  --print-summary
+
+# 3) Reset again
+cd benchmark/skillsbench
+git restore tasks/adaptive-cruise-control
+git clean -fd tasks/adaptive-cruise-control/
+cd ../..
+
+# 4) Treatment — hot pool on + persist
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control \
+  --model qwen/qwen3.6-plus \
+  --skill-nudge-interval 10 \
+  --memory-nudge-interval 10 \
+  --hot-pool \
+  --hot-pool-persist benchmark/skillsbench_hot_pool.json \
+  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl \
+  --print-summary
+```
+
+Do **not** commit agent outputs under `tasks/`; treat them as ephemeral benchmark state.
 
 ### Analyze runs
 
@@ -354,7 +472,7 @@ JSONL logs are usually written under `benchmark/`:
 
 | Driver | Schema | Notes |
 |--------|--------|--------|
-| SkillsBench | `skillsbench.hermes_run.v1` | `run_conversation_result`, optional `hot_pool_telemetry`, `background_review` |
+| SkillsBench | `skillsbench.hermes_run.v1` | `run_conversation_result`, `hot_pool_enabled`, `hot_pool_persist`, optional `hot_pool_telemetry`, `background_review` (`actions`, `telemetry`) |
 | AppWorld (run) | `appworld.hermes_run.v1` | `steps`, `hermes_stats`, `evaluation` (unless `--no-evaluate`) |
 | AppWorld (eval only) | `appworld.hermes_eval.v1` | `evaluation`; optional `run_hermes_stats` when `--run-log-jsonl` matches |
 | AppWorld (eval skip) | `appworld.hermes_eval_skip.v1` | `skip_reason` when task was not run (`--evaluate-only`) |

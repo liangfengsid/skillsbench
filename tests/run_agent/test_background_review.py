@@ -23,9 +23,12 @@ def _bare_agent() -> AIAgent:
     agent._MEMORY_REVIEW_PROMPT = "review memory"
     agent._SKILL_REVIEW_PROMPT = "review skills"
     agent._COMBINED_REVIEW_PROMPT = "review both"
+    agent.skill_review_prompt_override = None
+    agent.combined_review_prompt_override = None
     agent.background_review_callback = None
     agent.status_callback = None
     agent._hot_skill_pool = None
+    agent._background_review_result = None
     agent._safe_print = lambda *_args, **_kwargs: None
     return agent
 
@@ -175,14 +178,22 @@ def test_wait_for_background_review_joins_thread(monkeypatch):
     status = AIAgent.wait_for_background_review(agent, timeout=42.0)
     assert joined["called"] is True
     assert joined["timeout"] == 42.0
-    assert status == {"spawned": True, "completed": True, "timeout": False}
+    assert status["spawned"] is True
+    assert status["completed"] is True
+    assert status["timeout"] is False
+    assert status["actions"] == []
+    assert status["telemetry"]["tools"] == []
+    assert status["telemetry"]["review_skills"] is True
 
 
 def test_wait_for_background_review_no_spawn():
     agent = _bare_agent()
     agent._background_review_thread = None
-    assert AIAgent.wait_for_background_review(agent) == {
+    status = AIAgent.wait_for_background_review(agent)
+    assert status == {
         "spawned": False,
         "completed": True,
         "timeout": False,
+        "actions": [],
+        "telemetry": None,
     }

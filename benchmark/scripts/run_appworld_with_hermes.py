@@ -38,9 +38,17 @@ import shutil
 import sys
 import time
 import traceback
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+# Feishu optional deps (lark_oapi) emit setuptools pkg_resources noise on import.
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=r".*pkg_resources is deprecated.*",
+)
 
 _SCRIPT = Path(__file__).resolve()
 _BENCHMARK_DIR = _SCRIPT.parents[1]

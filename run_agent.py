@@ -1108,6 +1108,10 @@ class AIAgent:
         self._pending_steer: Optional[str] = None
         self._pending_steer_lock = threading.Lock()
         self._background_review_thread: Optional[threading.Thread] = None
+        self._background_review_result: Optional[Dict[str, Any]] = None
+        # Optional overrides for end-of-turn background review prompts (batch drivers).
+        self.skill_review_prompt_override: Optional[str] = None
+        self.combined_review_prompt_override: Optional[str] = None
 
         # Concurrent-tool worker thread tracking.  `_execute_tool_calls_concurrent`
         # runs each tool on its own ThreadPoolExecutor worker — those worker
@@ -3274,6 +3278,131 @@ class AIAgent:
                 actions.append(f"{label} updated")
         return actions
 
+    @staticmethod
+    def _prior_review_tool_keys(prior_snapshot: List[Dict]) -> tuple:
+        """Return (tool_call_ids, tool_contents) already present before review."""
+        existing_tool_call_ids = set()
+        existing_tool_contents = set()
+        for prior in prior_snapshot or []:
+            if not isinstance(prior, dict) or prior.get("role") != "tool":
+                continue
+            tcid = prior.get("tool_call_id")
+            if tcid:
+                existing_tool_call_ids.add(tcid)
+            else:
+                content = prior.get("content")
+                if isinstance(content, str):
+                    existing_tool_contents.add(content)
+        return existing_tool_call_ids, existing_tool_contents
+
+    @staticmethod
+    def _is_new_review_tool_message(
+        msg: Dict,
+        existing_tool_call_ids: set,
+        existing_tool_contents: set,
+    ) -> bool:
+        if not isinstance(msg, dict) or msg.get("role") != "tool":
+            return False
+        tcid = msg.get("tool_call_id")
+        if tcid and tcid in existing_tool_call_ids:
+            return False
+        if not tcid:
+            content_str = msg.get("content")
+            if isinstance(content_str, str) and content_str in existing_tool_contents:
+                return False
+        return True
+
+    def _collect_background_review_telemetry(
+        self,
+        review_messages: List[Dict],
+        prior_snapshot: List[Dict],
+        *,
+        review_memory: bool = False,
+        review_skills: bool = False,
+    ) -> Dict[str, Any]:
+        """Structured telemetry for batch drivers / JSONL logging."""
+        actions = self._summarize_background_review_actions(
+            review_messages, prior_snapshot,
+        )
+        existing_tool_call_ids, existing_tool_contents = (
+            self._prior_review_tool_keys(prior_snapshot)
+        )
+
+        tool_call_names: Dict[str, str] = {}
+        tool_call_args: Dict[str, Any] = {}
+        for msg in review_messages or []:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            for tc in msg.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                tcid = tc.get("id") or tc.get("tool_call_id")
+                fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+                name = fn.get("name") or tc.get("name")
+                if tcid and name:
+                    tool_call_names[tcid] = name
+                    raw_args = fn.get("arguments") or tc.get("arguments") or "{}"
+                    if isinstance(raw_args, str):
+                        try:
+                            tool_call_args[tcid] = json.loads(raw_args)
+                        except (json.JSONDecodeError, TypeError):
+                            tool_call_args[tcid] = {}
+                    elif isinstance(raw_args, dict):
+                        tool_call_args[tcid] = raw_args
+
+        tools: List[Dict[str, Any]] = []
+        assistant_texts: List[str] = []
+        for msg in review_messages or []:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            if role == "assistant":
+                content = msg.get("content")
+                if isinstance(content, str) and content.strip() and not msg.get("tool_calls"):
+                    assistant_texts.append(content.strip())
+                continue
+            if not self._is_new_review_tool_message(
+                msg, existing_tool_call_ids, existing_tool_contents,
+            ):
+                continue
+            tcid = msg.get("tool_call_id")
+            tool_name = tool_call_names.get(tcid, "")
+            args = tool_call_args.get(tcid, {})
+            entry: Dict[str, Any] = {"tool": tool_name or None}
+            if tcid:
+                entry["tool_call_id"] = tcid
+            if isinstance(args, dict) and args:
+                entry["arguments"] = args
+            try:
+                data = json.loads(msg.get("content", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                data = None
+            if isinstance(data, dict):
+                entry["success"] = bool(data.get("success"))
+                if data.get("message"):
+                    entry["message"] = data.get("message")
+                if data.get("error"):
+                    entry["error"] = data.get("error")
+                if data.get("target"):
+                    entry["target"] = data.get("target")
+            else:
+                entry["success"] = None
+                raw = msg.get("content")
+                if isinstance(raw, str):
+                    entry["raw_content_preview"] = raw[:500]
+            tools.append(entry)
+
+        return {
+            "review_memory": bool(review_memory),
+            "review_skills": bool(review_skills),
+            "actions": actions,
+            "tools": tools,
+            "assistant_texts": assistant_texts,
+            "nothing_to_save": any(
+                "nothing to save" in t.lower() for t in assistant_texts
+            ),
+        }
+
     def _spawn_background_review(
         self,
         messages_snapshot: List[Dict],
@@ -3291,11 +3420,19 @@ class AIAgent:
 
         # Pick the right prompt based on which triggers fired
         if review_memory and review_skills:
-            prompt = self._COMBINED_REVIEW_PROMPT
+            prompt = (
+                getattr(self, "combined_review_prompt_override", None)
+                or self._COMBINED_REVIEW_PROMPT
+            )
         elif review_memory:
             prompt = self._MEMORY_REVIEW_PROMPT
         else:
-            prompt = self._SKILL_REVIEW_PROMPT
+            prompt = (
+                getattr(self, "skill_review_prompt_override", None)
+                or self._SKILL_REVIEW_PROMPT
+            )
+
+        self._background_review_result = None
 
         def _run_review():
             import contextlib
@@ -3361,9 +3498,18 @@ class AIAgent:
                 # the review agent inherits that history and would otherwise
                 # re-surface stale "created"/"updated" messages from the prior
                 # conversation as if they just happened (issue #14944).
+                review_messages = getattr(review_agent, "_session_messages", [])
                 actions = self._summarize_background_review_actions(
-                    getattr(review_agent, "_session_messages", []),
+                    review_messages,
                     messages_snapshot,
+                )
+                self._background_review_result = (
+                    self._collect_background_review_telemetry(
+                        review_messages,
+                        messages_snapshot,
+                        review_memory=review_memory,
+                        review_skills=review_skills,
+                    )
                 )
 
                 if actions:
@@ -3419,23 +3565,39 @@ class AIAgent:
         exit or the review (and any ``skill_manage`` / hot-pool updates) are
         killed mid-flight.
 
-        Returns a small status dict: ``spawned``, ``completed``, ``timeout``.
+        Returns a small status dict: ``spawned``, ``completed``, ``timeout``,
+        plus ``actions`` and ``telemetry`` when review ran.
         """
+        def _status(
+            *,
+            spawned: bool,
+            completed: bool,
+            timeout: bool,
+        ) -> Dict[str, Any]:
+            result = getattr(self, "_background_review_result", None) or {}
+            return {
+                "spawned": spawned,
+                "completed": completed,
+                "timeout": timeout,
+                "actions": list(result.get("actions") or []),
+                "telemetry": result if result else None,
+            }
+
         t = getattr(self, "_background_review_thread", None)
         if t is None:
-            return {"spawned": False, "completed": True, "timeout": False}
+            return _status(spawned=False, completed=True, timeout=False)
         if not t.is_alive():
             self._background_review_thread = None
-            return {"spawned": True, "completed": True, "timeout": False}
+            return _status(spawned=True, completed=True, timeout=False)
         t.join(timeout=timeout)
         still_alive = t.is_alive()
         if not still_alive:
             self._background_review_thread = None
-        return {
-            "spawned": True,
-            "completed": not still_alive,
-            "timeout": still_alive,
-        }
+        return _status(
+            spawned=True,
+            completed=not still_alive,
+            timeout=still_alive,
+        )
 
     def export_hot_pool_telemetry(self) -> Optional[dict]:
         """Snapshot hot skill pool telemetry (e.g. after background review)."""

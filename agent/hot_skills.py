@@ -138,6 +138,12 @@ def load_hot_skills_config(skills_cfg: Optional[dict] = None) -> dict:
     _env_path = os.getenv("HERMES_HOT_POOL_PATH", "").strip()
     if _env_path:
         cfg["persist_path"] = _env_path
+    _env_enabled = os.getenv("HERMES_HOT_POOL_ENABLED", "").strip().lower()
+    if _env_enabled in ("0", "false", "no", "off"):
+        cfg["enabled"] = False
+        cfg["persist_across_conversations"] = False
+    elif _env_enabled in ("1", "true", "yes", "on"):
+        cfg["enabled"] = True
     return cfg
 
 

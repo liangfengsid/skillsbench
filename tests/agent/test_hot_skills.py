@@ -83,6 +83,18 @@ def test_load_hot_skills_config_merges_defaults():
     assert cfg["max_entries"] == 12
 
 
+def test_load_hot_skills_config_env_enabled_override(monkeypatch):
+    monkeypatch.setenv("HERMES_HOT_POOL_ENABLED", "0")
+    monkeypatch.setenv("HERMES_HOT_POOL_PERSIST", "1")
+    cfg = load_hot_skills_config({"hot_pool": {"enabled": True, "persist_across_conversations": True}})
+    assert cfg["enabled"] is False
+    assert cfg["persist_across_conversations"] is False
+
+    monkeypatch.setenv("HERMES_HOT_POOL_ENABLED", "1")
+    cfg_on = load_hot_skills_config({"hot_pool": {"enabled": False}})
+    assert cfg_on["enabled"] is True
+
+
 def test_global_pool_max_entries_spreads_across_skills():
     cfg = {
         "enabled": True,

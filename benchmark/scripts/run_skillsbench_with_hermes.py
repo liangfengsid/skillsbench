@@ -9,10 +9,18 @@ the Hermes repo venv). This script prepends HERMES_AGENT_ROOT to sys.path so
 Examples (from Hermes repo root):
 
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --task adaptive-cruise-control \\
-      --skill-nudge-interval 5 --memory-nudge-interval 5 \\
-      --log-jsonl ./hermes_skillsbench_runs.jsonl
+      --skill-nudge-interval 10 --memory-nudge-interval 10 \\
+      --hot-pool --hot-pool-persist benchmark/skillsbench_hot_pool.json \\
+      --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
 
-  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --log-jsonl ./runs.jsonl
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --task adaptive-cruise-control \\
+      --no-hot-pool --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
+
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --log-jsonl ./runs.jsonl \\
+      --hot-pool --hot-pool-persist benchmark/skillsbench_hot_pool.json
+
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --no-hot-pool \\
+      --log-jsonl ./runs.jsonl
 
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --start-task-index 10 \\
       --log-jsonl ./runs.jsonl  # skip first 10 tasks (sorted order), run the rest
@@ -28,9 +36,17 @@ import os
 import sys
 import time
 import traceback
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Feishu optional deps (lark_oapi) emit setuptools pkg_resources noise on import.
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=r".*pkg_resources is deprecated.*",
+)
 
 # This file lives at <repo>/benchmark/scripts/<name>.py
 _SCRIPT = Path(__file__).resolve()
@@ -54,6 +70,45 @@ _DEFAULT_HERMES = _hermes_repo_root_from_script()
 _DEFAULT_SKILLSBENCH = _bundled_skillsbench_root()
 DEFAULT_HERMES_ROOT = _DEFAULT_HERMES
 DEFAULT_PROMPT_TASKS_BASE = str((_DEFAULT_SKILLSBENCH / "tasks").resolve())
+
+SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX = (
+    "\n\n**SkillsBench batch context (platform=skillsbench-batch):**\n"
+    "The conversation above was a benchmark task run, not a casual user chat.\n\n"
+    "CREATE or PATCH a Hermes skill when ANY of these occurred:\n"
+    "- 3+ tool rounds spent on verification (pytest, docker, path symlinks, "
+    "re-reading outputs, or re-running an already-correct answer)\n"
+    "- Host vs container path confusion (/root/... vs "
+    "benchmark/skillsbench/tasks/<id>/environment/...)\n"
+    "- Repeated reads of solution/ or tests/ before solving\n"
+    "- Trial-and-error after the core answer was already computed\n"
+    "- Wrong tool patterns (e.g. importing execute_code from hermes_tools, "
+    "host pytest against /root paths when docker is unavailable)\n\n"
+    "Name skills at CLASS level (examples: skillsbench-host-verification, "
+    "binary-stl-mass-calc, skillsbench-path-mapping). Do NOT name skills after "
+    "a single task id unless the pitfall is truly unique.\n"
+    "Survey skills_list first; patch an existing class skill when possible.\n"
+    "No user confirmation is required in batch mode — use skill_manage when "
+    "criteria match.\n"
+    "If verification thrashing or path confusion occurred, saving a workflow "
+    "skill is preferred over 'Nothing to save.'"
+)
+
+SKILLSBENCH_BATCH_COMBINED_REVIEW_APPENDIX = (
+    "\n\n**SkillsBench batch context (platform=skillsbench-batch):**\n"
+    "For the skills portion, apply the same batch rules: persist class-level "
+    "workflow skills when verification thrashing, host/container path "
+    "confusion, or repeated test/solution peeking consumed 3+ tool rounds. "
+    "Use skill_manage(create|patch) without user confirmation when criteria "
+    "match. Prefer skillsbench-host-verification-style names over task ids."
+)
+
+
+def build_skillsbench_skill_review_prompt(base_prompt: str) -> str:
+    return base_prompt + SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX
+
+
+def build_skillsbench_combined_review_prompt(base_prompt: str) -> str:
+    return base_prompt + SKILLSBENCH_BATCH_COMBINED_REVIEW_APPENDIX
 
 
 def _expand(p: str | Path) -> Path:
@@ -95,6 +150,26 @@ def json_safe(obj: Any) -> Any:
     return json.loads(json.dumps(obj, default=_default))
 
 
+def apply_hot_pool_cli_overrides(
+    *,
+    hot_pool: Optional[bool],
+    hot_pool_persist: Optional[str],
+) -> None:
+    """Set env vars so AIAgent honors CLI hot-pool on/off before import."""
+    for key in ("HERMES_HOT_POOL_ENABLED", "HERMES_HOT_POOL_PERSIST", "HERMES_HOT_POOL_PATH"):
+        os.environ.pop(key, None)
+    if hot_pool is False:
+        os.environ["HERMES_HOT_POOL_ENABLED"] = "0"
+        return
+    if hot_pool is True:
+        os.environ["HERMES_HOT_POOL_ENABLED"] = "1"
+    if hot_pool_persist:
+        os.environ["HERMES_HOT_POOL_PERSIST"] = "1"
+        os.environ["HERMES_HOT_POOL_PATH"] = str(
+            Path(hot_pool_persist).expanduser().resolve(),
+        )
+
+
 def run_one_task(
     *,
     task_id: str,
@@ -109,13 +184,16 @@ def run_one_task(
     skip_context_files: bool,
     skip_memory: bool,
     save_trajectories: bool,
+    hot_pool: Optional[bool] = None,
     hot_pool_persist: Optional[str] = None,
     wait_background_review: bool = True,
     background_review_timeout: Optional[float] = 180.0,
+    batch_review_prompt: bool = True,
 ) -> Dict[str, Any]:
-    if hot_pool_persist:
-        os.environ["HERMES_HOT_POOL_PERSIST"] = "1"
-        os.environ["HERMES_HOT_POOL_PATH"] = str(Path(hot_pool_persist).expanduser().resolve())
+    apply_hot_pool_cli_overrides(
+        hot_pool=hot_pool,
+        hot_pool_persist=hot_pool_persist,
+    )
     _ensure_hermes_on_path(hermes_root)
     from run_agent import AIAgent  # type: ignore  # after sys.path
 
@@ -132,6 +210,13 @@ def run_one_task(
         agent._skill_nudge_interval = int(skill_nudge_interval)
     if memory_nudge_interval is not None:
         agent._memory_nudge_interval = int(memory_nudge_interval)
+    if batch_review_prompt:
+        agent.skill_review_prompt_override = build_skillsbench_skill_review_prompt(
+            AIAgent._SKILL_REVIEW_PROMPT,
+        )
+        agent.combined_review_prompt_override = build_skillsbench_combined_review_prompt(
+            AIAgent._COMBINED_REVIEW_PROMPT,
+        )
 
     user_message = build_user_message(prompt_tasks_base, task_id)
     hermes_task_id = f"skillsbench-{task_id}"
@@ -165,6 +250,9 @@ def run_one_task(
             "skill": getattr(agent, "_skill_nudge_interval", None),
             "memory": getattr(agent, "_memory_nudge_interval", None),
         },
+        "batch_review_prompt": batch_review_prompt,
+        "hot_pool_enabled": hot_pool,
+        "hot_pool_persist": hot_pool_persist,
         "model": model,
         "background_review": background_review,
         "run_conversation_result": result,
@@ -178,6 +266,35 @@ def append_jsonl(path: Path, record: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+
+def format_run_summary(envelope: Dict[str, Any]) -> str:
+    """One-line stdout summary for --print-summary."""
+    res = envelope.get("run_conversation_result") or {}
+    br = envelope.get("background_review") or {}
+    tel = envelope.get("hot_pool_telemetry") or res.get("hot_pool_telemetry") or {}
+    sm = tel.get("skill_manage") if isinstance(tel, dict) else {}
+    skill_manage_sync = sm.get("sync") if isinstance(sm, dict) else None
+    bg_actions = br.get("actions") or []
+    bg_action_count = len(bg_actions)
+    bg_action_preview = bg_actions[0] if bg_actions else None
+    parts = [
+        f"duration_sec={envelope.get('duration_sec')!r}",
+        f"api_calls={res.get('api_calls')!r}",
+        f"input_tokens={res.get('input_tokens')!r}",
+        f"output_tokens={res.get('output_tokens')!r}",
+        f"total_tokens={res.get('total_tokens')!r}",
+        f"estimated_cost_usd={res.get('estimated_cost_usd')!r}",
+        f"completed={res.get('completed')!r}",
+        f"interrupted={res.get('interrupted')!r}",
+        f"bg_review_spawned={br.get('spawned')!r}",
+        f"bg_review_completed={br.get('completed')!r}",
+        f"bg_review_timeout={br.get('timeout')!r}",
+        f"bg_review_actions={bg_action_count!r}",
+        f"bg_review_action_preview={bg_action_preview!r}",
+        f"skill_manage_sync={skill_manage_sync!r}",
+    ]
+    return " ".join(parts)
 
 
 def main() -> int:
@@ -278,9 +395,25 @@ def main() -> int:
         help=(
             "Persist hot skill key points across tasks to PATH (JSON). "
             "Each task continues the pool like a new user turn. "
-            "Sets HERMES_HOT_POOL_PERSIST=1 and HERMES_HOT_POOL_PATH for the run."
+            "Requires hot pool to be enabled (default from config, or --hot-pool)."
         ),
     )
+    hot_pool_group = parser.add_mutually_exclusive_group()
+    hot_pool_group.add_argument(
+        "--hot-pool",
+        dest="hot_pool",
+        action="store_const",
+        const=True,
+        help="Enable hot skill pool for this run (overrides config.yaml).",
+    )
+    hot_pool_group.add_argument(
+        "--no-hot-pool",
+        dest="hot_pool",
+        action="store_const",
+        const=False,
+        help="Disable hot skill pool for this run (overrides config.yaml).",
+    )
+    parser.set_defaults(hot_pool=None)
     parser.add_argument(
         "--no-wait-background-review",
         action="store_true",
@@ -297,6 +430,14 @@ def main() -> int:
         help=(
             "Max seconds to wait for background review after each task "
             "(default: 180). Ignored with --no-wait-background-review."
+        ),
+    )
+    parser.add_argument(
+        "--no-batch-review-prompt",
+        action="store_true",
+        help=(
+            "Use the default Hermes skill/memory review prompts instead of the "
+            "SkillsBench batch appendix (host/container pitfalls, verification thrashing)."
         ),
     )
     parser.add_argument(
@@ -437,6 +578,9 @@ def main() -> int:
             return 1
         run_ids = [args.task]
 
+    if args.hot_pool is False and args.hot_pool_persist:
+        parser.error("--hot-pool-persist cannot be used with --no-hot-pool.")
+
     log_path = Path(args.log_jsonl).expanduser() if args.log_jsonl else None
     pretty_path = Path(args.log_json_pretty).expanduser() if args.log_json_pretty else None
     if pretty_path and len(run_ids) != 1:
@@ -463,9 +607,11 @@ def main() -> int:
                 skip_context_files=args.skip_context_files,
                 skip_memory=args.skip_memory,
                 save_trajectories=args.save_trajectories,
+                hot_pool=args.hot_pool,
                 hot_pool_persist=args.hot_pool_persist,
                 wait_background_review=not args.no_wait_background_review,
                 background_review_timeout=args.background_review_timeout,
+                batch_review_prompt=not args.no_batch_review_prompt,
             )
             envelope["ts_start_iso"] = ts_start
 
@@ -481,16 +627,7 @@ def main() -> int:
 
             res = envelope["run_conversation_result"]
             if args.print_summary:
-                print(
-                    f"duration_sec={envelope['duration_sec']!r} "
-                    f"api_calls={res.get('api_calls')!r} "
-                    f"input_tokens={res.get('input_tokens')!r} "
-                    f"output_tokens={res.get('output_tokens')!r} "
-                    f"total_tokens={res.get('total_tokens')!r} "
-                    f"estimated_cost_usd={res.get('estimated_cost_usd')!r} "
-                    f"completed={res.get('completed')!r} interrupted={res.get('interrupted')!r}",
-                    flush=True,
-                )
+                print(format_run_summary(envelope), flush=True)
         except Exception as e:
             any_failed = True
             err = {

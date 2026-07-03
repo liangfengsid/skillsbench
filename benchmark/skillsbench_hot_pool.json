@@ -1,7 +1,52 @@
 {
   "schema": "hermes.hot_skill_pool.v1",
-  "updated_at": 1781689583.905415,
-  "global_turn": 4,
-  "lru_order": [],
-  "entries": {}
+  "updated_at": 1783065618.3758273,
+  "global_turn": 15,
+  "lru_order": [
+    "systematic-debugging",
+    "skillsbench-task-execution"
+  ],
+  "entries": {
+    "systematic-debugging": {
+      "name": "systematic-debugging",
+      "key_points": [
+        "Say \"I don't understand X\"",
+        "Don't pretend to know",
+        "Ask the user for help",
+        "Research more",
+        "---",
+        "MUST have before fixing",
+        "Report findings — do NOT fix yet"
+      ],
+      "skill_dir": "/home/liangfeng/.hermes/skills/software-development/systematic-debugging",
+      "skill_md_mtime": 1778307682.383906,
+      "last_used_turn": 15,
+      "description": "4-phase root cause debugging: understand bugs before fixing.",
+      "tags": [
+        "debugging",
+        "troubleshooting",
+        "problem-solving",
+        "root-cause",
+        "investigation"
+      ]
+    },
+    "skillsbench-task-execution": {
+      "name": "skillsbench-task-execution",
+      "key_points": [
+        "Docker path confusion: `solve.py` or `test_outputs.py` references `/root/scan_data.stl` — locally this is `environment/scan_data.stl`.",
+        "test_outputs.py hardcodes `/root/`: Running pytest directly on `tests/test_outputs.py` will fail with \"file not found\" or \"permission denied\" because `/root/` is the container path. You must either adapt the test or replicate its assertions with local paths.",
+        "Skill paths: In Docker, skills are at `/root/.claude/skills/<name>/scripts/`. Locally they're at `environment/skills/<name>/scripts/`.",
+        "Don't modify `instruction.md`, `solve.sh`, `task.toml`, or test files — only add your solution and output.",
+        "symlink requires sudo: Creating symlinks from `/root/` to local paths needs `sudo`, which may not be available. Prefer path adaptation over symlinking.",
+        "Physics model mismatch: If simulation results fail performance targets despite correct PID tuning, compare your simulation's physics model against `solution/solve.sh`. Adding \"realism\" (e.g. aerodynamic drag, friction, damping) that the oracle doesn't use will silently break rise time, steady-state error, and all downstream targets. The oracle's physics is the ground truth — match it exactly before tuning.",
+        "Missing report files: The verifier checks `acc_report.md` for exact keywords: 'design', 'tuning', 'result'. If the report file is absent or doesn't contain these words, the Report test fails.",
+        "Read `solution/solve.sh` to understand the oracle approach (allowed — never modify)."
+      ],
+      "skill_dir": "/home/liangfeng/.hermes/skills/devops/skillsbench-task-execution",
+      "skill_md_mtime": 1783065618.369296,
+      "last_used_turn": 15,
+      "description": "",
+      "tags": []
+    }
+  }
 }
