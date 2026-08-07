@@ -67,6 +67,22 @@ def test_format_run_summary_includes_background_review_actions():
     assert "skillsbench-host-verification" in summary
 
 
+def test_resolve_model_id_prefers_cli_arg():
+    mod = _load_module()
+    assert mod.resolve_model_id("  Qwen/Qwen3.6-27B  ") == "Qwen/Qwen3.6-27B"
+
+
+def test_resolve_model_id_falls_back_to_config(monkeypatch):
+    mod = _load_module()
+
+    def _fake_load_config():
+        return {"model": {"default": "Qwen/Qwen3.6-27B", "provider": "qwen-local"}}
+
+    monkeypatch.setattr("hermes_cli.config.load_config", _fake_load_config)
+    assert mod.resolve_model_id("") == "Qwen/Qwen3.6-27B"
+    assert mod.resolve_model_id(None) == "Qwen/Qwen3.6-27B"
+
+
 def test_apply_hot_pool_cli_overrides_disable(monkeypatch):
     mod = _load_module()
     monkeypatch.setenv("HERMES_HOT_POOL_PERSIST", "1")

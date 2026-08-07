@@ -169,6 +169,29 @@ def json_safe(obj: Any) -> Any:
     return json.loads(json.dumps(obj, default=_default))
 
 
+def resolve_model_id(model: Optional[str] = None) -> str:
+    """Resolve the model id for AIAgent.
+
+    ``AIAgent(model="")`` keeps an empty string and will POST ``\"model\": \"\"``
+    to the API. The interactive CLI fills ``model.default`` from config before
+    constructing the agent; this driver must do the same when ``--model`` is
+    omitted.
+    """
+    if isinstance(model, str) and model.strip():
+        return model.strip()
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config().get("model") or {}
+        if isinstance(cfg, dict):
+            return str(cfg.get("default") or cfg.get("model") or "").strip()
+        if isinstance(cfg, str):
+            return cfg.strip()
+    except Exception:
+        pass
+    return ""
+
+
 def apply_hot_pool_cli_overrides(
     *,
     hot_pool: Optional[bool],
@@ -218,8 +241,15 @@ def run_one_task(
     _ensure_hermes_on_path(hermes_root)
     from run_agent import AIAgent  # type: ignore  # after sys.path
 
+    resolved_model = resolve_model_id(model)
+    if not resolved_model:
+        raise SystemExit(
+            "No model id resolved. Pass --model <id>, or set model.default via "
+            "`hermes model` / ~/.hermes/config.yaml."
+        )
+
     agent = AIAgent(
-        model=model,
+        model=resolved_model,
         quiet_mode=quiet_mode,
         max_iterations=max_iterations,
         skip_context_files=skip_context_files,
@@ -294,7 +324,7 @@ def run_one_task(
         "batch_review_prompt": batch_review_prompt,
         "hot_pool_enabled": hot_pool,
         "hot_pool_persist": hot_pool_persist,
-        "model": model,
+        "model": resolved_model,
         "background_review": background_review,
         "run_conversation_result": result,
     }
@@ -462,7 +492,11 @@ def main() -> int:
         "--model",
         type=str,
         default="",
-        help="Model id (Hermes/OpenRouter format); empty uses Hermes default from config.",
+        help=(
+            "Model id sent in chat/completions (e.g. Qwen/Qwen3.6-27B). "
+            "Empty uses model.default from ~/.hermes/config.yaml "
+            "(after `hermes model`). Required if config has no default."
+        ),
     )
     parser.add_argument(
         "--max-iterations",
