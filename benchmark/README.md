@@ -145,6 +145,18 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --no-hot-pool \
   --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
 
+# Isolated experiment workspace (recommended for hot-pool / multi-run):
+# copies selected tasks under DIR/skillsbench/tasks/, defaults hot-pool JSON
+# to DIR/hot_pool.json, and isolates HERMES_HOME under DIR/hermes_home.
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --experiment-dir benchmark/runs/exp_hot_train \
+  --split-file benchmark/skillsbench_splits/stratified_v1.json \
+  --split-part train \
+  --model qwen/qwen3.6-plus \
+  --hot-pool \
+  --log-jsonl benchmark/runs/exp_hot_train/runs.jsonl \
+  --print-summary
+
 # Slice of tasks: [start, end) in sorted order
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --start-task-index 0 --end-task-index 10 \
@@ -166,6 +178,9 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 | `--skill-nudge-interval` / `--memory-nudge-interval` | from config | Override nudge counters after agent init |
 | `--hot-pool` / `--no-hot-pool` | follow config | Force hot skill pool on or off for this run (see below) |
 | `--hot-pool-persist PATH` | off | Load/save hot pool across tasks; requires pool enabled; incompatible with `--no-hot-pool` |
+| `--experiment-dir DIR` | off | Per-experiment workspace: task copies + default hot pool + isolated `HERMES_HOME` |
+| `--reset-task-workspaces` | off | With `--experiment-dir`: refresh task copies / wipe prior agent outputs |
+| `--no-isolate-hermes-home` | off | With `--experiment-dir`: keep using the real `HERMES_HOME` |
 | `--no-batch-review-prompt` | off | Use default Hermes review prompt instead of SkillsBench batch appendix |
 | `--no-wait-background-review` | off | Exit without waiting for end-of-turn skill/memory review |
 | `--background-review-timeout SEC` | 180 | Max wait for background review per task |

@@ -27,6 +27,10 @@ benchmark/baselines/coevoskills/
 Per-task workspaces (default): `benchmark/runs/coevoskills/<task_id>/`  
 Frozen library (default): `benchmark/runs/coevoskills/_frozen_library/`
 
+With `--experiment-dir DIR`, workspaces nest under `DIR/coevoskills/` (when
+`--work-root` is left at default), frozen-eval task copies under
+`DIR/skillsbench/tasks/`, and `HERMES_HOME` under `DIR/hermes_home`.
+
 ## Recommended protocol (cross-task)
 
 1. **Evolve** on `stratified_v1` **train** (skills may change).
@@ -84,6 +88,7 @@ python -m benchmark.baselines.coevoskills.run_split_protocol \
 ```bash
 python -m benchmark.baselines.coevoskills.run_split_protocol \
   --frozen-eval \
+  --experiment-dir benchmark/runs/coevo_frozen_test_ws \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part test \
   --library-dir benchmark/runs/coevoskills/_frozen_library \
@@ -91,9 +96,14 @@ python -m benchmark.baselines.coevoskills.run_split_protocol \
   --max-iterations 90 \
   --model qwen/qwen3.6-plus \
   --install-skills-into-task \
-  --log-jsonl benchmark/runs/coevo_frozen_test.jsonl \
-  --aggregate-out benchmark/runs/coevo_frozen_test_summary.json
+  --log-jsonl benchmark/runs/coevo_frozen_test_ws/runs.jsonl \
+  --aggregate-out benchmark/runs/coevo_frozen_test_ws/summary.json
 ```
+
+`--experiment-dir` copies selected tasks under `DIR/skillsbench/tasks/` so
+`--install-skills-into-task` and agent outputs do not mutate the shared
+`benchmark/skillsbench/tasks/` tree. It also isolates `HERMES_HOME` under
+`DIR/hermes_home` by default (`--no-isolate-hermes-home` to keep `~/.hermes`).
 
 Same-task quality (evolve and score the same task’s skills, no pooled library):
 

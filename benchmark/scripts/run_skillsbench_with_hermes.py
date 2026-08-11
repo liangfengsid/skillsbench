@@ -30,6 +30,17 @@ Examples (from Hermes repo root):
       --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \\
       --log-jsonl benchmark/runs/hermes_train.jsonl --resume --print-summary
 
+  # Isolated experiment workspace (no pollution of shared skillsbench/tasks):
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \\
+      --experiment-dir benchmark/runs/exp_hot_train \\
+      --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \\
+      --hot-pool --log-jsonl benchmark/runs/exp_hot_train/runs.jsonl --print-summary
+
+  # Fresh start in the same experiment dir (wipe prior agent outputs):
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \\
+      --experiment-dir benchmark/runs/exp_hot_train --reset-task-workspaces \\
+      --hot-pool --log-jsonl benchmark/runs/exp_hot_train/runs.jsonl
+
   # pass@k: verifier scores at conversation turns 1,5,10,... within one run (no reruns):
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --task adaptive-cruise-control \\
       --pass-k 1,5,10,70 \\
@@ -197,6 +208,65 @@ def resolve_model_id(model: Optional[str] = None) -> str:
     return ""
 
 
+def resolve_agent_runtime(
+    *,
+    model: str,
+    config_hermes_home: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Resolve provider/base_url/api_key the same way the interactive CLI does.
+
+    ``AIAgent(model=...)`` alone is not enough for custom/local endpoints: the CLI
+    passes ``provider``, ``base_url``, and ``api_key`` from
+    ``resolve_runtime_provider()``. Without that, local vLLM (``qwen-local``) and
+    ``--experiment-dir`` isolated ``HERMES_HOME`` trees often fail with
+    ``No LLM provider configured``.
+
+    When ``config_hermes_home`` is set, temporarily point ``HERMES_HOME`` there so
+    resolution still reads the user's real ``~/.hermes`` even after the driver
+    isolates the experiment home for skills/memory.
+    """
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+
+    prev_home = os.environ.get("HERMES_HOME")
+    if config_hermes_home is not None:
+        os.environ["HERMES_HOME"] = str(Path(config_hermes_home).expanduser().resolve())
+
+    try:
+        requested = None
+        try:
+            from hermes_cli.config import load_config
+
+            cfg_model = load_config().get("model") or {}
+            if isinstance(cfg_model, dict):
+                requested = cfg_model.get("provider") or None
+        except Exception:
+            requested = None
+
+        runtime = resolve_runtime_provider(
+            requested=requested,
+            target_model=model,
+        )
+    finally:
+        if config_hermes_home is not None:
+            if prev_home is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = prev_home
+
+    if not isinstance(runtime, dict):
+        raise RuntimeError(
+            "Failed to resolve LLM runtime. Run `hermes model` / `hermes setup`, "
+            "or set model.provider + providers.<name>.base_url in ~/.hermes/config.yaml."
+        )
+    if not (runtime.get("base_url") or runtime.get("api_key")):
+        raise RuntimeError(
+            "No LLM provider configured. Run `hermes model` to select a provider, "
+            "or set providers.<name>.base_url for a local endpoint "
+            "(e.g. http://127.0.0.1:8090/v1)."
+        )
+    return runtime
+
+
 def apply_hot_pool_cli_overrides(
     *,
     hot_pool: Optional[bool],
@@ -238,6 +308,8 @@ def run_one_task(
     batch_review_prompt: bool = True,
     pass_k_turns: Optional[List[int]] = None,
     eval_timeout_sec: float = 600.0,
+    runtime: Optional[Dict[str, Any]] = None,
+    config_hermes_home: Optional[Path] = None,
 ) -> Dict[str, Any]:
     apply_hot_pool_cli_overrides(
         hot_pool=hot_pool,
@@ -253,8 +325,16 @@ def run_one_task(
             "`hermes model` / ~/.hermes/config.yaml."
         )
 
+    agent_runtime = runtime or resolve_agent_runtime(
+        model=resolved_model,
+        config_hermes_home=config_hermes_home,
+    )
     agent = AIAgent(
         model=resolved_model,
+        api_key=agent_runtime.get("api_key"),
+        base_url=agent_runtime.get("base_url"),
+        provider=agent_runtime.get("provider"),
+        api_mode=agent_runtime.get("api_mode"),
         quiet_mode=quiet_mode,
         max_iterations=max_iterations,
         skip_context_files=skip_context_files,
@@ -718,10 +798,43 @@ def main() -> int:
         default="train",
         help="Which partition to run when --split-file is set (default: train).",
     )
+    parser.add_argument(
+        "--experiment-dir",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Isolated experiment workspace. Copies selected tasks under "
+            "DIR/skillsbench/tasks/, points --skillsbench-root / --prompt-tasks-base "
+            "there, defaults --hot-pool-persist to DIR/hot_pool.json, and "
+            "(unless --no-isolate-hermes-home) sets HERMES_HOME=DIR/hermes_home "
+            "so skill_manage / memory do not touch ~/.hermes."
+        ),
+    )
+    parser.add_argument(
+        "--isolate-hermes-home",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "With --experiment-dir: isolate HERMES_HOME under the experiment "
+            "(default: on). Use --no-isolate-hermes-home to keep ~/.hermes."
+        ),
+    )
+    parser.add_argument(
+        "--reset-task-workspaces",
+        action="store_true",
+        help=(
+            "With --experiment-dir: re-copy task definition files and wipe prior "
+            "agent outputs in the experiment task dirs before running."
+        ),
+    )
 
     args = parser.parse_args()
-    skillsbench_root = _expand(args.skillsbench_root)
+    if args.reset_task_workspaces and not args.experiment_dir:
+        parser.error("--reset-task-workspaces requires --experiment-dir")
+    source_skillsbench_root = _expand(args.skillsbench_root)
     hermes_root = _expand(args.hermes_root)
+    skillsbench_root = source_skillsbench_root
     tasks_dir = skillsbench_root / "tasks"
 
     task_ids = discover_task_ids(tasks_dir)
@@ -798,6 +911,78 @@ def main() -> int:
             )
             return 1
         run_ids = [args.task]
+
+    prompt_tasks_base = args.prompt_tasks_base
+    experiment_dir: Optional[Path] = None
+    # Resolve LLM credentials against the real ~/.hermes *before* any
+    # --experiment-dir isolation rewrites HERMES_HOME (empty experiment homes
+    # have no model.provider / providers.* and would fail AIAgent init).
+    from hermes_constants import get_hermes_home
+
+    config_hermes_home = Path(get_hermes_home()).resolve()
+    resolved_model_for_runtime = resolve_model_id(args.model)
+    if not args.list_tasks and not args.evaluate_only:
+        if not resolved_model_for_runtime:
+            parser.error(
+                "No model id resolved. Pass --model <id>, or set model.default via "
+                "`hermes model` / ~/.hermes/config.yaml."
+            )
+        try:
+            shared_runtime = resolve_agent_runtime(
+                model=resolved_model_for_runtime,
+                config_hermes_home=config_hermes_home,
+            )
+        except RuntimeError as exc:
+            parser.error(str(exc))
+        print(
+            f"[provider] {shared_runtime.get('provider')!r} "
+            f"model={resolved_model_for_runtime!r} "
+            f"base_url={shared_runtime.get('base_url')!r}",
+            flush=True,
+        )
+    else:
+        shared_runtime = None
+
+    if args.experiment_dir:
+        from skillsbench_experiment_workspace import (
+            experiment_hot_pool_path,
+            prepare_experiment_workspace,
+        )
+
+        experiment_dir = Path(args.experiment_dir).expanduser().resolve()
+        print(
+            f"[experiment] preparing workspace → {experiment_dir} "
+            f"({len(run_ids)} tasks, reset_outputs={bool(args.reset_task_workspaces)})",
+            flush=True,
+        )
+        manifest = prepare_experiment_workspace(
+            experiment_dir=experiment_dir,
+            source_skillsbench_root=source_skillsbench_root,
+            task_ids=run_ids,
+            reset_outputs=bool(args.reset_task_workspaces),
+            isolate_hermes_home=bool(args.isolate_hermes_home),
+            apply_hermes_home_env=bool(args.isolate_hermes_home),
+        )
+        skillsbench_root = Path(manifest["skillsbench_root"])
+        prompt_tasks_base = str(manifest["prompt_tasks_base"])
+        if not args.hot_pool_persist and args.hot_pool is not False:
+            args.hot_pool_persist = str(experiment_hot_pool_path(experiment_dir))
+            if args.hot_pool is None:
+                # Auto-persist implies enabling the pool for this experiment.
+                args.hot_pool = True
+            print(
+                f"[experiment] hot_pool_persist → {args.hot_pool_persist}",
+                flush=True,
+            )
+        if args.isolate_hermes_home:
+            print(
+                f"[experiment] HERMES_HOME → {manifest.get('hermes_home')}",
+                flush=True,
+            )
+        print(
+            f"[experiment] skillsbench_root → {skillsbench_root}",
+            flush=True,
+        )
 
     if args.hot_pool is False and args.hot_pool_persist:
         parser.error("--hot-pool-persist cannot be used with --no-hot-pool.")
@@ -899,7 +1084,7 @@ def main() -> int:
                     task_id=tid,
                     hermes_root=hermes_root,
                     skillsbench_root=skillsbench_root,
-                    prompt_tasks_base=args.prompt_tasks_base,
+                    prompt_tasks_base=prompt_tasks_base,
                     model=args.model,
                     skill_nudge_interval=args.skill_nudge_interval,
                     memory_nudge_interval=args.memory_nudge_interval,
@@ -915,6 +1100,8 @@ def main() -> int:
                     batch_review_prompt=not args.no_batch_review_prompt,
                     pass_k_turns=pass_k_turns,
                     eval_timeout_sec=args.eval_timeout_sec,
+                    runtime=shared_runtime,
+                    config_hermes_home=config_hermes_home,
                 )
                 envelope["ts_start_iso"] = ts_start
                 if args.evaluate_after_run:
@@ -927,6 +1114,9 @@ def main() -> int:
             if split_file_path is not None:
                 envelope["split_file"] = str(split_file_path)
                 envelope["split_part"] = args.split_part
+            if experiment_dir is not None:
+                envelope["experiment_dir"] = str(experiment_dir)
+                envelope["skillsbench_root"] = str(skillsbench_root)
             if len(original_run_ids) > 1:
                 envelope["batch"] = {
                     "task_index": batch_index + len(skipped),

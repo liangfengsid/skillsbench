@@ -13,24 +13,27 @@ as Hermes (``evaluation``, ``pass_at_turn``, ``run_conversation_result``) so
 
 Examples
 --------
-# Evolve on stratified train (65 tasks)
+# Evolve on stratified train (65 tasks), isolated experiment workspace
 python -m benchmark.baselines.coevoskills.run_split_protocol \\
   --evolve \\
+  --experiment-dir benchmark/runs/coevo_exp1 \\
   --split-file benchmark/skillsbench_splits/stratified_v1.json \\
   --split-part train \\
   --model qwen/qwen3.6-plus \\
-  --log-jsonl benchmark/runs/coevo_evolve_train.jsonl
+  --log-jsonl benchmark/runs/coevo_exp1/evolve_train.jsonl
 
 # Build frozen library from train workspaces, then eval on test
 python -m benchmark.baselines.coevoskills.run_split_protocol \\
   --build-library \\
   --frozen-eval \\
+  --experiment-dir benchmark/runs/coevo_exp1 \\
   --split-file benchmark/skillsbench_splits/stratified_v1.json \\
   --split-part test \\
   --pass-k 1,5,10,70 \\
   --max-iterations 90 \\
-  --log-jsonl benchmark/runs/coevo_frozen_test.jsonl \\
-  --aggregate-out benchmark/runs/coevo_frozen_test_summary.json
+  --install-skills-into-task \\
+  --log-jsonl benchmark/runs/coevo_exp1/frozen_test.jsonl \\
+  --aggregate-out benchmark/runs/coevo_exp1/frozen_test_summary.json
 
 # After an interrupt: same command + --resume (skips tasks already in the JSONL)
 python -m benchmark.baselines.coevoskills.run_split_protocol \\
@@ -362,6 +365,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             "Set 0 for full scrolling output. Default: 12."
         ),
     )
+    p.add_argument(
+        "--experiment-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Isolated experiment workspace. Isolates HERMES_HOME under "
+            "DIR/hermes_home (default). For --frozen-eval, copies selected tasks "
+            "under DIR/skillsbench/tasks/ so installs/outputs do not pollute the "
+            "shared SkillsBench tree. If --work-root is left at its default, "
+            "evolution workspaces move to DIR/coevoskills/."
+        ),
+    )
+    p.add_argument(
+        "--isolate-hermes-home",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="With --experiment-dir: isolate HERMES_HOME (default: on).",
+    )
+    p.add_argument(
+        "--reset-task-workspaces",
+        action="store_true",
+        help="With --experiment-dir: refresh task copies and wipe prior agent outputs.",
+    )
     p.add_argument("--evolve", action="store_true", help="Run Alg. 1 on --split-part tasks.")
     p.add_argument(
         "--build-library",
@@ -416,6 +442,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--end-task-index", type=int, default=None)
     args = p.parse_args(argv)
 
+    if args.reset_task_workspaces and not args.experiment_dir:
+        p.error("--reset-task-workspaces requires --experiment-dir")
+
     hermes_root = args.hermes_root.resolve()
     skillsbench_root = args.skillsbench_root.resolve()
     work_root = args.work_root.resolve()
@@ -453,6 +482,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     if (args.evolve or args.frozen_eval) and not run_ids:
         print("No tasks in selected range.", file=sys.stderr)
         return 1
+
+    source_skillsbench_root = skillsbench_root
+    experiment_dir: Optional[Path] = None
+    if args.experiment_dir:
+        scripts = str((hermes_root / "benchmark" / "scripts").resolve())
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        from skillsbench_experiment_workspace import prepare_experiment_workspace
+
+        experiment_dir = args.experiment_dir.expanduser().resolve()
+        # Nest CoEvo workspaces under the experiment when still using the
+        # default --work-root, so evolve artifacts stay with the experiment.
+        default_work = (hermes_root / "benchmark" / "runs" / "coevoskills").resolve()
+        if work_root == default_work:
+            work_root = (experiment_dir / "coevoskills").resolve()
+            if args.library_dir is None:
+                library_dir = work_root / "_frozen_library"
+            print(f"[experiment] work_root → {work_root}", flush=True)
+
+        copy_tasks = bool(args.frozen_eval)
+        print(
+            f"[experiment] preparing workspace → {experiment_dir} "
+            f"(copy_tasks={copy_tasks}, n={len(run_ids) if copy_tasks else 0})",
+            flush=True,
+        )
+        manifest = prepare_experiment_workspace(
+            experiment_dir=experiment_dir,
+            source_skillsbench_root=source_skillsbench_root,
+            task_ids=run_ids if copy_tasks else [],
+            reset_outputs=bool(args.reset_task_workspaces) and copy_tasks,
+            isolate_hermes_home=bool(args.isolate_hermes_home),
+            apply_hermes_home_env=bool(args.isolate_hermes_home),
+        )
+        if copy_tasks:
+            skillsbench_root = Path(manifest["skillsbench_root"])
+            print(f"[experiment] skillsbench_root → {skillsbench_root}", flush=True)
+        if args.isolate_hermes_home:
+            print(f"[experiment] HERMES_HOME → {manifest.get('hermes_home')}", flush=True)
 
     from benchmark.baselines.coevoskills import hermes_backend
     from benchmark.baselines.coevoskills.algorithm import run_coevo_skills
@@ -666,6 +733,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 envelope["split_file"] = str(args.split_file.resolve())
                 envelope["split_part"] = args.split_part
+                if experiment_dir is not None:
+                    envelope["experiment_dir"] = str(experiment_dir)
+                    envelope["skillsbench_root"] = str(skillsbench_root)
                 if log_path:
                     _append_jsonl(log_path, envelope)
                 ev = envelope.get("evaluation") or {}
