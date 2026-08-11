@@ -76,8 +76,10 @@ def test_pass_at_conversation_turn_across_tasks():
     ]
     summary = mod.aggregate_records(records, pass_k_values=[5, 10])
     assert summary["pass_k"]["5"]["macro_task_pass_rate"] == 0.5
+    assert summary["pass_k"]["5"]["macro_success_rate"] == 0.5
     assert summary["pass_k"]["5"]["tasks_with_turn_data"] == 2
     assert summary["pass_k"]["5"]["micro_test_pass_rate"] == 0.75
+    assert summary["pass_k"]["5"]["micro_success_rate"] == 0.75
     assert summary["pass_k"]["10"]["macro_task_pass_rate"] == 1.0
     assert summary["pass_k"]["10"]["tasks_with_turn_data"] == 1
     assert summary["pass_k"]["5"]["tokens_mean_at_turn"] == 350000.0
@@ -91,4 +93,6 @@ def test_final_metrics_from_evaluation():
     ]
     summary = mod.aggregate_records(records, pass_k_values=[1])
     assert summary["final"]["macro_task_pass_rate"] == 0.5
+    assert summary["final"]["macro_success_rate"] == 0.5
     assert summary["final"]["tokens_mean"] == 600.0
+    assert summary["final"]["tokens"]["mean"] == 600.0

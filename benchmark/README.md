@@ -21,10 +21,61 @@ source .venv/bin/activate   # or: source venv/bin/activate
 | Path | Role |
 |------|------|
 | [`scripts/`](scripts/) | Hermes batch drivers and analysis tools |
+| [`baselines/`](baselines/) | Isolated third-party / paper baselines (e.g. CoEvoSkills) |
 | [`skillsbench/`](skillsbench/) | SkillsBench tasks + BenchFlow (nested project) |
 | [`hle/`](hle/) | Humanity's Last Exam dataset / upstream eval notes |
 | [`appworld/`](appworld/) | AppWorld environment (vendored) |
 | [`alfworld/`](alfworld/) | ALFWorld environment (vendored) |
+
+### CoEvoSkills baseline (SkillsBench)
+
+Isolated Alg. 1 reimplementation under [`baselines/coevoskills/`](baselines/coevoskills/).
+
+**Train → freeze → test** (recommended for cross-task transfer):
+
+```bash
+# Evolve on stratified train
+python -m benchmark.baselines.coevoskills.run_split_protocol \
+  --evolve \
+  --split-file benchmark/skillsbench_splits/stratified_v1.json \
+  --split-part train \
+  --model qwen/qwen3.6-plus \
+  --log-jsonl benchmark/runs/coevo_evolve_train.jsonl
+
+# Freeze library, then evaluate on test (no further evolution)
+python -m benchmark.baselines.coevoskills.run_split_protocol \
+  --build-library --library-source-part train \
+  --frozen-eval --split-part test \
+  --pass-k 1,5,10,70 --max-iterations 90 \
+  --log-jsonl benchmark/runs/coevo_frozen_test.jsonl \
+  --aggregate-out benchmark/runs/coevo_frozen_test_summary.json
+```
+
+Full details: [`baselines/coevoskills/README.md`](baselines/coevoskills/README.md).
+
+### Shared metrics (Hermes, CoEvoSkills, future baselines)
+
+All drivers should log JSONL with `evaluation`, optional `pass_at_turn`, and
+`run_conversation_result` (tokens / `api_calls`). Then:
+
+```bash
+python benchmark/scripts/aggregate_skillsbench_runs.py RUN.jsonl \
+  --pass-k 1,5,10,70 --max-user-iterations 90 \
+  -o RUN_summary.json --print-summary
+```
+
+Reports **macro/micro success@k**, **final** rates within max iterations, and
+**cost-to-succeed** mean±std (tokens + user iterations). See
+[`scripts/skillsbench_aggregate_core.py`](scripts/skillsbench_aggregate_core.py).
+
+Hot-pool-specific proxies (plus the same core block as `core_metrics`):
+
+```bash
+python benchmark/scripts/analyze_hot_pool_runs.py RUN.jsonl \
+  --pass-k 1,5,10,70 --max-user-iterations 90 \
+  --print-core-summary -o RUN_hotpool.json
+```
+
 
 ## Scripts overview
 
@@ -33,10 +84,11 @@ source .venv/bin/activate   # or: source venv/bin/activate
 | [`run_skillsbench_with_hermes.py`](scripts/run_skillsbench_with_hermes.py) | Run Hermes on SkillsBench tasks; JSONL logs + host eval |
 | [`evaluate_skillsbench_task.py`](scripts/evaluate_skillsbench_task.py) | Host pytest verifier for one task (used by driver) |
 | [`skillsbench_metrics.py`](scripts/skillsbench_metrics.py) | Build compact `metrics` blocks for JSONL rows |
-| [`aggregate_skillsbench_runs.py`](scripts/aggregate_skillsbench_runs.py) | pass@turn macro/micro rates + tokens from JSONL |
+| [`aggregate_skillsbench_runs.py`](scripts/aggregate_skillsbench_runs.py) | Shared macro/micro success@k + cost-to-succeed mean±std |
+| [`skillsbench_aggregate_core.py`](scripts/skillsbench_aggregate_core.py) | Core metrics library used by aggregators + baselines |
 | [`make_skillsbench_splits.py`](scripts/make_skillsbench_splits.py) | Generate train/val/test split JSON (stratified or category holdout) |
 | [`compare_skillsbench_runs.py`](scripts/compare_skillsbench_runs.py) | Compare two SkillsBench JSONL runs (tokens, cost, API calls) |
-| [`analyze_hot_pool_runs.py`](scripts/analyze_hot_pool_runs.py) | Hot skill pool telemetry + procedure proxies |
+| [`analyze_hot_pool_runs.py`](scripts/analyze_hot_pool_runs.py) | Hot skill pool telemetry + procedure proxies + core metrics |
 | [`read_skillsbench_jsonl.py`](scripts/read_skillsbench_jsonl.py) | Load SkillsBench JSONL into Python |
 | [`run_model_predictions_hermes.py`](scripts/run_model_predictions_hermes.py) | HLE predictions via in-process Hermes |
 | [`run_judge_results_hermes.py`](scripts/run_judge_results_hermes.py) | HLE judge pass on predictions |

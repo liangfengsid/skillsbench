@@ -25,6 +25,11 @@ Examples (from Hermes repo root):
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --start-task-index 10 \\
       --log-jsonl ./runs.jsonl  # skip first 10 tasks (sorted order), run the rest
 
+  # After interrupt: re-run same command with --resume (skips finished tasks in JSONL)
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \\
+      --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \\
+      --log-jsonl benchmark/runs/hermes_train.jsonl --resume --print-summary
+
   # pass@k: verifier scores at conversation turns 1,5,10,... within one run (no reruns):
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --task adaptive-cruise-control \\
       --pass-k 1,5,10,70 \\
@@ -257,6 +262,14 @@ def run_one_task(
         save_trajectories=save_trajectories,
         platform="skillsbench-batch",
     )
+    try:
+        from skillsbench_console_window import get_active_window
+
+        win = get_active_window()
+        if win is not None:
+            agent._print_fn = win.print_fn
+    except Exception:
+        pass
     if skill_nudge_interval is not None:
         agent._skill_nudge_interval = int(skill_nudge_interval)
     if memory_nudge_interval is not None:
@@ -505,9 +518,25 @@ def main() -> int:
         help="Max tool-calling iterations per conversation (Hermes default 90).",
     )
     parser.add_argument(
-        "--no-quiet",
-        action="store_true",
-        help="Disable quiet_mode on AIAgent (more console output from Hermes).",
+        "--quiet",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Suppress Hermes agent tool/stream console output. "
+            "Default is --no-quiet so you can see tool calls and progress. "
+            "Use --quiet for silent overnight batches."
+        ),
+    )
+    parser.add_argument(
+        "--console-window",
+        type=int,
+        default=12,
+        metavar="N",
+        help=(
+            "Fixed N-line viewport for agent activity (overwrites in-place). "
+            "Batch progress stays permanent; errors go to stderr. "
+            "0 = full scrolling output. Default: 12."
+        ),
     )
     parser.add_argument(
         "--skip-context-files",
@@ -611,6 +640,19 @@ def main() -> int:
         type=str,
         default=None,
         help="Append one JSON line per task run (full envelope + run_conversation result).",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Skip tasks that already have a finished (non-error) row in --log-jsonl. "
+            "Re-runs interrupted/failed tasks. Requires --log-jsonl."
+        ),
+    )
+    parser.add_argument(
+        "--resume-success-only",
+        action="store_true",
+        help="With --resume: only skip tasks whose last row has task_success=True.",
     )
     parser.add_argument(
         "--log-json-pretty",
@@ -760,6 +802,11 @@ def main() -> int:
     if args.hot_pool is False and args.hot_pool_persist:
         parser.error("--hot-pool-persist cannot be used with --no-hot-pool.")
 
+    if args.resume_success_only:
+        args.resume = True
+    if args.resume and not args.log_jsonl:
+        parser.error("--resume / --resume-success-only requires --log-jsonl")
+
     pass_k_turns: Optional[List[int]] = None
     if args.pass_k:
         try:
@@ -777,16 +824,59 @@ def main() -> int:
     if print_batch_summary is None:
         print_batch_summary = bool(args.all)
 
+    from skillsbench_batch_progress import (
+        BatchProgress,
+        filter_pending_tasks,
+        load_completed_task_ids,
+    )
+    from skillsbench_console_window import ConsoleWindow, set_active_window
+
+    original_run_ids = list(run_ids)
+    skipped: List[str] = []
+    if args.resume and log_path:
+        done = load_completed_task_ids(
+            log_path,
+            success_only=args.resume_success_only,
+        )
+        run_ids, skipped = filter_pending_tasks(run_ids, done)
+
+    console_win: Optional[ConsoleWindow] = None
+    if getattr(args, "console_window", 0) and args.console_window > 0:
+        console_win = ConsoleWindow(args.console_window)
+        set_active_window(console_win)
+        print(
+            f"[console] activity window={args.console_window} lines "
+            f"(batch progress permanent; agent output overwrites; errors→stderr)",
+            flush=True,
+        )
+
     any_failed = False
     batch_envelopes: List[Dict[str, Any]] = []
+    prog = BatchProgress(
+        phase="hermes",
+        total=len(original_run_ids),
+        already_done=len(skipped),
+    )
+    if len(original_run_ids) > 1 or args.resume:
+        prog.banner(
+            resume=bool(args.resume),
+            skipped=len(skipped),
+            pending=len(run_ids),
+        )
+        if skipped:
+            preview = ", ".join(skipped[:5]) + (" ..." if len(skipped) > 5 else "")
+            print(f"[hermes] skipping completed: {preview}", flush=True)
+
+    if not run_ids:
+        print("[hermes] nothing pending (all tasks already completed).", flush=True)
+        prog.finish()
+        return 0
 
     for batch_index, tid in enumerate(run_ids):
         ts_start = datetime.now(timezone.utc).isoformat()
-        if args.print_summary:
-            print(f"\n=== SkillsBench task: {tid} (start {ts_start}) ===", flush=True)
+        t0 = prog.task_start(batch_index + 1, tid)
         try:
             if args.evaluate_only:
-                t0 = time.perf_counter()
                 evaluation = evaluate_skillsbench_task(
                     task_id=tid,
                     skillsbench_root=skillsbench_root,
@@ -814,7 +904,7 @@ def main() -> int:
                     skill_nudge_interval=args.skill_nudge_interval,
                     memory_nudge_interval=args.memory_nudge_interval,
                     max_iterations=args.max_iterations,
-                    quiet_mode=not args.no_quiet,
+                    quiet_mode=args.quiet,
                     skip_context_files=args.skip_context_files,
                     skip_memory=args.skip_memory,
                     save_trajectories=args.save_trajectories,
@@ -837,10 +927,10 @@ def main() -> int:
             if split_file_path is not None:
                 envelope["split_file"] = str(split_file_path)
                 envelope["split_part"] = args.split_part
-            if len(run_ids) > 1:
+            if len(original_run_ids) > 1:
                 envelope["batch"] = {
-                    "task_index": batch_index,
-                    "task_count": len(run_ids),
+                    "task_index": batch_index + len(skipped),
+                    "task_count": len(original_run_ids),
                 }
 
             envelope = finalize_envelope(envelope)
@@ -856,8 +946,15 @@ def main() -> int:
                     encoding="utf-8",
                 )
 
+            ev = envelope.get("evaluation") or {}
+            ok = bool(ev.get("task_success")) if "task_success" in ev else True
+            detail = ""
             if args.print_summary:
-                print(format_run_summary(envelope), flush=True)
+                detail = format_run_summary(envelope)
+                print(detail, flush=True)
+            elif "task_success" in ev:
+                detail = f"success={ev.get('task_success')} reward={ev.get('reward')}"
+            prog.task_end(batch_index + 1, tid, t0=t0, ok=ok, detail=detail[:240])
         except Exception as e:
             any_failed = True
             err = {
@@ -870,10 +967,42 @@ def main() -> int:
             }
             if log_path:
                 append_jsonl(log_path, err)
+            prog.task_end(batch_index + 1, tid, t0=t0, ok=False, detail=repr(e)[:200])
             print(f"ERROR task={tid}: {e}", file=sys.stderr)
             traceback.print_exc()
             if args.stop_on_error:
+                batch_stats = prog.finish()
+                if log_path:
+                    append_jsonl(
+                        log_path,
+                        json_safe(
+                            {
+                                "schema": "skillsbench.batch_timing.v1",
+                                "method": "hermes",
+                                "phase": "hermes",
+                                "ts_end_iso": datetime.now(timezone.utc).isoformat(),
+                                "timing": batch_stats,
+                            }
+                        ),
+                    )
                 return 1
+
+    batch_stats = prog.finish()
+    if log_path and (len(original_run_ids) > 1 or args.resume):
+        append_jsonl(
+            log_path,
+            json_safe(
+                {
+                    "schema": "skillsbench.batch_timing.v1",
+                    "method": "hermes",
+                    "phase": "hermes",
+                    "ts_end_iso": datetime.now(timezone.utc).isoformat(),
+                    "split_file": str(split_file_path) if split_file_path else None,
+                    "split_part": args.split_part if split_file_path else None,
+                    "timing": batch_stats,
+                }
+            ),
+        )
 
     if print_batch_summary and len(batch_envelopes) > 1:
         pass_k_for_agg = pass_k_turns or [1]
@@ -883,10 +1012,15 @@ def main() -> int:
             split_part=args.split_part if split_file_path else None,
         )
         print(
-            f"\n=== SkillsBench batch summary ({len(batch_envelopes)} tasks) ===",
+            f"\n=== SkillsBench batch summary ({len(batch_envelopes)} tasks this run; "
+            f"{len(skipped)} skipped via --resume) ===",
             flush=True,
         )
         print(format_summary_text(summary), flush=True)
+
+    if console_win is not None:
+        console_win.close()
+        set_active_window(None)
 
     if any_failed:
         return 1

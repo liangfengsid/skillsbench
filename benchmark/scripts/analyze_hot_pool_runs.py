@@ -8,8 +8,9 @@ alignment hits, guardrail rubric, tool errors, recovery cost.
 
 Usage::
 
-  # Single run summary
+  # Single run summary (hot-pool proxies + shared macro/micro/cost metrics)
   python3 benchmark/scripts/analyze_hot_pool_runs.py runs_treatment.jsonl \\
+      --pass-k 1,5,10,70 --max-user-iterations 90 \\
       --output benchmark/hot_pool_summary.json
 
   # Control vs treatment comparison
@@ -17,6 +18,9 @@ Usage::
       runs_control.jsonl runs_treatment.jsonl \\
       --label-a control --label-b treatment \\
       --output benchmark/hot_pool_compare.json
+
+Shared success/cost metrics also live in ``aggregate_skillsbench_runs.py`` (same
+``skillsbench_aggregate_core`` schema used by CoEvoSkills and future baselines).
 """
 
 from __future__ import annotations
@@ -36,7 +40,12 @@ _REPO_ROOT = _SCRIPT_DIR.parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from evaluate_skillsbench_task import parse_pass_k_values  # noqa: E402
 from read_skillsbench_jsonl import iter_skillsbench_run_records  # noqa: E402
+from skillsbench_aggregate_core import (  # noqa: E402
+    aggregate_skillsbench_metrics,
+    format_metrics_summary_text,
+)
 
 from agent.hot_skills import (  # noqa: E402
     check_guardrail_violations,
@@ -129,9 +138,18 @@ def enrich_task(record: dict) -> Optional[dict]:
     pool_start = _to_int(carry.get("pool_skills_at_start")) or 0
     inject_nonempty = _to_int(inject.get("injections_nonempty")) or 0
 
+    ev = record.get("evaluation") if isinstance(record.get("evaluation"), dict) else {}
+    metrics_final = ((record.get("metrics") or {}).get("final") or {}) if isinstance(
+        record.get("metrics"), dict
+    ) else {}
+    task_success = ev.get("task_success")
+    if task_success is None:
+        task_success = metrics_final.get("task_success")
+
     row = {
         "task_id": tid,
         "completed": res.get("completed"),
+        "task_success": task_success,
         "api_calls": api_calls,
         "total_tokens": _to_int(res.get("total_tokens")),
         "estimated_cost_usd": _to_float(res.get("estimated_cost_usd")),
@@ -189,16 +207,40 @@ def summarize_tasks(tasks: List[dict], label: str = "run") -> dict:
                 out.append(v)
         return out
 
+    succeeded = [t for t in ok if t.get("task_success") is True]
+    success_tokens = col(("total_tokens",), succeeded)
+    success_iters = col(("api_calls",), succeeded)
+    success_costs = col(("estimated_cost_usd",), succeeded)
+    success_durs = col(("duration_sec",), succeeded)
+    all_durs = col(("duration_sec",), ok)
+
+    def _mean_std(vals: List[float]) -> Dict[str, Optional[float]]:
+        if not vals:
+            return {"n": 0, "mean": None, "std": None}
+        std = statistics.stdev(vals) if len(vals) >= 2 else 0.0
+        return {"n": len(vals), "mean": statistics.mean(vals), "std": std}
+
     summary = {
         "label": label,
         "n_tasks": len(tasks),
         "n_analyzed": len(ok),
         "n_completed": len(completed),
         "completion_rate": (len(completed) / len(ok)) if ok else None,
+        "n_task_success": len(succeeded),
+        "macro_success_rate": (len(succeeded) / len(ok)) if ok else None,
         "n_hot_active": len(hot_active),
         "mean_api_calls": _mean(col(("api_calls",), ok)),
         "mean_total_tokens": _mean(col(("total_tokens",), ok)),
         "mean_cost_usd": _mean(col(("estimated_cost_usd",), ok)),
+        "duration_sec": _mean_std(all_durs),
+        "duration_sec_sum": sum(all_durs) if all_durs else None,
+        "cost_to_succeed": {
+            "tokens": _mean_std(success_tokens),
+            "user_iterations": _mean_std(success_iters),
+            "estimated_cost_usd": _mean_std(success_costs),
+            "duration_sec": _mean_std(success_durs),
+            "note": "Among tasks with task_success at final evaluation (hot-pool view).",
+        },
         "mean_injections_nonempty": _mean(col(("inject", "injections_nonempty"), ok)),
         "mean_pool_skills_at_start": _mean(
             col(("carryover", "pool_skills_at_start"), ok)
@@ -281,13 +323,42 @@ def main() -> int:
     parser.add_argument("--label-a", default="a", help="Label for first log (compare mode).")
     parser.add_argument("--label-b", default="b", help="Label for second log (compare mode).")
     parser.add_argument(
+        "--pass-k",
+        type=str,
+        default="1,5,10,70",
+        help="Turns for shared macro/micro success@k (skillsbench_aggregate_core).",
+    )
+    parser.add_argument(
+        "--max-user-iterations",
+        type=int,
+        default=None,
+        help="Annotate final / max-iteration metrics in core summary.",
+    )
+    parser.add_argument(
+        "--split-part",
+        type=str,
+        default=None,
+        choices=("train", "test", "all"),
+        help="Filter rows by split_part when aggregating core metrics.",
+    )
+    parser.add_argument(
         "--output",
         "-o",
         type=str,
         default=None,
         help="Write summary JSON to this path.",
     )
+    parser.add_argument(
+        "--print-core-summary",
+        action="store_true",
+        help="Print one-line core metrics summary to stdout.",
+    )
     args = parser.parse_args()
+
+    try:
+        pass_k_values = parse_pass_k_values(args.pass_k)
+    except ValueError as e:
+        parser.error(str(e))
 
     paths = [Path(p).expanduser() for p in args.jsonl]
     for p in paths:
@@ -295,21 +366,38 @@ def main() -> int:
             print(f"Not a file: {p}", file=sys.stderr)
             return 1
 
+    def _core(path: Path) -> dict:
+        records = list(iter_skillsbench_run_records(path))
+        return aggregate_skillsbench_metrics(
+            records,
+            pass_k_values=pass_k_values,
+            split_part=args.split_part,
+            max_user_iterations=args.max_user_iterations,
+        )
+
     if len(paths) == 1:
         tasks = load_tasks(paths[0])
+        core = _core(paths[0])
         report = {
             "source": str(paths[0]),
             "tasks": tasks,
             "summary": summarize_tasks(tasks, label=paths[0].name),
+            "core_metrics": core,
         }
+        if args.print_core_summary:
+            print(format_metrics_summary_text(core))
     elif len(paths) == 2:
         tasks_a = load_tasks(paths[0])
         tasks_b = load_tasks(paths[1])
+        core_a = _core(paths[0])
+        core_b = _core(paths[1])
         report = {
             "path_a": str(paths[0]),
             "path_b": str(paths[1]),
             "summary_a": summarize_tasks(tasks_a, label=args.label_a),
             "summary_b": summarize_tasks(tasks_b, label=args.label_b),
+            "core_metrics_a": core_a,
+            "core_metrics_b": core_b,
             "paired": compare_summaries(
                 summarize_tasks(tasks_a, args.label_a),
                 summarize_tasks(tasks_b, args.label_b),
@@ -319,6 +407,9 @@ def main() -> int:
             "tasks_a": tasks_a,
             "tasks_b": tasks_b,
         }
+        if args.print_core_summary:
+            print(f"[{args.label_a}] {format_metrics_summary_text(core_a)}")
+            print(f"[{args.label_b}] {format_metrics_summary_text(core_b)}")
     else:
         parser.error("Provide one or two JSONL files.")
         return 1

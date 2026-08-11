@@ -72,6 +72,7 @@ website/static/api/skills-index.json
 models-dev-upstream/
 
 # Local / generated (SkillsBench runs, one-off scripts, experiments)
+benchmark/runs/
 jobs/
 edit_pdf.py
 inspect_pdf.py
