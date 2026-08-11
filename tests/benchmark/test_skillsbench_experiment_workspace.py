@@ -39,6 +39,27 @@ def _make_source_task(root: Path, task_id: str) -> Path:
     return task
 
 
+def test_prepare_default_keeps_real_hermes_home(tmp_path, monkeypatch):
+    """--experiment-dir isolates task trees only; Hermes defaults stay in ~/.hermes."""
+    mod = _load_module()
+    source = tmp_path / "skillsbench"
+    _make_source_task(source, "task-a")
+    exp = tmp_path / "exp_default"
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    manifest = mod.prepare_experiment_workspace(
+        experiment_dir=exp,
+        source_skillsbench_root=source,
+        task_ids=["task-a"],
+    )
+
+    assert (exp / "skillsbench" / "tasks" / "task-a" / "instruction.md").is_file()
+    assert not (exp / "hermes_home").exists()
+    assert "HERMES_HOME" not in os.environ
+    assert manifest["isolate_hermes_home"] is False
+    assert manifest["hermes_home"] is None
+
+
 def test_prepare_copies_tasks_and_sets_hermes_home(tmp_path, monkeypatch):
     mod = _load_module()
     source = tmp_path / "skillsbench"

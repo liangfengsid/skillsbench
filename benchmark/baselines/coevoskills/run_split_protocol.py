@@ -13,7 +13,8 @@ as Hermes (``evaluation``, ``pass_at_turn``, ``run_conversation_result``) so
 
 Examples
 --------
-# Evolve on stratified train (65 tasks), isolated experiment workspace
+# Evolve on stratified train (65 tasks), isolated *task* workspace
+# (Hermes still uses ~/.hermes default skills unless --isolate-hermes-home)
 python -m benchmark.baselines.coevoskills.run_split_protocol \\
   --evolve \\
   --experiment-dir benchmark/runs/coevo_exp1 \\
@@ -370,18 +371,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=Path,
         default=None,
         help=(
-            "Isolated experiment workspace. Isolates HERMES_HOME under "
-            "DIR/hermes_home (default). For --frozen-eval, copies selected tasks "
-            "under DIR/skillsbench/tasks/ so installs/outputs do not pollute the "
-            "shared SkillsBench tree. If --work-root is left at its default, "
-            "evolution workspaces move to DIR/coevoskills/."
+            "Isolated experiment workspace for SkillsBench *task* files. For "
+            "--frozen-eval, copies selected tasks under DIR/skillsbench/tasks/ "
+            "so installs/outputs do not pollute the shared SkillsBench tree. "
+            "If --work-root is left at its default, evolution workspaces move "
+            "to DIR/coevoskills/. Does NOT rewrite HERMES_HOME by default — "
+            "Hermes keeps using ~/.hermes (default skills). Opt into Hermes "
+            "isolation with --isolate-hermes-home."
         ),
     )
     p.add_argument(
         "--isolate-hermes-home",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="With --experiment-dir: isolate HERMES_HOME (default: on).",
+        default=False,
+        help=(
+            "With --experiment-dir: also set HERMES_HOME=DIR/hermes_home "
+            "(default: off — keep ~/.hermes so default Hermes skills remain "
+            "available)."
+        ),
     )
     p.add_argument(
         "--reset-task-workspaces",
@@ -520,6 +527,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[experiment] skillsbench_root → {skillsbench_root}", flush=True)
         if args.isolate_hermes_home:
             print(f"[experiment] HERMES_HOME → {manifest.get('hermes_home')}", flush=True)
+        else:
+            print(
+                "[experiment] HERMES_HOME unchanged (default Hermes skills from ~/.hermes); "
+                "pass --isolate-hermes-home to sandbox skills/memory",
+                flush=True,
+            )
 
     from benchmark.baselines.coevoskills import hermes_backend
     from benchmark.baselines.coevoskills.algorithm import run_coevo_skills

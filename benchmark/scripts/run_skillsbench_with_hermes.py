@@ -804,20 +804,23 @@ def main() -> int:
         default=None,
         metavar="DIR",
         help=(
-            "Isolated experiment workspace. Copies selected tasks under "
-            "DIR/skillsbench/tasks/, points --skillsbench-root / --prompt-tasks-base "
-            "there, defaults --hot-pool-persist to DIR/hot_pool.json, and "
-            "(unless --no-isolate-hermes-home) sets HERMES_HOME=DIR/hermes_home "
-            "so skill_manage / memory do not touch ~/.hermes."
+            "Isolated experiment workspace for SkillsBench *task* files. Copies "
+            "selected tasks under DIR/skillsbench/tasks/, points --skillsbench-root "
+            "/ --prompt-tasks-base there, and defaults --hot-pool-persist to "
+            "DIR/hot_pool.json. Does NOT rewrite HERMES_HOME by default — Hermes "
+            "keeps using ~/.hermes (default skills). Opt into Hermes isolation with "
+            "--isolate-hermes-home."
         ),
     )
     parser.add_argument(
         "--isolate-hermes-home",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
-            "With --experiment-dir: isolate HERMES_HOME under the experiment "
-            "(default: on). Use --no-isolate-hermes-home to keep ~/.hermes."
+            "With --experiment-dir: also set HERMES_HOME=DIR/hermes_home "
+            "(default: off — keep ~/.hermes so default Hermes skills remain "
+            "available). Use only when you want skills/memory fully sandboxed "
+            "from the live Hermes profile."
         ),
     )
     parser.add_argument(
@@ -977,6 +980,12 @@ def main() -> int:
         if args.isolate_hermes_home:
             print(
                 f"[experiment] HERMES_HOME → {manifest.get('hermes_home')}",
+                flush=True,
+            )
+        else:
+            print(
+                "[experiment] HERMES_HOME unchanged (default Hermes skills from ~/.hermes); "
+                "pass --isolate-hermes-home to sandbox skills/memory",
                 flush=True,
             )
         print(

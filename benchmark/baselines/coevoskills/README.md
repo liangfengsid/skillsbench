@@ -28,8 +28,9 @@ Per-task workspaces (default): `benchmark/runs/coevoskills/<task_id>/`
 Frozen library (default): `benchmark/runs/coevoskills/_frozen_library/`
 
 With `--experiment-dir DIR`, workspaces nest under `DIR/coevoskills/` (when
-`--work-root` is left at default), frozen-eval task copies under
-`DIR/skillsbench/tasks/`, and `HERMES_HOME` under `DIR/hermes_home`.
+`--work-root` is left at default) and frozen-eval task copies under
+`DIR/skillsbench/tasks/`. Hermes keeps using `~/.hermes` (default skills)
+unless you pass `--isolate-hermes-home` (then `DIR/hermes_home`).
 
 ## Recommended protocol (cross-task)
 
@@ -102,8 +103,8 @@ python -m benchmark.baselines.coevoskills.run_split_protocol \
 
 `--experiment-dir` copies selected tasks under `DIR/skillsbench/tasks/` so
 `--install-skills-into-task` and agent outputs do not mutate the shared
-`benchmark/skillsbench/tasks/` tree. It also isolates `HERMES_HOME` under
-`DIR/hermes_home` by default (`--no-isolate-hermes-home` to keep `~/.hermes`).
+`benchmark/skillsbench/tasks/` tree. Hermes continues to use `~/.hermes`
+(default skills) unless you pass `--isolate-hermes-home`.
 
 Same-task quality (evolve and score the same task’s skills, no pooled library):
 

@@ -10,7 +10,7 @@ Layout (default)::
       skillsbench/
         tasks/<task_id>/…     # writable copies used by agent + host eval
       hot_pool.json           # recommended --hot-pool-persist target
-      hermes_home/            # optional isolated HERMES_HOME (skills, memory, …)
+      hermes_home/            # only when --isolate-hermes-home (opt-in)
 """
 
 from __future__ import annotations
@@ -101,14 +101,18 @@ def prepare_experiment_workspace(
     source_skillsbench_root: Path,
     task_ids: Sequence[str],
     reset_outputs: bool = False,
-    isolate_hermes_home: bool = True,
-    apply_hermes_home_env: bool = True,
+    isolate_hermes_home: bool = False,
+    apply_hermes_home_env: bool = False,
 ) -> Dict[str, Any]:
     """
     Ensure ``experiment_dir`` has writable copies of the given tasks.
 
     Does **not** symlink into the shared SkillsBench tree (writes would leak).
     ``task_ids`` may be empty when only isolating ``HERMES_HOME``.
+
+    By default Hermes keeps using the real ``~/.hermes`` (default skills,
+    memory, config). Pass ``isolate_hermes_home=True`` only when you also want
+    an empty ``DIR/hermes_home`` for skills/memory isolation.
     """
     experiment_dir = experiment_dir.expanduser().resolve()
     source_skillsbench_root = source_skillsbench_root.expanduser().resolve()
