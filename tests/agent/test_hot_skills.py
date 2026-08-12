@@ -68,6 +68,120 @@ def test_extract_pitfalls_section():
     assert not any("Run the tool" in p for p in points)
 
 
+def test_extract_common_pitfalls_numbered():
+    """Bundled/authoring convention: ## Common Pitfalls with 1. items."""
+    content = """# Demo
+## Overview
+Procedural body.
+
+## Common Pitfalls
+1. **Using bare pytest** — ALWAYS use scripts/run_tests.sh
+2. Hardcoding ~/.hermes — use get_hermes_home()
+
+## Usage
+- Run the tool
+"""
+    points = extract_hot_key_points(content)
+    assert any("pytest" in p for p in points)
+    assert any("get_hermes_home" in p for p in points)
+    assert not any("Run the tool" in p for p in points)
+
+
+def test_extract_key_points_section():
+    content = "## Key Points\n- ALWAYS validate paths\n\n## Steps\n- Do the work"
+    points = extract_hot_key_points(content)
+    assert any("validate paths" in p for p in points)
+    assert not any("Do the work" in p for p in points)
+
+
+def test_extract_skips_false_positive_headings():
+    """'Apple Reminders' / bare 'Notes' must not be treated as hot sections."""
+    content = """## Apple Reminders
+- Create a reminder for milk
+
+## Notes
+- Some procedural note about the API
+
+## Steps
+- Continue the workflow
+"""
+    points = extract_hot_key_points(
+        content,
+        config={
+            "use_hermes_hot_markers": False,
+            "extract_sections": True,
+            "fallback_extract": False,
+            "max_points_per_skill": 8,
+            "max_chars_per_point": 240,
+        },
+    )
+    assert points == []
+
+
+def test_extract_skillsbench_best_practices_and_limitations():
+    """SkillsBench task skills use Best Practices / Limitations heavily."""
+    content = """# Video frames
+
+## Overview
+How to extract frames.
+
+## Best Practices
+- Prefer seeking by timestamp over frame index for VFR videos
+- ALWAYS write frames under /tmp/out/
+
+## Limitations
+- OpenCV may not support all codecs
+- Encrypted videos cannot be processed
+
+## Steps
+- Run the extractor
+"""
+    points = extract_hot_key_points(
+        content,
+        config={
+            "use_hermes_hot_markers": False,
+            "extract_sections": True,
+            "fallback_extract": False,
+            "max_points_per_skill": 8,
+            "max_chars_per_point": 240,
+        },
+    )
+    assert any("VFR" in p or "timestamp" in p for p in points)
+    assert any("codec" in p.lower() or "Encrypted" in p for p in points)
+    assert not any("Run the extractor" in p for p in points)
+
+
+def test_extract_skillsbench_critical_formula_heading():
+    content = """## CRITICAL: Use Formulas, Not Hardcoded Values
+**Always use Excel formulas instead of calculating values in Python.**
+
+## Usage
+- Open the workbook
+"""
+    points = extract_hot_key_points(
+        content,
+        config={
+            "use_hermes_hot_markers": False,
+            "extract_sections": True,
+            "fallback_extract": False,
+            "max_points_per_skill": 8,
+            "max_chars_per_point": 240,
+        },
+    )
+    assert any("formula" in p.lower() for p in points)
+    assert not any("Open the workbook" in p for p in points)
+
+
+def test_skill_has_hot_section():
+    from agent.hot_skills import skill_has_hot_section
+
+    assert skill_has_hot_section("## Common Pitfalls\n- x")
+    assert skill_has_hot_section("## Pitfalls & Gotchas\n- x")
+    assert skill_has_hot_section("## Best Practices\n- x")
+    assert skill_has_hot_section("## Limitations\n- x")
+    assert not skill_has_hot_section("## Apple Reminders\n- x")
+
+
 def test_record_skips_when_no_key_points(pool_cfg):
     pool = HotSkillPool(pool_cfg)
     pool.record(name="empty", content="Just prose with no guardrails at all.", turn=1)

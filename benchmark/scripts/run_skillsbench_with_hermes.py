@@ -122,6 +122,10 @@ SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX = (
     "binary-stl-mass-calc, skillsbench-path-mapping). Do NOT name skills after "
     "a single task id unless the pitfall is truly unique.\n"
     "Survey skills_list first; patch an existing class skill when possible.\n"
+    "When creating/patching SKILL.md, include a '## Common Pitfalls' or "
+    "'## Best Practices' section with short NEVER/ALWAYS bullets (SkillsBench "
+    "task skills under environment/skills/ use these headings; the hot skill "
+    "pool extracts them for later turns).\n"
     "No user confirmation is required in batch mode — use skill_manage when "
     "criteria match.\n"
     "If verification thrashing or path confusion occurred, saving a workflow "
@@ -134,7 +138,9 @@ SKILLSBENCH_BATCH_COMBINED_REVIEW_APPENDIX = (
     "workflow skills when verification thrashing, host/container path "
     "confusion, or repeated test/solution peeking consumed 3+ tool rounds. "
     "Use skill_manage(create|patch) without user confirmation when criteria "
-    "match. Prefer skillsbench-host-verification-style names over task ids."
+    "match. Prefer skillsbench-host-verification-style names over task ids. "
+    "Include '## Common Pitfalls' or '## Best Practices' with short bullets "
+    "so the hot skill pool can extract them."
 )
 
 

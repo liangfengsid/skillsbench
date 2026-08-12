@@ -80,7 +80,14 @@ One or two paragraphs: what and why.
 - Hermes-specific recipes (tests via scripts/run_tests.sh, ui-tui paths, etc.)
 
 ## Common Pitfalls
-Numbered list of mistakes and their fixes.
+Numbered list of mistakes and their fixes. **Required for Hermes hot skills:**
+short bullets (or ``1. …`` items) here are extracted into the ephemeral
+hot-skill pool after ``skill_view`` / ``skill_manage``, so later turns see the
+guardrails without reloading the full skill. Prefer concrete NEVER/ALWAYS
+rules over long prose.
+
+SkillsBench task skills often use ``## Best Practices`` / ``## Limitations`` /
+``## Error Handling`` instead — those headings are also extracted.
 
 ## Verification Checklist
 - [ ] Checkbox list of post-action verifications
@@ -89,7 +96,7 @@ Numbered list of mistakes and their fixes.
 Named scenarios → concrete command sequences.
 ```
 
-Not every section is mandatory, but `Overview` + `When to Use` + actionable body + pitfalls are the minimum for the skill to feel like a peer.
+Not every section is mandatory, but `Overview` + `When to Use` + actionable body + **Common Pitfalls** (or SkillsBench-style **Best Practices**) are the minimum for the skill to feel like a peer (and for hot-pool extraction to work).
 
 ## Directory Placement
 

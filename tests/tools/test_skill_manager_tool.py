@@ -196,6 +196,20 @@ class TestCreateSkill:
         assert result["success"] is True
         assert (tmp_path / "my-skill" / "SKILL.md").exists()
 
+    def test_create_without_pitfalls_adds_hot_section_hint(self, tmp_path):
+        with _skill_dir(tmp_path):
+            result = _create_skill("my-skill", VALID_SKILL_CONTENT)
+        assert result["success"] is True
+        assert "hot_section_hint" in result
+        assert "Common Pitfalls" in result["hot_section_hint"]
+
+    def test_create_with_common_pitfalls_skips_hot_hint(self, tmp_path):
+        content = VALID_SKILL_CONTENT + "\n## Common Pitfalls\n- NEVER skip validation\n"
+        with _skill_dir(tmp_path):
+            result = _create_skill("my-skill", content)
+        assert result["success"] is True
+        assert "hot_section_hint" not in result
+
     def test_create_with_category(self, tmp_path):
         with _skill_dir(tmp_path):
             result = _create_skill("my-skill", VALID_SKILL_CONTENT, category="devops")

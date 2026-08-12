@@ -1,8 +1,14 @@
 """Hot skill pool — LRU cache of decisive skill key points for prompt injection.
 
-Extracts guardrails from SKILL.md (``<!-- hermes-hot -->`` markers, pitfall
-sections, imperative bullets) and injects them ephemerally into the current
-turn's user message. Full procedures stay behind ``skill_view``.
+Extracts guardrails from SKILL.md in this order:
+
+1. ``## Common Pitfalls`` / ``## Pitfalls`` / ``## Key Points``-style sections
+   (what bundled and agent-authored skills actually use)
+2. Optional ``<!-- hermes-hot -->`` markers (rare hand override)
+3. Heuristic NEVER/ALWAYS-style bullets elsewhere
+
+Injects ephemerally into the current turn's user message. Full procedures stay
+behind ``skill_view``.
 """
 
 from __future__ import annotations
@@ -41,21 +47,50 @@ _HERMES_HOT_CLOSE = re.compile(r"<!--\s*/hermes-hot\s*-->", re.IGNORECASE)
 _HEADING_RE = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
 _BULLET_RE = re.compile(r"^(\s*(?:[-*•]|\d+\.)\s+)(.+)$", re.MULTILINE)
 
-_SECTION_KEYWORDS = (
-    "pitfall",
-    "caution",
-    "warning",
-    "critical",
-    "important",
-    "remember",
-    "always",
-    "never",
-    "must",
-    "avoid",
-    "guardrail",
-    "key point",
-    "do not",
-    "don't",
+# Heading titles that match real Hermes + SkillsBench skill conventions.
+# Prefer phrase matches over bare tokens like "remember"/"must"/"key" which
+# false-positive on procedural headings (Apple Reminders, Key Flags, …).
+# SkillsBench task skills (``tasks/*/environment/skills/**/SKILL.md``) heavily
+# use Best Practices / Limitations / Error Handling / Important Requirements —
+# those must match here or the hot pool stays empty on benchmark runs.
+_HOT_SECTION_TITLE_RES = (
+    # Hermes authoring + bundled skills
+    re.compile(r"\bpitfalls?\b", re.IGNORECASE),
+    re.compile(r"\bgotchas?\b", re.IGNORECASE),
+    re.compile(r"\bwarnings?\b", re.IGNORECASE),
+    re.compile(r"\bcautions?\b", re.IGNORECASE),
+    re.compile(r"\bguardrails?\b", re.IGNORECASE),
+    re.compile(r"\bkey\s+points?\b", re.IGNORECASE),
+    re.compile(r"\bkey\s+rules?\b", re.IGNORECASE),
+    re.compile(r"\bkey\s+constraints?\b", re.IGNORECASE),
+    re.compile(r"\bcritical\s+rules?\b", re.IGNORECASE),
+    re.compile(r"\bcritical\s+(?:implementation\s+)?notes?\b", re.IGNORECASE),
+    re.compile(r"\bcritical\s+tips?\b", re.IGNORECASE),
+    re.compile(r"\bcritical\s+failure\b", re.IGNORECASE),
+    re.compile(r"\bimportant\s+notes?\b", re.IGNORECASE),
+    re.compile(r"\bfailure\s+modes?\b", re.IGNORECASE),
+    re.compile(r"\bred\s+flags?\b", re.IGNORECASE),
+    re.compile(r"\bnever\s+do\b", re.IGNORECASE),
+    re.compile(r"\bverification\s+checklist\b", re.IGNORECASE),
+    re.compile(r"^critical$", re.IGNORECASE),
+    re.compile(r"^warnings?$", re.IGNORECASE),
+    # SkillsBench task-skill conventions (very common in environment/skills/)
+    re.compile(r"\bbest\s+practices?\b", re.IGNORECASE),
+    re.compile(r"\blimitations?\b", re.IGNORECASE),
+    re.compile(r"\bcaveats?\b", re.IGNORECASE),
+    re.compile(r"\bcommon\s+errors?\b", re.IGNORECASE),
+    re.compile(r"\berror\s+handling\b", re.IGNORECASE),
+    re.compile(r"\bimportant\s+(?:requirements?|guidelines?)\b", re.IGNORECASE),
+    re.compile(r"\bsafety\s+requirements?\b", re.IGNORECASE),
+    re.compile(r"\bmust\s+follow\b", re.IGNORECASE),
+    re.compile(r"\bdo\s+not\b", re.IGNORECASE),
+    re.compile(r"\bdon'?t\b", re.IGNORECASE),
+    # xlsx / formula skills: "CRITICAL: Use Formulas…", "Zero Formula Errors", …
+    re.compile(r"^(?:important|critical)\b", re.IGNORECASE),
+    re.compile(r"\bzero\s+formula\s+errors?\b", re.IGNORECASE),
+    re.compile(r"\bformula\s+error(?:\s+prevention)?\b", re.IGNORECASE),
+    re.compile(r"\brequired\s+format\s+rules?\b", re.IGNORECASE),
+    re.compile(r"\bformula\s+construction\s+rules?\b", re.IGNORECASE),
 )
 
 _GUARDRAIL_PREFIX_RE = re.compile(
@@ -159,21 +194,36 @@ def resolve_hot_pool_persist_path(config: Optional[dict] = None) -> Path:
 
 
 def extract_hot_key_points(content: str, config: Optional[dict] = None) -> List[str]:
-    """Extract decisive key points from skill body text."""
+    """Extract decisive key points from skill body text.
+
+    Prefers guardrail-style sections used by Hermes-authored skills
+    (``## Common Pitfalls`` / ``## Key Points``) and SkillsBench task skills
+    (``## Best Practices`` / ``## Limitations`` / ``## Error Handling`` / …),
+    then optional ``<!-- hermes-hot -->`` markers, then heuristic bullets.
+    """
     cfg = config or load_hot_skills_config()
     text = (content or "").strip()
     if not text:
         return []
 
     points: List[str] = []
-    if cfg.get("use_hermes_hot_markers", True):
-        points.extend(_extract_hermes_hot_markers(text))
+    # Sections first — matches what ships and what agents are told to write.
     if cfg.get("extract_sections", True):
         points.extend(_extract_section_points(text))
+    if cfg.get("use_hermes_hot_markers", True):
+        points.extend(_extract_hermes_hot_markers(text))
     if cfg.get("fallback_extract", True):
         points.extend(_extract_heuristic_points(text))
 
     return _normalize_key_points(points, cfg)
+
+
+def skill_has_hot_section(content: str) -> bool:
+    """True if SKILL.md has a Pitfalls / Best Practices / Key Points-style heading."""
+    for match in _HEADING_RE.finditer(content or ""):
+        if _is_hot_section_title(match.group(2)):
+            return True
+    return False
 
 
 @dataclass
@@ -1101,6 +1151,20 @@ def _extract_hermes_hot_markers(content: str) -> List[str]:
     return points
 
 
+def _strip_heading_decorations(title: str) -> str:
+    """Drop leading emoji / symbols so '🔴 Critical' → 'Critical'."""
+    cleaned = re.sub(r"^[^\w]+", "", (title or "").strip(), flags=re.UNICODE)
+    return cleaned.strip()
+
+
+def _is_hot_section_title(title: str) -> bool:
+    """Whether a markdown heading is a guardrail / pitfalls / key-points section."""
+    normalized = _strip_heading_decorations(title)
+    if not normalized:
+        return False
+    return any(pat.search(normalized) for pat in _HOT_SECTION_TITLE_RES)
+
+
 def _extract_section_points(content: str) -> List[str]:
     headings = list(_HEADING_RE.finditer(content))
     if not headings:
@@ -1109,8 +1173,7 @@ def _extract_section_points(content: str) -> List[str]:
     points: List[str] = []
     for idx, match in enumerate(headings):
         title = match.group(2).strip()
-        title_lower = title.lower()
-        if not any(kw in title_lower for kw in _SECTION_KEYWORDS):
+        if not _is_hot_section_title(title):
             continue
         start = match.end()
         end = headings[idx + 1].start() if idx + 1 < len(headings) else len(content)
@@ -1139,17 +1202,32 @@ def _extract_heuristic_points(content: str) -> List[str]:
 
 
 def _split_block_into_points(block: str) -> List[str]:
+    """Split a pitfalls / key-points section into injectable lines.
+
+    Handles ``-`` / ``*`` bullets, ``1.`` numbered pitfalls (common in
+    ``## Common Pitfalls``), blockquotes, and short standalone lines.
+    Skips checkbox scaffolding like ``- [ ]`` only when the remainder is empty.
+    """
     points: List[str] = []
     for line in block.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
+        # Checkbox items: keep the task text after "[ ]" / "[x]"
+        checkbox_m = re.match(r"^[-*•]\s*\[(?: |x|X)\]\s*(.+)$", stripped)
+        if checkbox_m:
+            body = checkbox_m.group(1).strip()
+            if body:
+                points.append(body)
+            continue
         bullet_m = _BULLET_RE.match(stripped)
         if bullet_m:
             points.append(bullet_m.group(2).strip())
-        elif stripped.startswith(">"):
+            continue
+        if stripped.startswith(">"):
             points.append(stripped.lstrip("> ").strip())
-        elif len(stripped) <= 240 and not stripped.startswith("#"):
+            continue
+        if len(stripped) <= 240 and not stripped.startswith("#"):
             points.append(stripped)
     return points
 

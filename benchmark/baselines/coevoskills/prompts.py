@@ -24,6 +24,10 @@ Rules:
 - Name evolved skills with the ``evo-`` prefix (e.g. ``evo-citation-checker``).
 - Skill directory names may contain hyphens; Python imports MUST use ``sys.path.insert`` on the ``scripts/`` directory, then ``from utils import ...``. Never ``from evo_foo.scripts...``.
 - After fixing bugs at runtime, write fixes back into ``scripts/`` so a fresh agent can reuse the skill.
+- Every SKILL.md MUST include a ``## Common Pitfalls`` or ``## Best Practices``
+  (or ``## Key Points`` / ``## Limitations``) section with short bullets of
+  mistakes to avoid — these are what Hermes injects into later turns via the
+  hot skill pool (same conventions as SkillsBench ``environment/skills``).
 """
 
 

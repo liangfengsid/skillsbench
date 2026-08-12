@@ -325,6 +325,35 @@ def _atomic_write_text(file_path: Path, content: str, encoding: str = "utf-8") -
 # Core actions
 # =============================================================================
 
+_HOT_SECTION_HINT = (
+    "Hot skill pool found no extractable key points. Add a "
+    "'## Common Pitfalls', '## Best Practices', or '## Key Points' section "
+    "with short bullets (NEVER/ALWAYS mistakes and fixes) so future turns "
+    "can inject them."
+)
+
+
+def _maybe_attach_hot_section_hint(result: Dict[str, Any], content: Optional[str]) -> None:
+    """Soft-nudge when create/edit/patch SKILL.md has no extractable key points."""
+    if not result.get("success") or not content:
+        return
+    try:
+        from agent.hot_skills import extract_hot_key_points
+
+        if extract_hot_key_points(content):
+            return
+        result["hot_section_hint"] = _HOT_SECTION_HINT
+        existing = result.get("hint") or ""
+        result["hint"] = (
+            f"{existing} {_HOT_SECTION_HINT}".strip()
+            if existing
+            else _HOT_SECTION_HINT
+        )
+    except Exception:
+        # Never fail skill_manage because hot-pool introspection failed.
+        pass
+
+
 def _create_skill(name: str, content: str, category: str = None) -> Dict[str, Any]:
     """Create a new user skill with SKILL.md content."""
     # Validate name
@@ -379,6 +408,7 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
         "To add reference files, templates, or scripts, use "
         "skill_manage(action='write_file', name='{}', file_path='references/example.md', file_content='...')".format(name)
     )
+    _maybe_attach_hot_section_hint(result, content)
     return result
 
 
@@ -411,11 +441,13 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
             _atomic_write_text(skill_md, original_content)
         return {"success": False, "error": scan_error}
 
-    return {
+    result = {
         "success": True,
         "message": f"Skill '{name}' updated.",
         "path": str(existing["path"]),
     }
+    _maybe_attach_hot_section_hint(result, content)
+    return result
 
 
 def _patch_skill(
@@ -509,10 +541,13 @@ def _patch_skill(
         _atomic_write_text(target, original_content)
         return {"success": False, "error": scan_error}
 
-    return {
+    result = {
         "success": True,
         "message": f"Patched {'SKILL.md' if not file_path else file_path} in skill '{name}' ({match_count} replacement{'s' if match_count > 1 else ''}).",
     }
+    if not file_path or Path(file_path).name == "SKILL.md":
+        _maybe_attach_hot_section_hint(result, new_content)
+    return result
 
 
 def _delete_skill(name: str) -> Dict[str, Any]:
@@ -727,7 +762,10 @@ SKILL_MANAGE_SCHEMA = {
         "After difficult/iterative tasks, offer to save as a skill. "
         "Skip for simple one-offs. Confirm with user before creating/deleting.\n\n"
         "Good skills: trigger conditions, numbered steps with exact commands, "
-        "pitfalls section, verification steps. Use skill_view() to see format examples."
+        "a '## Common Pitfalls' / '## Best Practices' / '## Key Points' section "
+        "with short NEVER/ALWAYS bullets (these feed the hot skill pool on "
+        "later turns; SkillsBench task skills often use Best Practices / "
+        "Limitations), and verification steps. Use skill_view() for examples."
     ),
     "parameters": {
         "type": "object",
@@ -748,8 +786,10 @@ SKILL_MANAGE_SCHEMA = {
                 "type": "string",
                 "description": (
                     "Full SKILL.md content (YAML frontmatter + markdown body). "
-                    "Required for 'create' and 'edit'. For 'edit', read the skill "
-                    "first with skill_view() and provide the complete updated text."
+                    "Required for 'create' and 'edit'. Include '## Common Pitfalls', "
+                    "'## Best Practices', or '## Key Points' with short bullets. "
+                    "For 'edit', read the skill first with skill_view() and provide "
+                    "the complete updated text."
                 )
             },
             "old_string": {

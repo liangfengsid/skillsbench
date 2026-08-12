@@ -103,16 +103,20 @@ skill_view / skill_manage / recent use
   model may still call skill_view(name) for the full SKILL.md
 ```
 
-**What gets extracted** (in order of preference):
+**What gets extracted** (in order):
 
-1. Explicit author markers in `SKILL.md`:
+1. Guardrail-style headings used by Hermes skills **and** SkillsBench task
+   skills under `tasks/*/environment/skills/`:
+   - Hermes: `## Common Pitfalls` / `## Pitfalls` / `## Key Points` / …
+   - SkillsBench: `## Best Practices` / `## Limitations` / `## Error Handling`
+     / `## Important Requirements` / `CRITICAL: …` formula rules / …
+2. Optional author override markers (rare; mostly for hand-tuned skills):
    ```markdown
    <!-- hermes-hot -->
    - NEVER hardcode `~/.hermes` — use `get_hermes_home()`.
    - ALWAYS run tests via `scripts/run_tests.sh`, not bare `pytest`.
    <!-- /hermes-hot -->
    ```
-2. Headings that look like guardrails (`## Pitfalls`, `## Warnings`, `## Important`, …).
 3. Fallback: imperative / NEVER–ALWAYS style bullets elsewhere in the skill.
 
 **Lifecycle**

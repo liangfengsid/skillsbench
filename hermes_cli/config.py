@@ -921,8 +921,10 @@ DEFAULT_CONFIG = {
         },
         # LRU pool of recently used skill key points injected ephemerally into the
         # current turn's user message (API-call time only — preserves prompt cache).
-        # Full procedures remain behind skill_view; authors mark guardrails with
-        # <!-- hermes-hot --> ... <!-- /hermes-hot --> or ## Pitfalls-style headings.
+        # Full procedures remain behind skill_view. Extraction prefers
+        # ## Common Pitfalls / ## Best Practices / ## Limitations / ## Key Points
+        # (Hermes authoring + SkillsBench task-skill conventions), then optional
+        # <!-- hermes-hot --> markers, then NEVER/ALWAYS heuristics.
         "hot_pool": {
             "enabled": True,
             # global_pool: flat cap on injected key points (recommended).
