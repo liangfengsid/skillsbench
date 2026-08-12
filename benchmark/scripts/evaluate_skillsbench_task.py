@@ -2,11 +2,12 @@
 """
 Host-side SkillsBench verifier for Hermes batch runs.
 
-Maps container paths (``/root/...``) to a staged task tree, runs ``tests/test_outputs.py``
-via pytest, and returns macro (task) + micro (test-case) metrics.
+Maps container paths (``/root/...``, ``/app/...``, ``/tests/...``, ``/logs/...``)
+to a staged task tree, runs ``tests/test_outputs.py`` via pytest, and returns
+macro (task) + micro (test-case) metrics.
 
-Official container eval (``bench eval``) is not required; this module is for repeatable
-Hermes JSONL logging. Set ``eval_mode: host`` on envelopes.
+Official container eval (``bench eval``) is not required; this module is for
+repeatable Hermes JSONL logging. Set ``eval_mode: host`` on envelopes.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
@@ -34,19 +35,63 @@ _PYTEST_SUMMARY_RE = re.compile(
     r"(?:, (?P<errors>\d+) errors)?"
 )
 
+# Container workspace mounts used by SkillsBench task tests.
+_WORKSPACE_PREFIXES: Tuple[str, ...] = ("/root", "/app")
+_TESTS_PREFIX = "/tests"
+_LOGS_PREFIX = "/logs"
+
 
 def task_dir_for(skillsbench_root: Path, task_id: str) -> Path:
     return skillsbench_root.resolve() / "tasks" / task_id
 
 
-def adapt_container_paths(content: str, host_root: Path) -> str:
-    """Rewrite ``/root`` path literals in test sources for host staging."""
-    root = str(host_root.resolve())
-    text = content.replace('"/root/', f'"{root}/')
-    text = text.replace("'/root/", f"'{root}/")
-    text = text.replace('"/root"', f'"{root}"')
-    text = text.replace("'/root'", f"'{root}'")
-    text = text.replace("sys.path.insert(0, '/root')", f"sys.path.insert(0, '{root}')")
+def _remap_abs_prefix(text: str, container_prefix: str, host_path: str) -> str:
+    """
+    Rewrite absolute container path prefixes to a host staging path.
+
+    Handles quoted strings (``"/app/x"``, ``'/app'``), ``Path(...)``, bare
+    paths in shell snippets (``cd /app/workspace``), and ``sys.path.insert``.
+    Does not match longer pathnames (``/apple`` stays intact when prefix is
+    ``/app``).
+    """
+    host = str(Path(host_path).resolve())
+    pref = container_prefix.rstrip("/")
+    esc = re.escape(pref)
+
+    # "/app/foo" or '/app/foo' (and Path("/app/foo"))
+    text = re.sub(rf'(["\']){esc}/', rf"\1{host}/", text)
+    # Exact mount: "/app" or '/app'
+    text = re.sub(rf'(["\']){esc}\1', rf"\1{host}\1", text)
+    # Bare paths in shell commands: cd /app/workspace && ...
+    text = re.sub(rf"(?<![A-Za-z0-9_]){esc}/", f"{host}/", text)
+    text = re.sub(rf"(?<![A-Za-z0-9_]){esc}(?![A-Za-z0-9_/])", host, text)
+    text = text.replace(f"sys.path.insert(0, '{pref}')", f"sys.path.insert(0, '{host}')")
+    text = text.replace(f'sys.path.insert(0, "{pref}")', f'sys.path.insert(0, "{host}")')
+    return text
+
+
+def adapt_container_paths(
+    content: str,
+    host_root: Path,
+    *,
+    tests_dir: Optional[Path] = None,
+    logs_dir: Optional[Path] = None,
+    workspace_prefixes: Sequence[str] = _WORKSPACE_PREFIXES,
+) -> str:
+    """
+    Rewrite container absolute paths in test sources for host staging.
+
+    - ``/root`` and ``/app`` → ``host_root`` (agent workspace)
+    - ``/tests`` → ``tests_dir`` (verifier inputs next to pytest)
+    - ``/logs`` → ``logs_dir`` (verifier logs; created by the host runner)
+    """
+    text = content
+    for prefix in workspace_prefixes:
+        text = _remap_abs_prefix(text, prefix, host_root)
+    if tests_dir is not None:
+        text = _remap_abs_prefix(text, _TESTS_PREFIX, tests_dir)
+    if logs_dir is not None:
+        text = _remap_abs_prefix(text, _LOGS_PREFIX, logs_dir)
     return text
 
 
@@ -80,6 +125,49 @@ def stage_task_for_host_eval(task_dir: Path, stage_dir: Path) -> Path:
             shutil.copytree(entry, dest, dirs_exist_ok=True)
 
     return host_root
+
+
+def stage_tests_for_host_eval(
+    task_dir: Path,
+    stage_dir: Path,
+    host_root: Path,
+) -> Tuple[Path, Path]:
+    """
+    Copy ``tasks/<id>/tests/`` into the stage, rewriting container paths in
+    ``*.py`` files. Also create ``logs/verifier`` for tests that write there.
+
+    Returns ``(tests_dir, logs_dir)``.
+    """
+    tests_dir = stage_dir / "tests"
+    logs_dir = stage_dir / "logs"
+    (logs_dir / "verifier").mkdir(parents=True, exist_ok=True)
+    tests_dir.mkdir(parents=True, exist_ok=True)
+
+    src_tests = task_dir / "tests"
+    if not src_tests.is_dir():
+        return tests_dir, logs_dir
+
+    for src in src_tests.rglob("*"):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(src_tests)
+        dest = tests_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if src.suffix == ".py":
+            raw = src.read_text(encoding="utf-8")
+            dest.write_text(
+                adapt_container_paths(
+                    raw,
+                    host_root,
+                    tests_dir=tests_dir,
+                    logs_dir=logs_dir,
+                ),
+                encoding="utf-8",
+            )
+        else:
+            shutil.copy2(src, dest)
+
+    return tests_dir, logs_dir
 
 
 def maybe_run_simulation(host_root: Path, timeout_sec: float = 120.0) -> Dict[str, Any]:
@@ -177,19 +265,21 @@ def evaluate_task_host(
         stage = Path(tmp)
         host_root = stage_task_for_host_eval(task_dir, stage)
         sim_info = maybe_run_simulation(host_root)
+        tests_dir, logs_dir = stage_tests_for_host_eval(task_dir, stage, host_root)
 
-        tests_dir = stage / "tests"
-        tests_dir.mkdir(parents=True, exist_ok=True)
-        adapted = adapt_container_paths(test_src.read_text(encoding="utf-8"), host_root)
         adapted_test = tests_dir / "test_outputs.py"
-        adapted_test.write_text(adapted, encoding="utf-8")
+        if not adapted_test.is_file():
+            return _eval_error(
+                task_id, f"Failed to stage tests/test_outputs.py for {task_id}"
+            )
 
         ctrf_path = stage / "ctrf.json"
+        # Prefer package-style discovery so sibling conftest.py is loaded.
         cmd = [
             sys.executable,
             "-m",
             "pytest",
-            str(adapted_test),
+            "tests/test_outputs.py",
             "-v",
             "--tb=short",
         ]
@@ -202,9 +292,15 @@ def evaluate_task_host(
                 timeout=timeout_sec,
             )
         except subprocess.TimeoutExpired:
-            return _eval_error(task_id, f"pytest timed out after {timeout_sec}s", eval_mode="host")
+            return _eval_error(
+                task_id, f"pytest timed out after {timeout_sec}s", eval_mode="host"
+            )
         except FileNotFoundError:
-            return _eval_error(task_id, "pytest not available in current interpreter", eval_mode="host")
+            return _eval_error(
+                task_id,
+                "pytest not available in current interpreter",
+                eval_mode="host",
+            )
 
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
@@ -235,6 +331,9 @@ def evaluate_task_host(
             "test_cases": cases,
             "pytest_exit_code": proc.returncode,
             "simulation": sim_info,
+            "host_root": str(host_root),
+            "tests_dir": str(tests_dir),
+            "logs_dir": str(logs_dir),
             "stdout_tail": stdout[-4000:],
             "stderr_tail": stderr[-2000:],
         }
@@ -346,4 +445,3 @@ class PassAtTurnTracker:
             if turn <= int(final_api_calls or 0) and turn not in self._recorded:
                 self._record_turn(turn)
         return {str(turn): self._recorded[turn] for turn in sorted(self._recorded)}
-

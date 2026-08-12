@@ -386,14 +386,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=False,
         help=(
             "With --experiment-dir: also set HERMES_HOME=DIR/hermes_home "
-            "(default: off — keep ~/.hermes so default Hermes skills remain "
-            "available)."
+            "(default: off — keep ~/.hermes). When enabled, skills are a "
+            "writable copy; config.yaml / .env / SOUL.md symlink to the real "
+            "Hermes home. Re-seed skills with --reset-task-workspaces."
         ),
     )
     p.add_argument(
         "--reset-task-workspaces",
         action="store_true",
-        help="With --experiment-dir: refresh task copies and wipe prior agent outputs.",
+        help=(
+            "With --experiment-dir: refresh task copies and wipe prior agent "
+            "outputs. With --isolate-hermes-home, also re-seed hermes_home/skills."
+        ),
     )
     p.add_argument("--evolve", action="store_true", help="Run Alg. 1 on --split-part tasks.")
     p.add_argument(
@@ -497,8 +501,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if scripts not in sys.path:
             sys.path.insert(0, scripts)
         from skillsbench_experiment_workspace import prepare_experiment_workspace
+        from hermes_constants import get_hermes_home
 
         experiment_dir = args.experiment_dir.expanduser().resolve()
+        source_hermes_home = Path(get_hermes_home()).resolve()
         # Nest CoEvo workspaces under the experiment when still using the
         # default --work-root, so evolve artifacts stay with the experiment.
         default_work = (hermes_root / "benchmark" / "runs" / "coevoskills").resolve()
@@ -521,16 +527,38 @@ def main(argv: Optional[List[str]] = None) -> int:
             reset_outputs=bool(args.reset_task_workspaces) and copy_tasks,
             isolate_hermes_home=bool(args.isolate_hermes_home),
             apply_hermes_home_env=bool(args.isolate_hermes_home),
+            source_hermes_home=source_hermes_home,
+            # Even when not copying tasks, --reset-task-workspaces should
+            # re-seed isolated Hermes skills for a clean evolve/eval start.
+            reset_hermes_skills=(
+                bool(args.reset_task_workspaces)
+                if args.isolate_hermes_home
+                else None
+            ),
         )
         if copy_tasks:
             skillsbench_root = Path(manifest["skillsbench_root"])
             print(f"[experiment] skillsbench_root → {skillsbench_root}", flush=True)
         if args.isolate_hermes_home:
-            print(f"[experiment] HERMES_HOME → {manifest.get('hermes_home')}", flush=True)
+            seed = manifest.get("skills_seed") or {}
+            shared = manifest.get("shared_hermes_files") or {}
+            shared_files = shared.get("files") or {}
+            linked = [
+                name
+                for name, info in shared_files.items()
+                if info.get("action") in ("linked", "exists", "copied", "refreshed")
+            ]
+            print(
+                f"[experiment] HERMES_HOME → {manifest.get('hermes_home')} "
+                f"(skills {seed.get('action')}, n={seed.get('n_skills')}; "
+                f"shared {','.join(linked) or 'none'})",
+                flush=True,
+            )
         else:
             print(
                 "[experiment] HERMES_HOME unchanged (default Hermes skills from ~/.hermes); "
-                "pass --isolate-hermes-home to sandbox skills/memory",
+                "pass --isolate-hermes-home to sandbox skills/memory "
+                "(seeded copy of current Hermes skills)",
                 flush=True,
             )
 

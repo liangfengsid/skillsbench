@@ -819,8 +819,10 @@ def main() -> int:
         help=(
             "With --experiment-dir: also set HERMES_HOME=DIR/hermes_home "
             "(default: off — keep ~/.hermes so default Hermes skills remain "
-            "available). Use only when you want skills/memory fully sandboxed "
-            "from the live Hermes profile."
+            "available). When enabled, DIR/hermes_home/skills is a writable "
+            "copy of the current Hermes skills tree, while config.yaml / .env "
+            "/ SOUL.md are symlinked to the real ~/.hermes files. "
+            "Re-seed skills with --reset-task-workspaces."
         ),
     )
     parser.add_argument(
@@ -828,7 +830,9 @@ def main() -> int:
         action="store_true",
         help=(
             "With --experiment-dir: re-copy task definition files and wipe prior "
-            "agent outputs in the experiment task dirs before running."
+            "agent outputs in the experiment task dirs before running. With "
+            "--isolate-hermes-home, also re-seed DIR/hermes_home/skills from "
+            "the source Hermes skills tree."
         ),
     )
 
@@ -965,6 +969,7 @@ def main() -> int:
             reset_outputs=bool(args.reset_task_workspaces),
             isolate_hermes_home=bool(args.isolate_hermes_home),
             apply_hermes_home_env=bool(args.isolate_hermes_home),
+            source_hermes_home=config_hermes_home,
         )
         skillsbench_root = Path(manifest["skillsbench_root"])
         prompt_tasks_base = str(manifest["prompt_tasks_base"])
@@ -978,14 +983,26 @@ def main() -> int:
                 flush=True,
             )
         if args.isolate_hermes_home:
+            seed = manifest.get("skills_seed") or {}
+            shared = manifest.get("shared_hermes_files") or {}
+            shared_files = shared.get("files") or {}
+            linked = [
+                name
+                for name, info in shared_files.items()
+                if info.get("action") in ("linked", "exists", "copied", "refreshed")
+            ]
             print(
-                f"[experiment] HERMES_HOME → {manifest.get('hermes_home')}",
+                f"[experiment] HERMES_HOME → {manifest.get('hermes_home')} "
+                f"(skills {seed.get('action')}, n={seed.get('n_skills')}; "
+                f"shared {','.join(linked) or 'none'} → "
+                f"{manifest.get('source_hermes_home')})",
                 flush=True,
             )
         else:
             print(
                 "[experiment] HERMES_HOME unchanged (default Hermes skills from ~/.hermes); "
-                "pass --isolate-hermes-home to sandbox skills/memory",
+                "pass --isolate-hermes-home to sandbox skills/memory "
+                "(seeded copy of current Hermes skills)",
                 flush=True,
             )
         print(

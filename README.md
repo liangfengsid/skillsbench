@@ -50,7 +50,7 @@ hermes              # start chatting!
 
 ### Benchmarks
 
-Hermes batch drivers (SkillsBench, HLE, AppWorld), hot-pool evaluation, and run comparison live under **`benchmark/`**. See **[`benchmark/README.md`](benchmark/README.md)** for install prerequisites, example commands, and script reference.
+Hermes batch drivers (SkillsBench, HLE, AppWorld), hot-pool evaluation, and run comparison live under **`benchmark/`**. See **[`benchmark/README.md`](benchmark/README.md)** for install prerequisites, example commands, and script reference. Conceptually, the hot skill pool is described under [Hot skills](#hot-skills-ephemeral-key-point-pool) below.
 
 ### Skills: step-level variant pools (optional)
 
@@ -83,6 +83,66 @@ Run `npm ci` in the project root.
 **5. Rank strategy** (`skills.step_pools.rank_strategy`, default `laplace`): after any `manual_order` prefix, remaining variants sort by a numeric score (higher = try earlier). **`laplace`** — smoothed `(success+1)/(trials+2)` for small-sample stability. **`raw`** — empirical `success/max(1,trials)` (no prior; can reorder vs Laplace when trial counts differ). **`wilson`** — conservative 95% Wilson lower bound on the success rate. **`ucb1`** — mean rate plus an exploration bonus using total pool trials and optional `ucb1_c` (default `√2`).
 
 Implementation: [`agent/skill_step_pools.py`](agent/skill_step_pools.py), [`tools/skill_step_variant_tool.py`](tools/skill_step_variant_tool.py).
+
+### Hot skills (ephemeral key-point pool)
+
+Skills already expose full procedures through `skill_view`, but loading every recently useful skill into context is expensive and cache-hostile. The **hot skill pool** keeps a small LRU of **decisive key points** (guardrails, pitfalls, “always/never” rules) and injects them **ephemerally** into the current turn’s user message at API-call time — not into the durable system prompt — so the model gets short reminders without rewriting cached prefixes.
+
+**Idea in one sentence:** remember *what not to mess up* from skills you just used; open the full skill again only when you need the procedure.
+
+```
+skill_view / skill_manage / recent use
+        │
+        ▼
+  extract key points  ──►  HotSkillPool (LRU + TTL + budget)
+        │
+        ▼
+  <hot-skills>…</hot-skills>  prepended to this turn’s user message
+        │
+        ▼
+  model may still call skill_view(name) for the full SKILL.md
+```
+
+**What gets extracted** (in order of preference):
+
+1. Explicit author markers in `SKILL.md`:
+   ```markdown
+   <!-- hermes-hot -->
+   - NEVER hardcode `~/.hermes` — use `get_hermes_home()`.
+   - ALWAYS run tests via `scripts/run_tests.sh`, not bare `pytest`.
+   <!-- /hermes-hot -->
+   ```
+2. Headings that look like guardrails (`## Pitfalls`, `## Warnings`, `## Important`, …).
+3. Fallback: imperative / NEVER–ALWAYS style bullets elsewhere in the skill.
+
+**Lifecycle**
+
+| Stage | Behavior |
+|-------|----------|
+| Populate | After a skill is viewed/used (and optionally by hydrating from recent tool history), key points enter the pool |
+| Inject | Each user turn may prepend a capped `<hot-skills>` block with a system note that these are guardrails, not new user text |
+| Evict | LRU + per-entry TTL (turns) + char/entry budgets keep the block small |
+| Persist (optional) | Pool JSON can survive across conversations / sequential benchmark tasks |
+
+**Configure** in `~/.hermes/config.yaml`:
+
+```yaml
+skills:
+  hot_pool:
+    enabled: true
+    entry_schedule: global_pool   # or per_skill
+    max_entries: 12               # injected key-point budget (global_pool)
+    max_skills: 5
+    max_pool_skills: 15           # how many skills the LRU may hold
+    max_chars: 4000
+    ttl_turns: 20
+    persist_across_conversations: false
+    # persist_path: ""            # default ~/.hermes/hot_skill_pool.json when persisting
+```
+
+**Not the same as** step-level variant pools (above): step pools rewrite *which procedure variant* `skill_view` shows; hot skills inject *short reminders* without opening the skill body.
+
+Implementation: [`agent/hot_skills.py`](agent/hot_skills.py). Benchmark A/B usage (`--hot-pool`, `--hot-pool-persist`): [`benchmark/README.md`](benchmark/README.md#hot-skill-key-points-cross-task-pool).
 
 ---
 

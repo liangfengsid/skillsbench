@@ -148,7 +148,8 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 # Isolated experiment workspace (recommended for multi-run / A/B):
 # copies selected tasks under DIR/skillsbench/tasks/ so agent outputs do not
 # pollute the shared SkillsBench tree; defaults hot-pool JSON to DIR/hot_pool.json.
-# Hermes keeps using ~/.hermes (default skills) unless you pass --isolate-hermes-home.
+# Hermes keeps using ~/.hermes (default skills) unless you pass --isolate-hermes-home
+# (then skills are copied into DIR/hermes_home/skills; config/.env/SOUL symlink to ~/.hermes).
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --experiment-dir benchmark/runs/exp_hot_train \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
@@ -180,8 +181,8 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 | `--hot-pool` / `--no-hot-pool` | follow config | Force hot skill pool on or off for this run (see below) |
 | `--hot-pool-persist PATH` | off | Load/save hot pool across tasks; requires pool enabled; incompatible with `--no-hot-pool` |
 | `--experiment-dir DIR` | off | Per-experiment **task** workspace (`DIR/skillsbench/tasks/`); does not isolate Hermes by default |
-| `--reset-task-workspaces` | off | With `--experiment-dir`: refresh task copies / wipe prior agent outputs |
-| `--isolate-hermes-home` | off | With `--experiment-dir`: also set `HERMES_HOME=DIR/hermes_home` (empty skills tree; opt-in) |
+| `--reset-task-workspaces` | off | With `--experiment-dir`: refresh task copies / wipe prior agent outputs (also re-seeds isolated Hermes skills) |
+| `--isolate-hermes-home` | off | Sandbox `HERMES_HOME=DIR/hermes_home`: **copy** skills; **symlink** `config.yaml` / `.env` / `SOUL.md` to real `~/.hermes` |
 | `--no-batch-review-prompt` | off | Use default Hermes review prompt instead of SkillsBench batch appendix |
 | `--no-wait-background-review` | off | Exit without waiting for end-of-turn skill/memory review |
 | `--background-review-timeout SEC` | 180 | Max wait for background review per task |
@@ -219,7 +220,7 @@ python3 benchmark/scripts/aggregate_skillsbench_runs.py \
   -o benchmark/runs/stratified_train_summary.json
 ```
 
-**Final evaluation** — after the conversation ends, host pytest runs against `tests/test_outputs.py` (with `/root/` paths remapped). Logged as `evaluation` on each JSONL row:
+**Final evaluation** — after the conversation ends, host pytest runs against `tests/test_outputs.py` (container paths `/root`, `/app`, `/tests`, `/logs` remapped into the staged workspace). Logged as `evaluation` on each JSONL row:
 
 | Field | Meaning |
 |-------|---------|
@@ -406,7 +407,7 @@ Env vars (set by the driver): `HERMES_HOT_POOL_ENABLED=0|1`, `HERMES_HOT_POOL_PE
 
 Hermes runs **write into** `benchmark/skillsbench/tasks/<task-id>/` (solution files, `mass_report.json`, local verify scripts, etc.). Leftover artifacts make iteration counts unreliable — a later run may “verify existing output” in fewer steps while a dirty tree inflates or deflates comparisons.
 
-**Preferred:** use `--experiment-dir DIR` so each experiment gets its own copy under `DIR/skillsbench/tasks/` (shared SkillsBench tree stays clean). Hermes still uses `~/.hermes` and its default skills unless you pass `--isolate-hermes-home`.
+**Preferred:** use `--experiment-dir DIR` so each experiment gets its own copy under `DIR/skillsbench/tasks/` (shared SkillsBench tree stays clean). Hermes still uses `~/.hermes` unless you pass `--isolate-hermes-home` (writable **copy** of skills under `DIR/hermes_home/skills/`; `config.yaml` / `.env` / `SOUL.md` stay linked to the real home).
 
 ```bash
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
