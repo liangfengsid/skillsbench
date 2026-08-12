@@ -39,7 +39,7 @@ python -m benchmark.baselines.coevoskills.run_split_protocol \
   --evolve \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part train \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --log-jsonl benchmark/runs/coevo_evolve_train.jsonl
 
 # Freeze library, then evaluate on test (no further evolution)
@@ -114,7 +114,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --list-tasks
 # Single task — hot pool on + persist (treatment)
 python3 benchmark/scripts/run_skillsbench_with_hermes.py \
   --task adaptive-cruise-control \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --skill-nudge-interval 10 \
   --memory-nudge-interval 10 \
   --hot-pool \
@@ -125,7 +125,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py \
 # Single task — hot pool off (control)
 python3 benchmark/scripts/run_skillsbench_with_hermes.py \
   --task adaptive-cruise-control \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --skill-nudge-interval 10 \
   --memory-nudge-interval 10 \
   --no-hot-pool \
@@ -134,14 +134,14 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py \
 
 # Batch (sorted task order; continues after errors)
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --hot-pool \
   --hot-pool-persist benchmark/skillsbench_hot_pool.json \
   --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
 
 # Batch — hot pool off
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --no-hot-pool \
   --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
 
@@ -154,7 +154,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --experiment-dir benchmark/runs/exp_hot_train \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part train \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --hot-pool \
   --log-jsonl benchmark/runs/exp_hot_train/runs.jsonl \
   --print-summary
@@ -162,7 +162,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 # Slice of tasks: [start, end) in sorted order
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --start-task-index 0 --end-task-index 10 \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --hot-pool \
   --hot-pool-persist benchmark/skillsbench_hot_pool.json \
   --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
@@ -172,7 +172,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 
 | Flag | Default | Notes |
 |------|---------|--------|
-| `--model` | from Hermes config | OpenRouter-style id, e.g. `qwen/qwen3.6-plus` |
+| `--model` | from Hermes config | Model id, e.g. `Qwen/Qwen3.6-27B` |
 | `--max-iterations` | 90 | Tool-calling cap per conversation |
 | `--no-quiet` | off | More console output from Hermes |
 | `--skip-context-files` | off | Skip AGENTS.md-style context injection |
@@ -205,7 +205,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part train \
   --pass-k 1,5,10,70 \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --hot-pool \
   --hot-pool-persist benchmark/runs/stratified_train_pool.json \
   --log-jsonl benchmark/runs/stratified_train.jsonl \
@@ -257,7 +257,7 @@ python3 benchmark/scripts/aggregate_skillsbench_runs.py \
 # Single task — final eval (default) + pass@k at turns 1,5,10,70
 python3 benchmark/scripts/run_skillsbench_with_hermes.py \
   --task adaptive-cruise-control \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --pass-k 1,5,10,70 \
   --hot-pool --hot-pool-persist benchmark/skillsbench_hot_pool.json \
   --log-jsonl benchmark/hermes_skillsbench_runs.jsonl \
@@ -269,7 +269,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --split-part test \
   --pass-k 1,5,10,70 \
   --no-hot-pool \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --log-jsonl benchmark/runs/stratified_test.jsonl
 
 # Aggregate across tasks: macro task pass rate + micro test pass rate at each turn
@@ -330,7 +330,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --hot-pool \
   --hot-pool-persist benchmark/runs/stratified_train_pool.json \
   --log-jsonl benchmark/runs/stratified_train.jsonl \
-  --model qwen/qwen3.6-plus
+  --model Qwen/Qwen3.6-27B
 
 # Test split — inject key points from train pool file
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
@@ -339,7 +339,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --hot-pool \
   --hot-pool-persist benchmark/runs/stratified_train_pool.json \
   --log-jsonl benchmark/runs/stratified_test.jsonl \
-  --model qwen/qwen3.6-plus
+  --model Qwen/Qwen3.6-27B
 ```
 
 Category-holdout test (unseen domains):
@@ -371,7 +371,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --hot-pool \
   --hot-pool-persist benchmark/skillsbench_hot_pool.json \
   --log-jsonl benchmark/runs_hot_pool_treatment.jsonl \
-  --model qwen/qwen3.6-plus
+  --model Qwen/Qwen3.6-27B
 ```
 
 **Control** — hot pool off for this run (ignores config and `--hot-pool-persist`):
@@ -379,7 +379,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 ```bash
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --no-hot-pool \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --log-jsonl benchmark/runs_hot_pool_control.jsonl
 ```
 
@@ -445,7 +445,7 @@ cd ../..
 # 2) Control — hot pool off
 python3 benchmark/scripts/run_skillsbench_with_hermes.py \
   --task adaptive-cruise-control \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --skill-nudge-interval 10 \
   --memory-nudge-interval 10 \
   --no-hot-pool \
@@ -461,7 +461,7 @@ cd ../..
 # 4) Treatment — hot pool on + persist
 python3 benchmark/scripts/run_skillsbench_with_hermes.py \
   --task adaptive-cruise-control \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --skill-nudge-interval 10 \
   --memory-nudge-interval 10 \
   --hot-pool \
@@ -542,12 +542,12 @@ python3 benchmark/scripts/run_appworld_with_hermes.py --list-tasks --dataset dev
 
 python3 benchmark/scripts/run_appworld_with_hermes.py \
   --dataset dev --task 50e1ac9_1 \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --log-jsonl benchmark/appworld_hermes_runs.jsonl
 
 python3 benchmark/scripts/run_appworld_with_hermes.py \
   --dataset dev --all --start-task-index 0 --end-task-index 5 \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --experiment-name hermes-dev \
   --log-jsonl benchmark/appworld_runs.jsonl \
   --print-summary
@@ -572,7 +572,7 @@ Use the same **`--experiment-name`** for run and eval (default: `hermes-agent`).
 ```bash
 python3 benchmark/scripts/run_appworld_with_hermes.py \
   --dataset dev --task 50e1ac9_1 \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --experiment-name hermes-agent \
   --log-jsonl benchmark/appworld_hermes_runs.jsonl \
   --print-summary
@@ -630,7 +630,7 @@ tokens: 1,435,564 total | 287,113 avg (5/5 evaluated tasks from run log)
 ```bash
 python3 benchmark/scripts/run_appworld_with_hermes.py \
   --dataset dev --task 50e1ac9_1 \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --no-evaluate
 ```
 

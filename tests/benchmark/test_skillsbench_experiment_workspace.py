@@ -60,6 +60,27 @@ def test_prepare_default_keeps_real_hermes_home(tmp_path, monkeypatch):
     assert manifest["hermes_home"] is None
 
 
+def test_prepare_empty_task_ids_still_creates_experiment_dir(tmp_path, monkeypatch):
+    """CoEvo --evolve with --experiment-dir passes task_ids=[] (no task copies)."""
+    mod = _load_module()
+    source = tmp_path / "skillsbench"
+    source.mkdir()
+    exp = tmp_path / "coevo_exp1"
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    manifest = mod.prepare_experiment_workspace(
+        experiment_dir=exp,
+        source_skillsbench_root=source,
+        task_ids=[],
+    )
+
+    assert exp.is_dir()
+    assert (exp / "MANIFEST.json").is_file()
+    assert manifest["task_ids"] == []
+    assert manifest["skillsbench_root"] is None
+    assert not (exp / "hermes_home").exists()
+
+
 def test_prepare_copies_tasks_and_sets_hermes_home(tmp_path, monkeypatch):
     mod = _load_module()
     source = tmp_path / "skillsbench"

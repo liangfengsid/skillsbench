@@ -305,6 +305,9 @@ def prepare_experiment_workspace(
     """
     experiment_dir = experiment_dir.expanduser().resolve()
     source_skillsbench_root = source_skillsbench_root.expanduser().resolve()
+    # Always create the experiment root — evolve-only / empty task_ids still
+    # write MANIFEST.json here (no task copies, no hermes_home isolation).
+    experiment_dir.mkdir(parents=True, exist_ok=True)
     # Capture source home *before* we rewrite HERMES_HOME below.
     resolved_source_home = resolve_source_hermes_home(source_hermes_home)
     src_tasks = source_skillsbench_root / "tasks"

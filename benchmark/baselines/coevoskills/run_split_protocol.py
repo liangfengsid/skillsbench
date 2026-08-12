@@ -309,16 +309,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Partition to run for --evolve / --frozen-eval (required with those flags).",
     )
     p.add_argument(
-        "--work-root",
-        type=Path,
-        default=repo / "benchmark" / "runs" / "coevoskills",
-        help="Per-task evolution workspaces.",
-    )
-    p.add_argument(
         "--library-dir",
         type=Path,
         default=None,
-        help="Frozen skill library path (default: <work-root>/_frozen_library).",
+        help=(
+            "Frozen skill library path (default: "
+            "<experiment-dir>/coevoskills/_frozen_library if --experiment-dir "
+            "is set, else benchmark/runs/coevoskills/_frozen_library)."
+        ),
     )
     p.add_argument(
         "--library-source-part",
@@ -371,13 +369,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         type=Path,
         default=None,
         help=(
-            "Isolated experiment workspace for SkillsBench *task* files. For "
-            "--frozen-eval, copies selected tasks under DIR/skillsbench/tasks/ "
-            "so installs/outputs do not pollute the shared SkillsBench tree. "
-            "If --work-root is left at its default, evolution workspaces move "
-            "to DIR/coevoskills/. Does NOT rewrite HERMES_HOME by default — "
-            "Hermes keeps using ~/.hermes (default skills). Opt into Hermes "
-            "isolation with --isolate-hermes-home."
+            "Isolated experiment workspace. Evolution workspaces go under "
+            "DIR/coevoskills/<task_id>/; frozen library defaults to "
+            "DIR/coevoskills/_frozen_library. For --frozen-eval, copies selected "
+            "tasks under DIR/skillsbench/tasks/. Does NOT rewrite HERMES_HOME by "
+            "default — opt in with --isolate-hermes-home."
         ),
     )
     p.add_argument(
@@ -414,8 +410,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--per-task-skills",
         action="store_true",
         help=(
-            "For frozen-eval: use each task's own evolved skills under work-root "
-            "(same-task quality) instead of the pooled library."
+            "For frozen-eval: use each task's own evolved skills under "
+            "<experiment-dir>/coevoskills/<task>/skills (or "
+            "benchmark/runs/coevoskills/...) instead of the pooled library."
         ),
     )
     p.add_argument(
@@ -458,12 +455,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     hermes_root = args.hermes_root.resolve()
     skillsbench_root = args.skillsbench_root.resolve()
-    work_root = args.work_root.resolve()
-    library_dir = (
-        args.library_dir.resolve()
-        if args.library_dir
-        else (work_root / "_frozen_library")
-    )
+    default_work_root = (hermes_root / "benchmark" / "runs" / "coevoskills").resolve()
     _ensure_path(hermes_root)
 
     if args.resume or args.resume_success_only:
@@ -505,14 +497,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         experiment_dir = args.experiment_dir.expanduser().resolve()
         source_hermes_home = Path(get_hermes_home()).resolve()
-        # Nest CoEvo workspaces under the experiment when still using the
-        # default --work-root, so evolve artifacts stay with the experiment.
-        default_work = (hermes_root / "benchmark" / "runs" / "coevoskills").resolve()
-        if work_root == default_work:
-            work_root = (experiment_dir / "coevoskills").resolve()
-            if args.library_dir is None:
-                library_dir = work_root / "_frozen_library"
-            print(f"[experiment] work_root → {work_root}", flush=True)
+        work_root = (experiment_dir / "coevoskills").resolve()
+        print(f"[experiment] work_root → {work_root}", flush=True)
 
         copy_tasks = bool(args.frozen_eval)
         print(
@@ -561,6 +547,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "(seeded copy of current Hermes skills)",
                 flush=True,
             )
+    else:
+        work_root = default_work_root
+        if args.isolate_hermes_home or args.reset_task_workspaces:
+            p.error("--isolate-hermes-home / --reset-task-workspaces require --experiment-dir")
+
+    library_dir = (
+        args.library_dir.resolve()
+        if args.library_dir
+        else (work_root / "_frozen_library")
+    )
 
     from benchmark.baselines.coevoskills import hermes_backend
     from benchmark.baselines.coevoskills.algorithm import run_coevo_skills

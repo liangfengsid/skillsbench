@@ -137,10 +137,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=repo / "benchmark" / "skillsbench",
     )
     p.add_argument(
-        "--work-root",
+        "--experiment-dir",
         type=Path,
-        default=repo / "benchmark" / "runs" / "coevoskills",
-        help="Per-task evolution workspaces (skills, artifacts, history).",
+        default=None,
+        help=(
+            "Isolated experiment workspace. Evolution workspaces go under "
+            "DIR/coevoskills/<task_id>/ (default without this flag: "
+            "benchmark/runs/coevoskills/)."
+        ),
     )
     p.add_argument("--task", type=str, default=None, help="Single task id.")
     p.add_argument("--all-tasks", action="store_true")
@@ -194,7 +198,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     hermes_root = args.hermes_root.resolve()
     skillsbench_root = args.skillsbench_root.resolve()
-    work_root = args.work_root.resolve()
+    if args.experiment_dir:
+        work_root = (args.experiment_dir.expanduser().resolve() / "coevoskills")
+    else:
+        work_root = (hermes_root / "benchmark" / "runs" / "coevoskills").resolve()
     _ensure_import_path(hermes_root)
 
     if args.list_tasks:

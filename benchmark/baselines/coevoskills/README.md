@@ -24,13 +24,22 @@ benchmark/baselines/coevoskills/
   run_split_protocol.py  # split-aware evolve + frozen library + frozen eval
 ```
 
-Per-task workspaces (default): `benchmark/runs/coevoskills/<task_id>/`  
-Frozen library (default): `benchmark/runs/coevoskills/_frozen_library/`
+Per-task workspaces (default without `--experiment-dir`):
+`benchmark/runs/coevoskills/<task_id>/`  
+Frozen library default: `…/coevoskills/_frozen_library/`
 
-With `--experiment-dir DIR`, workspaces nest under `DIR/coevoskills/` (when
-`--work-root` is left at default) and frozen-eval task copies under
-`DIR/skillsbench/tasks/`. Hermes keeps using `~/.hermes` (default skills)
-unless you pass `--isolate-hermes-home` (then `DIR/hermes_home`).
+With **`--experiment-dir DIR`** (recommended):
+
+| Artifact | Path |
+|----------|------|
+| Evolved skills / workspaces | `DIR/coevoskills/<task_id>/` |
+| Frozen library (default) | `DIR/coevoskills/_frozen_library/` |
+| Frozen-eval task copies | `DIR/skillsbench/tasks/<task_id>/` |
+| Hermes home (opt-in) | `DIR/hermes_home/` with `--isolate-hermes-home` |
+
+There is no separate `--work-root`; evolution storage is always under the
+experiment dir (or the default `benchmark/runs/coevoskills` when
+`--experiment-dir` is omitted).
 
 ## Recommended protocol (cross-task)
 
@@ -46,11 +55,11 @@ source venv/bin/activate
 
 python -m benchmark.baselines.coevoskills.run_split_protocol \
   --evolve \
+  --experiment-dir benchmark/runs/coevo_exp1 \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part train \
-  --model qwen/qwen3.6-plus \
-  --skip-context-files \
-  --log-jsonl benchmark/runs/coevo_evolve_train.jsonl
+  --model Qwen/Qwen3.6-27B \
+  --log-jsonl benchmark/runs/coevo_exp1/evolve_train.jsonl
 
 # Agent activity uses a fixed --console-window (default 12 lines) that overwrites
 # in place; batch progress lines stay permanent. Errors go to stderr.
@@ -60,14 +69,16 @@ python -m benchmark.baselines.coevoskills.run_split_protocol \
 # After an accidental interrupt — same command + --resume
 # (skips tasks already finished in the JSONL; retries error/interrupted tasks)
 python -m benchmark.baselines.coevoskills.run_split_protocol \
-  --evolve --split-part train --resume \
-  --log-jsonl benchmark/runs/coevo_evolve_train.jsonl
+  --evolve --experiment-dir benchmark/runs/coevo_exp1 \
+  --split-part train --resume \
+  --log-jsonl benchmark/runs/coevo_exp1/evolve_train.jsonl
 
 # Optional: resume a manual slice instead
 python -m benchmark.baselines.coevoskills.run_split_protocol \
-  --evolve --split-part train \
+  --evolve --experiment-dir benchmark/runs/coevo_exp1 \
+  --split-part train \
   --start-task-index 10 --end-task-index 20 \
-  --log-jsonl benchmark/runs/coevo_evolve_train.jsonl
+  --log-jsonl benchmark/runs/coevo_exp1/evolve_train.jsonl
 ```
 
 Progress lines look like:
@@ -79,9 +90,10 @@ Progress lines look like:
 ```bash
 python -m benchmark.baselines.coevoskills.run_split_protocol \
   --build-library \
+  --experiment-dir benchmark/runs/coevo_exp1 \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
-  --library-source-part train \
-  --library-dir benchmark/runs/coevoskills/_frozen_library
+  --library-source-part train
+# Library defaults to benchmark/runs/coevo_exp1/coevoskills/_frozen_library
 ```
 
 ### 3) Frozen eval on test (headline transfer metric)
@@ -89,32 +101,32 @@ python -m benchmark.baselines.coevoskills.run_split_protocol \
 ```bash
 python -m benchmark.baselines.coevoskills.run_split_protocol \
   --frozen-eval \
-  --experiment-dir benchmark/runs/coevo_frozen_test_ws \
+  --experiment-dir benchmark/runs/coevo_exp1 \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part test \
-  --library-dir benchmark/runs/coevoskills/_frozen_library \
   --pass-k 1,5,10,70 \
   --max-iterations 90 \
-  --model qwen/qwen3.6-plus \
+  --model Qwen/Qwen3.6-27B \
   --install-skills-into-task \
-  --log-jsonl benchmark/runs/coevo_frozen_test_ws/runs.jsonl \
-  --aggregate-out benchmark/runs/coevo_frozen_test_ws/summary.json
+  --log-jsonl benchmark/runs/coevo_exp1/frozen_test.jsonl \
+  --aggregate-out benchmark/runs/coevo_exp1/frozen_test_summary.json
 ```
 
-`--experiment-dir` copies selected tasks under `DIR/skillsbench/tasks/` so
-`--install-skills-into-task` and agent outputs do not mutate the shared
-`benchmark/skillsbench/tasks/` tree. Hermes continues to use `~/.hermes`
-(default skills) unless you pass `--isolate-hermes-home`.
+`--experiment-dir` holds evolve workspaces under `DIR/coevoskills/`, copies
+frozen-eval tasks under `DIR/skillsbench/tasks/`, and defaults the frozen
+library to `DIR/coevoskills/_frozen_library`. Hermes continues to use
+`~/.hermes` unless you pass `--isolate-hermes-home`.
 
 Same-task quality (evolve and score the same task’s skills, no pooled library):
 
 ```bash
 python -m benchmark.baselines.coevoskills.run_split_protocol \
   --frozen-eval --per-task-skills \
+  --experiment-dir benchmark/runs/coevo_exp1 \
   --split-part train \
   --pass-k 1,5,10,70 --max-iterations 90 \
-  --log-jsonl benchmark/runs/coevo_frozen_train_same_task.jsonl \
-  --aggregate-out benchmark/runs/coevo_frozen_train_same_task_summary.json
+  --log-jsonl benchmark/runs/coevo_exp1/frozen_train_same_task.jsonl \
+  --aggregate-out benchmark/runs/coevo_exp1/frozen_train_same_task_summary.json
 ```
 
 ### 4) Aggregate / compare metrics (shared across baselines)
