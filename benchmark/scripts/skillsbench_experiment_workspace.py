@@ -60,6 +60,40 @@ def experiment_hermes_home(experiment_dir: Path) -> Path:
     return experiment_dir.resolve() / "hermes_home"
 
 
+def refresh_skills_dir_caches(skills_dir: Optional[Path] = None) -> None:
+    """Refresh import-time ``SKILLS_DIR`` snapshots after rewriting ``HERMES_HOME``.
+
+    ``tools.skill_manager_tool`` / ``tools.skills_tool`` keep a module-level
+    ``SKILLS_DIR`` for test monkeypatching. After ``--isolate-hermes-home``
+    rewrites the env var, align those caches (and their import-time
+    snapshots) so create/list hit the experiment skills tree even if the
+    modules were imported earlier in the process.
+    """
+    import sys
+
+    live = Path(skills_dir).expanduser().resolve() if skills_dir is not None else None
+    if live is None:
+        raw = (os.environ.get("HERMES_HOME") or "").strip()
+        live = (Path(raw).expanduser().resolve() / "skills") if raw else (
+            Path.home() / ".hermes" / "skills"
+        )
+
+    for mod_name in (
+        "tools.skill_manager_tool",
+        "tools.skills_tool",
+        "tools.skills_hub",
+        "tools.skills_sync",
+    ):
+        mod = sys.modules.get(mod_name)
+        if mod is None or not hasattr(mod, "SKILLS_DIR"):
+            continue
+        setattr(mod, "SKILLS_DIR", live)
+        if hasattr(mod, "_SKILLS_DIR_AT_IMPORT"):
+            setattr(mod, "_SKILLS_DIR_AT_IMPORT", live)
+        if hasattr(mod, "HERMES_HOME"):
+            setattr(mod, "HERMES_HOME", live.parent)
+
+
 def resolve_source_hermes_home(explicit: Optional[Path] = None) -> Path:
     """Hermes home to seed from (call before rewriting ``HERMES_HOME``)."""
     if explicit is not None:
@@ -361,6 +395,10 @@ def prepare_experiment_workspace(
         )
         if apply_hermes_home_env:
             os.environ["HERMES_HOME"] = str(hermes_home)
+            # Tools may already be imported with import-time SKILLS_DIR caches
+            # pointing at the previous home. Refresh so skill_manage / skills_list
+            # write and read under the experiment skills tree.
+            refresh_skills_dir_caches(hermes_home / "skills")
 
     hot_pool = experiment_hot_pool_path(experiment_dir)
     skillsbench_root = experiment_skillsbench_root(experiment_dir)

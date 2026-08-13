@@ -86,15 +86,15 @@ Implementation: [`agent/skill_step_pools.py`](agent/skill_step_pools.py), [`tool
 
 ### Hot skills (ephemeral key-point pool)
 
-Skills already expose full procedures through `skill_view`, but loading every recently useful skill into context is expensive and cache-hostile. The **hot skill pool** keeps a small LRU of **decisive key points** (guardrails, pitfalls, “always/never” rules) and injects them **ephemerally** into the current turn’s user message at API-call time — not into the durable system prompt — so the model gets short reminders without rewriting cached prefixes.
+Skills already expose full procedures through `skill_view`, but loading every recently useful skill into context is expensive and cache-hostile. The **hot skill pool** keeps a small set of **decisive key points** (guardrails, pitfalls, “always/never” rules) and injects **that whole set** ephemerally into the current turn’s user message at API-call time — not into the durable system prompt — so the model gets short reminders without rewriting cached prefixes.
 
-**Idea in one sentence:** remember *what not to mess up* from skills you just used; open the full skill again only when you need the procedure.
+**Idea in one sentence:** remember *what not to mess up* from skills you just opened; open the full skill again only when you need the procedure.
 
 ```
 skill_view / skill_manage / recent use
         │
         ▼
-  extract key points  ──►  HotSkillPool (LRU + TTL + budget)
+  extract key points  ──►  HotSkillPool (max_entries retain=inject; eviction at overflow)
         │
         ▼
   <hot-skills>…</hot-skills>  prepended to this turn’s user message
@@ -123,9 +123,9 @@ skill_view / skill_manage / recent use
 
 | Stage | Behavior |
 |-------|----------|
-| Populate | After a skill is viewed/used (and optionally by hydrating from recent tool history), key points enter the pool |
-| Inject | Each user turn may prepend a capped `<hot-skills>` block with a system note that these are guardrails, not new user text |
-| Evict | LRU + per-entry TTL (turns) + char/entry budgets keep the block small |
+| Populate | After a skill is viewed/created, key points enter the pool |
+| Inject | Each user turn prepends the **entire** retained pool as `<hot-skills>` (skills already in recent `skill_view` history can be skipped) |
+| Evict | Only when a new extract would exceed `max_entries`. Policies: `oldest` (FIFO of extract time on a persisted global clock when the pool is saved across conversations) or `llm` (optional judge at overflow). Model "use" of a point is not observable. |
 | Persist (optional) | Pool JSON can survive across conversations / sequential benchmark tasks |
 
 **Configure** in `~/.hermes/config.yaml`:
@@ -134,15 +134,47 @@ skill_view / skill_manage / recent use
 skills:
   hot_pool:
     enabled: true
-    entry_schedule: global_pool   # or per_skill
-    max_entries: 12               # injected key-point budget (global_pool)
-    max_skills: 5
-    max_pool_skills: 15           # how many skills the LRU may hold
+    max_entries: 12               # retain = inject (key-point budget)
     max_chars: 4000
-    ttl_turns: 20
+    eviction_policy: oldest       # oldest | llm
     persist_across_conversations: false
     # persist_path: ""            # default ~/.hermes/hot_skill_pool.json when persisting
 ```
+
+`eviction_policy` runs only when a new extract would exceed `max_entries` (model "use" of a point is not observable, so inject never refreshes eviction clocks):
+
+| Policy | Victim | When to use |
+|--------|--------|-------------|
+| `oldest` (default) | Earliest `recorded_turn` (FIFO of extract). Protects the incoming extract. | Cheap, stable, no extra model call |
+| `llm` | Side-channel judge on the **running agent's LLM client** (tools-free, not written to history). Asks which point **ids to keep** (at most `max_entries`). One call per overflow. Falls back to `oldest` if the judge is missing or fails. | When extract-time FIFO is too weak; costs an extra LLM call at overflow only |
+
+**`llm` judge prompt** (built by `build_llm_eviction_messages` in [`agent/hot_skills.py`](agent/hot_skills.py); isolated from the conversation):
+
+System:
+
+```text
+You pick which hot-skill guardrail points to KEEP in a small prompt budget. Return JSON only: {"keep": ["id", ...]} with at most {keep_n} ids. Prefer transferable NEVER/ALWAYS rules over task-specific procedure. Do not invent ids.
+```
+
+User (JSON):
+
+```json
+{
+  "context": "<current user / task text>",
+  "keep_n": 12,
+  "points": [
+    {
+      "id": "0",
+      "skill": "skill-name",
+      "index": 0,
+      "point": "NEVER run bare pytest — use scripts/run_tests.sh",
+      "recorded_turn": 3
+    }
+  ]
+}
+```
+
+`keep_n` is `max_entries`. `context` is the current user message. Unknown ids are ignored; an empty or unparseable reply falls back to `oldest`.
 
 **Not the same as** step-level variant pools (above): step pools rewrite *which procedure variant* `skill_view` shows; hot skills inject *short reminders* without opening the skill body.
 

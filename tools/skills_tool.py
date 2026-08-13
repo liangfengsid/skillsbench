@@ -69,7 +69,7 @@ Usage:
 import json
 import logging
 
-from hermes_constants import get_hermes_home, display_hermes_home
+from hermes_constants import get_hermes_home, get_skills_dir, display_hermes_home
 import os
 import re
 from enum import Enum
@@ -81,11 +81,28 @@ from tools.registry import registry, tool_error
 logger = logging.getLogger(__name__)
 
 
-# All skills live in ~/.hermes/skills/ (seeded from bundled skills/ on install).
-# This is the single source of truth -- agent edits, hub installs, and bundled
-# skills all coexist here without polluting the git repo.
+# All skills live under $HERMES_HOME/skills/ (seeded from bundled skills/ on
+# install). Keep the module-level name for tests that patch ``SKILLS_DIR``;
+# runtime code must use ``_skills_dir()`` so late HERMES_HOME changes
+# (e.g. SkillsBench ``--isolate-hermes-home``) are honored.
 HERMES_HOME = get_hermes_home()
-SKILLS_DIR = HERMES_HOME / "skills"
+SKILLS_DIR = get_skills_dir()
+_SKILLS_DIR_AT_IMPORT = SKILLS_DIR
+
+
+def _skills_dir() -> Path:
+    """Resolve the local skills directory at call time.
+
+    Honors ``unittest.mock.patch`` of ``SKILLS_DIR``. When the attribute still
+    holds the import-time snapshot (stale after ``HERMES_HOME`` is rewritten),
+    re-resolves via :func:`get_skills_dir`.
+
+    Compare by value (not identity): tests and refresh helpers may rebind
+    equal ``Path`` objects that are not the original import-time instance.
+    """
+    if SKILLS_DIR != _SKILLS_DIR_AT_IMPORT:
+        return Path(SKILLS_DIR)
+    return get_skills_dir()
 
 # Anthropic-recommended limits for progressive disclosure efficiency
 MAX_NAME_LENGTH = 64
@@ -447,9 +464,8 @@ def _get_category_from_path(skill_path: Path) -> Optional[str]:
     For paths like: ~/.hermes/skills/mlops/axolotl/SKILL.md -> "mlops"
     Also works for external skill dirs configured via skills.external_dirs.
     """
-    # Try the module-level SKILLS_DIR first (respects monkeypatching in tests),
-    # then fall back to external dirs from config.
-    dirs_to_check = [SKILLS_DIR]
+    # Prefer the live/patched local skills dir, then external dirs from config.
+    dirs_to_check = [_skills_dir()]
     try:
         from agent.skill_utils import get_external_skills_dirs
         dirs_to_check.extend(get_external_skills_dirs())
@@ -564,8 +580,9 @@ def _find_all_skills(*, skip_disabled: bool = False) -> List[Dict[str, Any]]:
 
     # Scan local dir first, then external dirs (local takes precedence)
     dirs_to_scan = []
-    if SKILLS_DIR.exists():
-        dirs_to_scan.append(SKILLS_DIR)
+    local_skills = _skills_dir()
+    if local_skills.exists():
+        dirs_to_scan.append(local_skills)
     dirs_to_scan.extend(get_external_skills_dirs())
 
     for scan_dir in dirs_to_scan:
@@ -683,8 +700,9 @@ def skills_list(category: str = None, task_id: str = None) -> str:
         JSON string with minimal skill info: name, description, category
     """
     try:
-        if not SKILLS_DIR.exists():
-            SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        local_skills = _skills_dir()
+        if not local_skills.exists():
+            local_skills.mkdir(parents=True, exist_ok=True)
             return json.dumps(
                 {
                     "success": True,
@@ -932,8 +950,9 @@ def skill_view(
 
         # Build list of all skill directories to search
         all_dirs = []
-        if SKILLS_DIR.exists():
-            all_dirs.append(SKILLS_DIR)
+        local_skills = _skills_dir()
+        if local_skills.exists():
+            all_dirs.append(local_skills)
         all_dirs.extend(get_external_skills_dirs())
 
         if not all_dirs:
@@ -1010,7 +1029,7 @@ def skill_view(
         # Security: warn if skill is loaded from outside trusted directories
         # (local skills dir + configured external_dirs are all trusted)
         _outside_skills_dir = True
-        _trusted_dirs = [SKILLS_DIR.resolve()]
+        _trusted_dirs = [_skills_dir().resolve()]
         try:
             _trusted_dirs.extend(d.resolve() for d in all_dirs[1:])
         except Exception:
@@ -1031,7 +1050,10 @@ def skill_view(
         if _outside_skills_dir or _injection_detected:
             _warnings = []
             if _outside_skills_dir:
-                _warnings.append(f"skill file is outside the trusted skills directory (~/.hermes/skills/): {skill_md}")
+                _warnings.append(
+                    f"skill file is outside the trusted skills directory "
+                    f"({display_hermes_home()}/skills/): {skill_md}"
+                )
             if _injection_detected:
                 _warnings.append("skill content contains patterns that may indicate prompt injection")
             logging.getLogger(__name__).warning("Skill security warning for '%s': %s", name, "; ".join(_warnings))
@@ -1239,7 +1261,7 @@ def skill_view(
             linked_files["scripts"] = script_files
 
         try:
-            rel_path = str(skill_md.relative_to(SKILLS_DIR))
+            rel_path = str(skill_md.relative_to(_skills_dir()))
         except ValueError:
             # External skill — use path relative to the skill's own parent dir
             rel_path = str(skill_md.relative_to(skill_md.parent.parent)) if skill_md.parent.parent else skill_md.name

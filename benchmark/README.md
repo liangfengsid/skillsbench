@@ -364,6 +364,8 @@ Hot pool injects recently learned skill **key points** ephemerally each API turn
 | `--no-hot-pool` | Force disable for this run (also disables persistence) |
 | `--hot-pool-persist PATH` | Load/save pool JSON across tasks (implies pool must be enabled) |
 
+Capacity eviction is **admission-time** (`skills.hot_pool.eviction_policy`): `oldest` (FIFO of extract on a persisted `global_turn` clock — one tick per `run_conversation` / SkillsBench task) or `llm` (side-channel judge on the running agent's LLM client when the pool overflows; falls back to `oldest`). The judge prompt asks which point ids to **keep** (at most `max_entries`), preferring transferable NEVER/ALWAYS rules over task-specific procedure; see [Hot skills](../README.md#hot-skills-ephemeral-key-point-pool). `max_entries` is both retain and inject size — the prompt dumps the whole pool. JSONL `hot_pool_telemetry.eviction` reports `capacity` drops.
+
 **Treatment** — pool enabled with persistence across a split or batch:
 
 ```bash

@@ -292,3 +292,35 @@ def test_clear_agent_outputs_keeps_definition(tmp_path):
     assert removed == ["out.bin"]
     assert (task / "instruction.md").is_file()
     assert (task / "environment").is_dir()
+
+
+def test_apply_hermes_home_refreshes_preimported_skills_dir(tmp_path, monkeypatch):
+    """If skill tools were imported before isolate, caches must be refreshed."""
+    import tools.skill_manager_tool as sm
+
+    mod = _load_module()
+    source = tmp_path / "skillsbench"
+    _make_source_task(source, "task-a")
+    real_home = tmp_path / "real_hermes"
+    (real_home / "skills").mkdir(parents=True)
+    (real_home / "config.yaml").write_text("model:\n  default: demo\n", encoding="utf-8")
+    stale = tmp_path / "stale_skills"
+    stale.mkdir()
+    monkeypatch.setattr(sm, "SKILLS_DIR", stale)
+    monkeypatch.setattr(sm, "_SKILLS_DIR_AT_IMPORT", stale)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    exp = tmp_path / "exp_refresh"
+    mod.prepare_experiment_workspace(
+        experiment_dir=exp,
+        source_skillsbench_root=source,
+        task_ids=["task-a"],
+        isolate_hermes_home=True,
+        apply_hermes_home_env=True,
+        source_hermes_home=real_home,
+    )
+
+    expected = (exp / "hermes_home" / "skills").resolve()
+    assert sm.SKILLS_DIR == expected
+    assert sm._SKILLS_DIR_AT_IMPORT == expected
+    assert Path(os.environ["HERMES_HOME"]).resolve() == (exp / "hermes_home").resolve()

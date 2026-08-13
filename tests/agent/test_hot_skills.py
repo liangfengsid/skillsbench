@@ -9,7 +9,9 @@ from agent.hot_skills import (
     build_hot_skills_block,
     compute_alignment_hits,
     extract_hot_key_points,
+    llm_eviction_keep_ids,
     load_hot_skills_config,
+    parse_llm_keep_ids,
     replay_message_tool_stats,
     resolve_hot_pool_persist_path,
 )
@@ -35,19 +37,16 @@ More steps here that are not guardrails.
 def pool_cfg():
     return {
         "enabled": True,
-        "entry_schedule": "per_skill",
-        "max_skills": 3,
+        "max_entries": 9,
         "max_chars": 2000,
         "max_points_per_skill": 8,
         "max_chars_per_point": 240,
-        "ttl_turns": 5,
+        "eviction_policy": "oldest",
         "inject_on_turn": True,
         "skip_if_in_history": True,
         "history_lookback": 10,
         "hydrate_from_history": True,
         "hydrate_limit": 10,
-        "semantic_prefetch": True,
-        "semantic_min_score": 1,
         "use_hermes_hot_markers": True,
         "extract_sections": True,
         "fallback_extract": True,
@@ -189,12 +188,18 @@ def test_record_skips_when_no_key_points(pool_cfg):
 
 
 def test_load_hot_skills_config_merges_defaults():
-    cfg = load_hot_skills_config({"hot_pool": {"max_skills": 2, "enabled": False}})
-    assert cfg["max_skills"] == 2
+    cfg = load_hot_skills_config({"hot_pool": {"max_entries": 2, "enabled": False}})
+    assert cfg["max_entries"] == 2
     assert cfg["enabled"] is False
     assert cfg["max_points_per_skill"] == 8
-    assert cfg["entry_schedule"] == "global_pool"
-    assert cfg["max_entries"] == 12
+    assert cfg["eviction_policy"] == "oldest"
+
+
+def test_unknown_eviction_policy_defaults_to_oldest():
+    cfg = load_hot_skills_config({"hot_pool": {"eviction_policy": "not-a-policy"}})
+    assert cfg["eviction_policy"] == "oldest"
+    cfg_rel = load_hot_skills_config({"hot_pool": {"eviction_policy": "relevance"}})
+    assert cfg_rel["eviction_policy"] == "oldest"
 
 
 def test_load_hot_skills_config_env_enabled_override(monkeypatch):
@@ -209,15 +214,14 @@ def test_load_hot_skills_config_env_enabled_override(monkeypatch):
     assert cfg_on["enabled"] is True
 
 
-def test_global_pool_max_entries_spreads_across_skills():
+def test_global_pool_max_entries_is_retain_and_inject():
     cfg = {
         "enabled": True,
-        "entry_schedule": "global_pool",
         "max_entries": 4,
-        "max_pool_skills": 10,
         "max_chars": 4000,
         "max_points_per_skill": 8,
         "max_chars_per_point": 240,
+        "eviction_policy": "oldest",
         "inject_on_turn": True,
     }
     pool = HotSkillPool(cfg)
@@ -226,59 +230,23 @@ def test_global_pool_max_entries_spreads_across_skills():
         pool.record(
             name=f"skill-{i}",
             content=f"<!-- hermes-hot -->\n{points}\n<!-- /hermes-hot -->",
-            turn=1,
+            turn=i + 1,
         )
-    block = pool.build_block(user_message="hello", turn=2)
+    total = sum(len(e.key_points) for e in pool._entries.values())
+    assert total == 4
+    block = pool.build_block(user_message="hello", turn=4)
     assert block.count("- Rule") == 4
-    assert block.count("### skill-") >= 2
 
 
-def test_global_pool_respects_per_skill_inject_cap():
-    cfg = {
-        "enabled": True,
-        "entry_schedule": "global_pool",
-        "max_entries": 20,
-        "max_points_per_skill_inject": 2,
-        "max_pool_skills": 10,
-        "max_chars": 4000,
-        "max_points_per_skill": 8,
-        "max_chars_per_point": 240,
-        "inject_on_turn": True,
-    }
-    pool = HotSkillPool(cfg)
-    pool.record(
-        name="heavy",
-        content="<!-- hermes-hot -->\n"
-        + "\n".join(f"- Point {i}" for i in range(6))
-        + "\n<!-- /hermes-hot -->",
-        turn=1,
-    )
-    block = pool.build_block(user_message="hello", turn=2)
-    assert block.count("- Point") == 2
-
-
-def test_global_pool_lru_uses_max_pool_skills():
-    cfg = {
-        "enabled": True,
-        "entry_schedule": "global_pool",
-        "max_pool_skills": 3,
-        "max_entries": 12,
-        "max_chars": 4000,
-        "max_points_per_skill": 8,
-        "max_chars_per_point": 240,
-        "inject_on_turn": True,
-    }
-    pool = HotSkillPool(cfg)
-    for name in ("a", "b", "c", "d"):
-        pool.record(name=name, content=_SAMPLE_SKILL, turn=1)
-    assert list(pool._entries.keys()) == ["b", "c", "d"]
-
-
-def test_record_and_lru_eviction(pool_cfg):
+def test_oldest_eviction_drops_earliest_skill(pool_cfg):
     pool = HotSkillPool(pool_cfg)
-    for name in ("a", "b", "c", "d"):
-        pool.record(name=name, content=_SAMPLE_SKILL, turn=1)
-    assert list(pool._entries.keys()) == ["b", "c", "d"]
+    for i, name in enumerate(("a", "b", "c", "d")):
+        pool.record(name=name, content=_SAMPLE_SKILL, turn=i + 1)
+    assert "a" not in pool._entries
+    assert set(pool._entries) == {"b", "c", "d"}
+    block = pool.build_block(user_message="hello", turn=5)
+    assert "### a" not in block
+    assert "### d" in block
 
 
 def test_record_from_tool_result_skips_file_views(pool_cfg):
@@ -357,42 +325,6 @@ def test_hydrate_from_history(pool_cfg):
     added = pool.hydrate_from_history(messages)
     assert added == 1
     assert "pytest-skill" in pool._entries
-
-
-def test_semantic_ranking_boosts_matching_skill(pool_cfg):
-    pool = HotSkillPool(pool_cfg)
-    pool.record(
-        name="alpha",
-        content="<!-- hermes-hot -->\n- Alpha rule\n<!-- /hermes-hot -->",
-        description="unrelated",
-        turn=1,
-    )
-    pool.record(
-        name="github-auth",
-        content="<!-- hermes-hot -->\n- Validate github oauth tokens\n<!-- /hermes-hot -->",
-        description="github tokens",
-        turn=1,
-    )
-    ranked = pool._rank_entries(list(pool._entries.values()), "fix github auth token")
-    assert ranked[0].name == "github-auth"
-
-
-def test_evict_by_ttl(pool_cfg):
-    pool = HotSkillPool(pool_cfg)
-    pool.record(
-        name="old",
-        content="<!-- hermes-hot -->\n- Old rule\n<!-- /hermes-hot -->",
-        turn=1,
-    )
-    pool.record(
-        name="fresh",
-        content="<!-- hermes-hot -->\n- Fresh rule\n<!-- /hermes-hot -->",
-        turn=8,
-    )
-    evicted = pool.evict_by_ttl(7)
-    assert evicted == 1
-    assert "old" not in pool._entries
-    assert "fresh" in pool._entries
 
 
 def test_refresh_stale_entries_reloads_key_points(pool_cfg, monkeypatch):
@@ -500,8 +432,7 @@ def test_persist_load_save_roundtrip(tmp_path):
     path = tmp_path / "hot_pool.json"
     cfg = {
         "enabled": True,
-        "entry_schedule": "per_skill",
-        "max_skills": 5,
+        "max_entries": 12,
         "max_chars": 2000,
         "max_points_per_skill": 8,
         "max_chars_per_point": 240,
@@ -527,16 +458,16 @@ def test_persist_load_save_roundtrip(tmp_path):
     assert pool_b.global_turn == pool_a.global_turn + 1
 
 
-def test_persist_global_turn_ttl_across_instances(tmp_path):
+def test_persist_oldest_eviction_uses_global_turn_across_conversations(tmp_path):
+    """Session turn resets per AIAgent; persisted global_turn must drive oldest."""
     path = tmp_path / "hot_pool.json"
     cfg = {
         "enabled": True,
-        "entry_schedule": "per_skill",
-        "max_skills": 5,
+        "max_entries": 1,
         "max_chars": 2000,
         "max_points_per_skill": 8,
         "max_chars_per_point": 240,
-        "ttl_turns": 1,
+        "eviction_policy": "oldest",
         "inject_on_turn": True,
         "persist_across_conversations": True,
         "persist_path": str(path),
@@ -544,16 +475,23 @@ def test_persist_global_turn_ttl_across_instances(tmp_path):
     pool_a = HotSkillPool(cfg)
     pool_a.on_turn_start(1)
     pool_a.record(
-        name="old",
-        content="<!-- hermes-hot -->\n- Old rule\n<!-- /hermes-hot -->",
-        turn=pool_a.active_turn,
+        name="from-conv-a",
+        content="<!-- hermes-hot -->\n- Rule A\n<!-- /hermes-hot -->",
+        turn=1,
     )
+    assert pool_a._entries["from-conv-a"].recorded_turn == pool_a.global_turn
 
     pool_b = HotSkillPool(cfg)
-    pool_b.on_turn_start(1)
-    pool_b.on_turn_start(1)
-    pool_b.evict_by_ttl(pool_b.active_turn)
-    assert "old" not in pool_b._entries
+    pool_b.on_turn_start(1)  # new conversation, session turn would be 1 again
+    pool_b.record(
+        name="from-conv-b",
+        content="<!-- hermes-hot -->\n- Rule B\n<!-- /hermes-hot -->",
+        turn=1,
+    )
+    assert "from-conv-a" not in pool_b._entries
+    assert "from-conv-b" in pool_b._entries
+    assert pool_b._entries["from-conv-b"].recorded_turn == pool_b.global_turn
+    assert pool_b.global_turn > pool_a.global_turn
 
 
 def test_resolve_hot_pool_persist_path_default(tmp_path, monkeypatch):
@@ -629,3 +567,158 @@ def test_replay_and_alignment_helpers():
     )
     assert checks == 1
     assert hits == 1
+
+
+def test_inject_does_not_refresh_eviction_clock(pool_cfg):
+    """Dumping the pool into the prompt must not protect a skill from oldest eviction."""
+    pool = HotSkillPool(pool_cfg)
+    for i, name in enumerate(("a", "b", "c")):
+        pool.record(name=name, content=_SAMPLE_SKILL, turn=i + 1)
+    pool.build_block(user_message="hello", turn=10)
+    pool.record(name="d", content=_SAMPLE_SKILL, turn=11)
+    assert "a" not in pool._entries
+    assert "d" in pool._entries
+
+
+def test_llm_eviction_uses_judge_callback():
+    cfg = {
+        "enabled": True,
+        "max_entries": 1,
+        "max_chars": 4000,
+        "max_points_per_skill": 8,
+        "max_chars_per_point": 240,
+        "eviction_policy": "llm",
+        "inject_on_turn": True,
+    }
+
+    def keep_github(items, keep_n, context):
+        del keep_n, context
+        for it in items:
+            if it["skill"] == "github-auth":
+                return [it["id"]]
+        return [items[-1]["id"]]
+
+    pool = HotSkillPool(cfg, eviction_judge=keep_github)
+    pool.record(
+        name="alpha",
+        content="<!-- hermes-hot -->\n- Alpha rule\n<!-- /hermes-hot -->",
+        turn=1,
+    )
+    pool.record(
+        name="github-auth",
+        content="<!-- hermes-hot -->\n- Validate github oauth tokens\n<!-- /hermes-hot -->",
+        turn=2,
+    )
+    assert list(pool._entries) == ["github-auth"]
+
+
+def test_llm_eviction_falls_back_to_oldest_without_judge():
+    cfg = {
+        "enabled": True,
+        "max_entries": 1,
+        "max_chars": 4000,
+        "max_points_per_skill": 8,
+        "max_chars_per_point": 240,
+        "eviction_policy": "llm",
+        "inject_on_turn": True,
+    }
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="alpha",
+        content="<!-- hermes-hot -->\n- Alpha rule\n<!-- /hermes-hot -->",
+        turn=1,
+    )
+    pool.record(
+        name="beta",
+        content="<!-- hermes-hot -->\n- Beta rule\n<!-- /hermes-hot -->",
+        turn=2,
+    )
+    assert "alpha" not in pool._entries
+    assert list(pool._entries) == ["beta"]
+
+
+def test_parse_llm_keep_ids_accepts_fenced_json():
+    items = [{"id": "0", "skill": "a"}, {"id": "1", "skill": "b"}]
+    text = '```json\n{"keep": ["1"]}\n```'
+    assert parse_llm_keep_ids(text, items, 1) == ["1"]
+
+
+def test_parse_llm_keep_ids_strips_think_and_ignores_unknown():
+    items = [{"id": "0", "skill": "a"}, {"id": "1", "skill": "b"}]
+    text = '<think>nope</think>{"keep": ["1", "999"]}'
+    assert parse_llm_keep_ids(text, items, 2) == ["1"]
+
+
+def test_llm_eviction_keep_ids_uses_complete_fn():
+    items = [
+        {"id": "0", "skill": "alpha", "point": "A"},
+        {"id": "1", "skill": "github-auth", "point": "G"},
+    ]
+
+    def complete(messages):
+        assert messages[0]["role"] == "system"
+        assert "github-auth" in messages[1]["content"]
+        return '{"keep": ["1"]}'
+
+    assert llm_eviction_keep_ids(items, 1, "fix oauth", complete) == ["1"]
+
+
+def test_llm_eviction_via_complete_fn_judge():
+    cfg = {
+        "enabled": True,
+        "max_entries": 1,
+        "max_chars": 4000,
+        "max_points_per_skill": 8,
+        "max_chars_per_point": 240,
+        "eviction_policy": "llm",
+        "inject_on_turn": True,
+    }
+
+    def judge(items, keep_n, context):
+        return llm_eviction_keep_ids(
+            items,
+            keep_n,
+            context,
+            complete_fn=lambda _msgs: '{"keep": ["1"]}',
+        )
+
+    pool = HotSkillPool(cfg, eviction_judge=judge)
+    pool.record(
+        name="alpha",
+        content="<!-- hermes-hot -->\n- Alpha rule\n<!-- /hermes-hot -->",
+        turn=1,
+    )
+    pool.record(
+        name="github-auth",
+        content="<!-- hermes-hot -->\n- Validate github oauth tokens\n<!-- /hermes-hot -->",
+        turn=2,
+    )
+    assert list(pool._entries) == ["github-auth"]
+
+
+def test_persist_roundtrip_keeps_recorded_turn(tmp_path):
+    path = tmp_path / "hot_pool.json"
+    cfg = {
+        "enabled": True,
+        "eviction_policy": "oldest",
+        "max_entries": 12,
+        "max_chars": 2000,
+        "max_points_per_skill": 8,
+        "max_chars_per_point": 240,
+        "inject_on_turn": True,
+        "persist_across_conversations": True,
+        "persist_path": str(path),
+    }
+    pool_a = HotSkillPool(cfg)
+    pool_a.on_turn_start(1)
+    pool_a.record(
+        name="bench-skill",
+        content="<!-- hermes-hot -->\n- Use scripts/run_tests.sh\n<!-- /hermes-hot -->",
+        turn=pool_a.active_turn,
+    )
+    recorded = pool_a._entries["bench-skill"].recorded_turn
+    pool_a.build_block(user_message="run tests", turn=pool_a.active_turn)
+    assert pool_a._entries["bench-skill"].recorded_turn == recorded
+
+    pool_b = HotSkillPool(cfg)
+    assert pool_b._entries["bench-skill"].recorded_turn == recorded

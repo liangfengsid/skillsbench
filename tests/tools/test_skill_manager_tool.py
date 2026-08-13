@@ -259,6 +259,35 @@ class TestCreateSkill:
         assert f"Invalid category '{outside}'" in result["error"]
         assert not (outside / "my-skill" / "SKILL.md").exists()
 
+    def test_create_honors_late_hermes_home_change(self, tmp_path, monkeypatch):
+        """Import-time SKILLS_DIR must not stick after HERMES_HOME is rewritten.
+
+        SkillsBench ``--isolate-hermes-home`` sets HERMES_HOME after some
+        modules may already be imported; skill_manage create must land in
+        the new home's skills tree, not the pre-isolate ~/.hermes copy.
+        """
+        import tools.skill_manager_tool as sm
+
+        old_home = tmp_path / "old_home"
+        new_home = tmp_path / "new_home"
+        (old_home / "skills").mkdir(parents=True)
+        (new_home / "skills").mkdir(parents=True)
+
+        monkeypatch.setenv("HERMES_HOME", str(old_home))
+        # Simulate stale import-time cache pointing at the old home.
+        monkeypatch.setattr(sm, "SKILLS_DIR", old_home / "skills")
+        monkeypatch.setattr(sm, "_SKILLS_DIR_AT_IMPORT", old_home / "skills")
+        monkeypatch.setattr(
+            "agent.skill_utils.get_all_skills_dirs",
+            lambda: [new_home / "skills"],
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(new_home))
+        result = _create_skill("late-skill", VALID_SKILL_CONTENT, category="devops")
+        assert result["success"] is True
+        assert (new_home / "skills" / "devops" / "late-skill" / "SKILL.md").is_file()
+        assert not (old_home / "skills" / "devops" / "late-skill").exists()
+
 
 class TestEditSkill:
     def test_edit_existing_skill(self, tmp_path):

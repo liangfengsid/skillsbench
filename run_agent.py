@@ -87,7 +87,7 @@ from tools.browser_tool import cleanup_browser
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import StreamingContextScrubber, build_memory_context_block, sanitize_context
-from agent.hot_skills import HotSkillPool
+from agent.hot_skills import HotSkillPool, llm_eviction_keep_ids
 from agent.retry_utils import jittered_backoff
 from agent.error_classifier import classify_api_error, FailoverReason
 from agent.prompt_builder import (
@@ -1725,11 +1725,15 @@ class AIAgent:
             self._skill_nudge_interval = int(skills_config.get("creation_nudge_interval", 10))
         except Exception:
             skills_config = {}
-        # Hot skill pool — LRU of recently viewed skill bodies (ephemeral injection)
+        # Hot skill pool — admission-capped key points (ephemeral injection)
         try:
             self._hot_skill_pool = HotSkillPool(skills_config if isinstance(skills_config, dict) else None)
         except Exception:
             self._hot_skill_pool = HotSkillPool({})
+        try:
+            self._hot_skill_pool.eviction_judge = self._hot_pool_eviction_judge
+        except Exception:
+            pass
 
         # Tool-use enforcement config: "auto" (default — matches hardcoded
         # model list), true (always), false (never), or list of substrings.
@@ -3609,6 +3613,108 @@ class AIAgent:
         except Exception:
             logger.debug("hot skill pool telemetry export failed", exc_info=True)
             return None
+
+    def _hot_pool_eviction_judge(
+        self,
+        items: list,
+        keep_n: int,
+        context: str,
+    ):
+        """Side-channel keep-list for hot-pool overflow. Does not touch session history."""
+        if getattr(self, "_hot_pool_llm_judge_inflight", False):
+            return None
+        self._hot_pool_llm_judge_inflight = True
+        try:
+            return llm_eviction_keep_ids(
+                items,
+                keep_n,
+                context,
+                complete_fn=lambda msgs: self._complete_sidechannel_text(
+                    msgs, max_tokens=512, reason="hot_pool_eviction"
+                ),
+            )
+        except Exception:
+            logger.debug("hot pool llm eviction judge failed", exc_info=True)
+            return None
+        finally:
+            self._hot_pool_llm_judge_inflight = False
+
+    def _complete_sidechannel_text(
+        self,
+        messages: list,
+        *,
+        max_tokens: int = 512,
+        reason: str = "sidechannel",
+    ) -> str:
+        """Tools-free completion on the agent's existing client. Not written to history."""
+        transport = self._get_transport()
+        if transport is None:
+            return ""
+        text = ""
+        try:
+            if self.api_mode == "anthropic_messages":
+                kw = transport.build_kwargs(
+                    model=self.model,
+                    messages=messages,
+                    tools=None,
+                    max_tokens=max_tokens,
+                    reasoning_config={"enabled": False},
+                    is_oauth=getattr(self, "_is_anthropic_oauth", False),
+                    preserve_dots=self._anthropic_preserve_dots(),
+                )
+                resp = self._anthropic_messages_create(kw)
+                text = (transport.normalize_response(resp).content or "").strip()
+            elif self.api_mode == "bedrock_converse":
+                region = getattr(self, "_bedrock_region", None) or "us-east-1"
+                kw = transport.build_kwargs(
+                    model=self.model,
+                    messages=messages,
+                    tools=None,
+                    max_tokens=max_tokens,
+                    region=region,
+                    guardrail_config=getattr(self, "_bedrock_guardrail_config", None),
+                )
+                from agent.bedrock_adapter import _get_bedrock_runtime_client
+
+                kw.pop("__bedrock_region__", None)
+                kw.pop("__bedrock_converse__", None)
+                raw = _get_bedrock_runtime_client(region).converse(**kw)
+                text = (transport.normalize_response(raw).content or "").strip()
+            elif self.api_mode == "codex_responses":
+                kw = self._build_api_kwargs(messages)
+                kw.pop("tools", None)
+                kw.pop("tool_choice", None)
+                resp = self._run_codex_stream(kw)
+                text = (transport.normalize_response(resp).content or "").strip()
+            else:
+                kwargs = {
+                    "model": self.model,
+                    "messages": messages,
+                }
+                kwargs.update(self._max_tokens_param(max_tokens))
+                try:
+                    from agent.auxiliary_client import (
+                        OMIT_TEMPERATURE,
+                        _fixed_temperature_for_model,
+                    )
+
+                    temp = _fixed_temperature_for_model(self.model, self.base_url)
+                    if temp is not OMIT_TEMPERATURE:
+                        kwargs["temperature"] = 0 if temp is None else temp
+                except Exception:
+                    kwargs["temperature"] = 0
+                client = self._ensure_primary_openai_client(reason=reason)
+                resp = client.chat.completions.create(**kwargs)
+                text = (transport.normalize_response(resp).content or "").strip()
+        except Exception:
+            logger.debug("sidechannel completion failed (%s)", reason, exc_info=True)
+            return ""
+        if text and hasattr(self, "_strip_think_blocks"):
+            try:
+                text = self._strip_think_blocks(text) or text
+            except Exception:
+                pass
+        return (text or "").strip()
 
     def _build_memory_write_metadata(
         self,
@@ -9008,13 +9114,13 @@ class AIAgent:
                     pool.note_skill_view(sk_name, in_pool_before=in_pool)
                 pool.record_from_tool_result(
                     function_result,
-                    turn=getattr(self, "_user_turn_count", 0),
+                    turn=pool.active_turn or getattr(self, "_user_turn_count", 0),
                 )
             elif function_name == "skill_manage":
                 pool.record_from_skill_manage(
                     function_args,
                     function_result,
-                    turn=getattr(self, "_user_turn_count", 0),
+                    turn=pool.active_turn or getattr(self, "_user_turn_count", 0),
                 )
         except Exception:
             logger.debug("hot skill pool update failed", exc_info=True)
@@ -10397,9 +10503,10 @@ class AIAgent:
         if _hot_pool is not None and _hot_pool.enabled:
             try:
                 _hot_pool.on_turn_start(self._user_turn_count)
+                if isinstance(original_user_message, str):
+                    _hot_pool.set_admission_context(original_user_message)
                 _hot_pool.hydrate_from_history(messages)
                 _hot_pool.refresh_stale_entries(session_id=self.session_id)
-                _hot_pool.evict_by_ttl(_hot_pool.active_turn)
                 _exclude_hot: set = set()
                 if _hot_pool.config.get("skip_if_in_history", True):
                     _exclude_hot = _hot_pool.skills_in_recent_history(messages)

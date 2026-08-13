@@ -1,4 +1,4 @@
-"""Hot skill pool — LRU cache of decisive skill key points for prompt injection.
+"""Hot skill pool — admission-capped key points, injected in full.
 
 Extracts guardrails from SKILL.md in this order:
 
@@ -7,8 +7,11 @@ Extracts guardrails from SKILL.md in this order:
 2. Optional ``<!-- hermes-hot -->`` markers (rare hand override)
 3. Heuristic NEVER/ALWAYS-style bullets elsewhere
 
-Injects ephemerally into the current turn's user message. Full procedures stay
-behind ``skill_view``.
+The pool cap **is** the inject budget (``max_entries`` points). Eviction runs
+only when a new extract would overflow — not every turn. Model "use" of a
+point is not observable; policies are ``oldest`` (default) or ``llm``
+(admission-time side-channel on the running agent's client). Full procedures
+stay behind ``skill_view``.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -100,36 +103,56 @@ _GUARDRAIL_PREFIX_RE = re.compile(
 
 _DEFAULT_HOT_POOL = {
     "enabled": True,
-    # Budget schedule: "per_skill" (grid: max_skills × max_points_per_skill) or
-    # "global_pool" (flat cap on total injected key points — recommended).
-    "entry_schedule": "global_pool",
+    # Retain = inject: this many key points are stored and dumped into
+    # <hot-skills> (minus skip_if_in_history). No second per-turn subset.
     "max_entries": 12,
-    "max_skills": 5,
-    "max_pool_skills": 15,
     "max_chars": 4000,
     "max_points_per_skill": 8,
-    "max_points_per_skill_inject": 0,
     "max_chars_per_point": 240,
-    "ttl_turns": 20,
+    # Admission-time victim when over max_entries. Model reliance is not
+    # observable — do not treat inject as "use".
+    # oldest: drop points with the earliest recorded_turn (FIFO of extract).
+    # llm: side-channel judge on the running agent's LLM client (one call per
+    #      overflow). Falls back to oldest if the judge is missing or fails.
+    "eviction_policy": "oldest",
     "inject_on_turn": True,
     "skip_if_in_history": True,
     "history_lookback": 40,
     "hydrate_from_history": True,
     "hydrate_limit": 30,
-    "semantic_prefetch": True,
-    "semantic_min_score": 1,
     "use_hermes_hot_markers": True,
     "extract_sections": True,
     "fallback_extract": True,
-    # Load/save pool to disk so a new conversation (new AIAgent) continues the
-    # same key points as the next user turn in one session — useful for
-    # sequential benchmark tasks. Default off.
     "persist_across_conversations": False,
     "persist_path": "",
 }
 
-_VALID_ENTRY_SCHEDULES = frozenset({"per_skill", "global_pool"})
+_VALID_EVICTION_POLICIES = frozenset({"oldest", "llm"})
 _PERSIST_SCHEMA = "hermes.hot_skill_pool.v1"
+
+# Optional test/agent hook: (items, keep_n, context) -> list[id str] to keep.
+EvictionJudge = Callable[[List[Dict[str, Any]], int, str], Optional[List[str]]]
+
+
+def _normalize_hot_pool_cfg(cfg: dict) -> dict:
+    cfg["enabled"] = bool(cfg.get("enabled", False))
+    cfg["max_entries"] = max(0, int(cfg.get("max_entries", 12) or 0))
+    cfg["max_chars"] = max(0, int(cfg.get("max_chars", 4000) or 0))
+    cfg["max_points_per_skill"] = max(1, int(cfg.get("max_points_per_skill", 8) or 8))
+    cfg["max_chars_per_point"] = max(32, int(cfg.get("max_chars_per_point", 240) or 240))
+    policy = str(cfg.get("eviction_policy", "oldest") or "oldest").strip().lower()
+    cfg["eviction_policy"] = policy if policy in _VALID_EVICTION_POLICIES else "oldest"
+    cfg["history_lookback"] = max(1, int(cfg.get("history_lookback", 40) or 40))
+    cfg["hydrate_limit"] = max(1, int(cfg.get("hydrate_limit", 30) or 30))
+    cfg["use_hermes_hot_markers"] = bool(cfg.get("use_hermes_hot_markers", True))
+    cfg["extract_sections"] = bool(cfg.get("extract_sections", True))
+    cfg["fallback_extract"] = bool(cfg.get("fallback_extract", True))
+    cfg["persist_across_conversations"] = bool(cfg.get("persist_across_conversations", False))
+    cfg["persist_path"] = str(cfg.get("persist_path") or "").strip()
+    cfg["inject_on_turn"] = bool(cfg.get("inject_on_turn", True))
+    cfg["skip_if_in_history"] = bool(cfg.get("skip_if_in_history", True))
+    cfg["hydrate_from_history"] = bool(cfg.get("hydrate_from_history", True))
+    return cfg
 
 
 def load_hot_skills_config(skills_cfg: Optional[dict] = None) -> dict:
@@ -147,27 +170,7 @@ def load_hot_skills_config(skills_cfg: Optional[dict] = None) -> dict:
         for key in cfg:
             if key in hot:
                 cfg[key] = hot[key]
-    cfg["enabled"] = bool(cfg.get("enabled", False))
-    schedule = str(cfg.get("entry_schedule", "global_pool") or "global_pool").strip().lower()
-    cfg["entry_schedule"] = schedule if schedule in _VALID_ENTRY_SCHEDULES else "global_pool"
-    cfg["max_entries"] = max(0, int(cfg.get("max_entries", 12) or 0))
-    cfg["max_skills"] = max(0, int(cfg.get("max_skills", 5) or 0))
-    cfg["max_pool_skills"] = max(0, int(cfg.get("max_pool_skills", 15) or 0))
-    cfg["max_chars"] = max(0, int(cfg.get("max_chars", 4000) or 0))
-    cfg["max_points_per_skill"] = max(1, int(cfg.get("max_points_per_skill", 8) or 8))
-    cfg["max_points_per_skill_inject"] = max(
-        0, int(cfg.get("max_points_per_skill_inject", 0) or 0)
-    )
-    cfg["max_chars_per_point"] = max(32, int(cfg.get("max_chars_per_point", 240) or 240))
-    cfg["ttl_turns"] = max(0, int(cfg.get("ttl_turns", 20) or 0))
-    cfg["history_lookback"] = max(1, int(cfg.get("history_lookback", 40) or 40))
-    cfg["hydrate_limit"] = max(1, int(cfg.get("hydrate_limit", 30) or 30))
-    cfg["semantic_min_score"] = max(0, int(cfg.get("semantic_min_score", 1) or 0))
-    cfg["use_hermes_hot_markers"] = bool(cfg.get("use_hermes_hot_markers", True))
-    cfg["extract_sections"] = bool(cfg.get("extract_sections", True))
-    cfg["fallback_extract"] = bool(cfg.get("fallback_extract", True))
-    cfg["persist_across_conversations"] = bool(cfg.get("persist_across_conversations", False))
-    cfg["persist_path"] = str(cfg.get("persist_path") or "").strip()
+    cfg = _normalize_hot_pool_cfg(cfg)
     if os.getenv("HERMES_HOT_POOL_PERSIST", "").strip().lower() in ("1", "true", "yes", "on"):
         cfg["persist_across_conversations"] = True
     _env_path = os.getenv("HERMES_HOT_POOL_PATH", "").strip()
@@ -232,7 +235,7 @@ class HotSkillEntry:
     key_points: List[str]
     skill_dir: Optional[str] = None
     skill_md_mtime: float = 0.0
-    last_used_turn: int = 0
+    recorded_turn: int = 0  # extract clock; persisted global_turn across conversations
     description: str = ""
     tags: List[str] = field(default_factory=list)
 
@@ -269,6 +272,7 @@ class HotPoolTelemetry:
     skill_view_while_in_pool: int = 0
     skill_manage_sync: int = 0
     skill_manage_evict: int = 0
+    evicted_capacity: int = 0
     _skill_view_seen: Set[str] = field(default_factory=set, repr=False)
 
     @property
@@ -310,6 +314,9 @@ class HotPoolTelemetry:
             "skill_manage": {
                 "sync": self.skill_manage_sync,
                 "evict": self.skill_manage_evict,
+            },
+            "eviction": {
+                "capacity": self.evicted_capacity,
             },
         }
 
@@ -479,19 +486,30 @@ def check_guardrail_violations(messages: List[dict]) -> dict:
 
 
 class HotSkillPool:
-    """LRU pool of recently used skill key points (session or persisted)."""
+    """Admission-capped pool of skill key points (session or persisted).
 
-    def __init__(self, config: Optional[dict] = None) -> None:
+    ``max_entries`` is both retain and inject size. Eviction happens when a
+    new extract overflows that cap. Inject dumps the whole pool (optional
+    skip of skills already in recent ``skill_view`` history).
+    """
+
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        *,
+        eviction_judge: Optional[EvictionJudge] = None,
+    ) -> None:
         if isinstance(config, dict) and "hot_pool" not in config and "enabled" in config:
             merged = dict(_DEFAULT_HOT_POOL)
             merged.update(config)
-            self._config = merged
-            self._normalize_config()
+            self._config = _normalize_hot_pool_cfg(merged)
         else:
             self._config = load_hot_skills_config(config if isinstance(config, dict) else None)
         self._entries: "OrderedDict[str, HotSkillEntry]" = OrderedDict()
         self._global_turn: int = 0
         self._active_turn: int = 0
+        self._admission_context: str = ""
+        self.eviction_judge = eviction_judge
         self._telemetry = HotPoolTelemetry()
         self._telemetry_turn_started = False
         self._pool_at_turn_start: Set[str] = set()
@@ -499,28 +517,7 @@ class HotSkillPool:
             self._load_persisted()
 
     def _normalize_config(self) -> None:
-        cfg = self._config
-        cfg["enabled"] = bool(cfg.get("enabled", False))
-        schedule = str(cfg.get("entry_schedule", "global_pool") or "global_pool").strip().lower()
-        cfg["entry_schedule"] = schedule if schedule in _VALID_ENTRY_SCHEDULES else "global_pool"
-        cfg["max_entries"] = max(0, int(cfg.get("max_entries", 12) or 0))
-        cfg["max_skills"] = max(0, int(cfg.get("max_skills", 5) or 0))
-        cfg["max_pool_skills"] = max(0, int(cfg.get("max_pool_skills", 15) or 0))
-        cfg["max_chars"] = max(0, int(cfg.get("max_chars", 4000) or 0))
-        cfg["max_points_per_skill"] = max(1, int(cfg.get("max_points_per_skill", 8) or 8))
-        cfg["max_points_per_skill_inject"] = max(
-            0, int(cfg.get("max_points_per_skill_inject", 0) or 0)
-        )
-        cfg["max_chars_per_point"] = max(32, int(cfg.get("max_chars_per_point", 240) or 240))
-        cfg["ttl_turns"] = max(0, int(cfg.get("ttl_turns", 20) or 0))
-        cfg["history_lookback"] = max(1, int(cfg.get("history_lookback", 40) or 40))
-        cfg["hydrate_limit"] = max(1, int(cfg.get("hydrate_limit", 30) or 30))
-        cfg["semantic_min_score"] = max(0, int(cfg.get("semantic_min_score", 1) or 0))
-        cfg["use_hermes_hot_markers"] = bool(cfg.get("use_hermes_hot_markers", True))
-        cfg["extract_sections"] = bool(cfg.get("extract_sections", True))
-        cfg["fallback_extract"] = bool(cfg.get("fallback_extract", True))
-        cfg["persist_across_conversations"] = bool(cfg.get("persist_across_conversations", False))
-        cfg["persist_path"] = str(cfg.get("persist_path") or "").strip()
+        self._config = _normalize_hot_pool_cfg(self._config)
 
     @property
     def enabled(self) -> bool:
@@ -532,7 +529,12 @@ class HotSkillPool:
 
     @property
     def active_turn(self) -> int:
-        """Turn counter used for TTL and last_used (global when persisted)."""
+        """Monotonic extract clock used for ``recorded_turn`` / ``oldest`` eviction.
+
+        With ``persist_across_conversations``, this is the persisted ``global_turn``
+        (one tick per ``run_conversation`` / user turn, surviving new agent
+        instances). Without persist it is the in-session user-turn count.
+        """
         return self._active_turn
 
     @property
@@ -543,8 +545,14 @@ class HotSkillPool:
         return bool(self._config.get("persist_across_conversations"))
 
     def _effective_turn(self, session_turn: int) -> int:
+        """Stamp for ``recorded_turn``.
+
+        Persisted pools must not use the per-conversation session counter —
+        that resets to 1 on each new ``AIAgent``, which would make a new
+        conversation's extracts look *older* than prior conversations.
+        """
         if self._persist_enabled():
-            return self._global_turn
+            return self._global_turn or int(session_turn or 0)
         return int(session_turn or 0)
 
     def on_turn_start(self, session_turn: int) -> None:
@@ -566,6 +574,10 @@ class HotSkillPool:
             self._maybe_persist()
         else:
             self._active_turn = int(session_turn or 0)
+
+    def set_admission_context(self, text: str) -> None:
+        """User/task text passed to llm eviction at record time."""
+        self._admission_context = (text or "").strip()
 
     def reset_telemetry(self) -> None:
         """Reset per-conversation telemetry (call at start of run_conversation)."""
@@ -610,7 +622,8 @@ class HotSkillPool:
         out = self._telemetry.to_dict()
         out["config"] = {
             "enabled": self.enabled,
-            "entry_schedule": self._config.get("entry_schedule"),
+            "max_entries": self._config.get("max_entries"),
+            "eviction_policy": self._config.get("eviction_policy"),
             "persist_across_conversations": self._persist_enabled(),
             "skip_if_in_history": bool(self._config.get("skip_if_in_history", True)),
         }
@@ -636,6 +649,7 @@ class HotSkillPool:
         turn: int = 0,
         file_path: Optional[str] = None,
         key_points: Optional[List[str]] = None,
+        user_message: Optional[str] = None,
     ) -> None:
         """Add or refresh key points for a skill (main SKILL.md only)."""
         if not self.enabled:
@@ -654,18 +668,20 @@ class HotSkillPool:
 
         mtime = _skill_md_mtime(skill_dir)
         tag_list = [str(t) for t in (tags or []) if t]
+        self._entries.pop(key, None)
+        now = self._effective_turn(turn)
         entry = HotSkillEntry(
             name=key,
             key_points=points,
             skill_dir=skill_dir,
             skill_md_mtime=mtime,
-            last_used_turn=self._effective_turn(turn),
+            recorded_turn=now,
             description=(description or "").strip(),
             tags=tag_list,
         )
-        self._entries.pop(key, None)
         self._entries[key] = entry
-        self._trim_to_max_skills()
+        context = user_message if user_message is not None else self._admission_context
+        self._trim_to_max_entries(new_name=key, context=context or "")
         self._telemetry.new_records_this_task += 1
         self._maybe_persist()
 
@@ -791,9 +807,8 @@ class HotSkillPool:
             name = str(data.get("name") or "").strip()
             if not name or name in self._entries:
                 continue
-            before = len(self._entries)
-            self.record_from_tool_result(content, turn=0)
-            if name in self._entries and len(self._entries) > before:
+            self.record_from_tool_result(content, turn=self._active_turn)
+            if name in self._entries:
                 added += 1
         return added
 
@@ -818,24 +833,9 @@ class HotSkillPool:
             entry.skill_md_mtime = current_mtime
             refreshed += 1
         if refreshed:
+            self._trim_to_max_entries(new_name="", context=self._admission_context)
             self._maybe_persist()
         return refreshed
-
-    def evict_by_ttl(self, current_turn: Optional[int] = None) -> int:
-        ttl = int(self._config.get("ttl_turns", 0) or 0)
-        if ttl <= 0:
-            return 0
-        turn = int(current_turn if current_turn is not None else self._active_turn)
-        evicted = 0
-        for key, entry in list(self._entries.items()):
-            if entry.last_used_turn <= 0:
-                continue
-            if turn - entry.last_used_turn > ttl:
-                self._entries.pop(key, None)
-                evicted += 1
-        if evicted:
-            self._maybe_persist()
-        return evicted
 
     def skills_in_recent_history(
         self,
@@ -874,6 +874,9 @@ class HotSkillPool:
         turn: int = 0,
         exclude_names: Optional[Set[str]] = None,
     ) -> str:
+        """Serialize the full retained pool. No per-turn subset ranking."""
+        if user_message:
+            self._admission_context = user_message
         if not self.enabled or not self._config.get("inject_on_turn", True):
             return ""
         if not self._entries:
@@ -889,17 +892,11 @@ class HotSkillPool:
         if not candidates:
             return ""
 
-        ranked = self._rank_entries(candidates, user_message)
         max_chars = int(self._config.get("max_chars", 4000) or 0)
         if max_chars <= 0:
             return ""
 
-        schedule = self._config.get("entry_schedule", "global_pool")
-        if schedule == "global_pool":
-            inner = self._build_inner_global_pool(ranked, max_chars, turn)
-        else:
-            inner = self._build_inner_per_skill(ranked, max_chars, turn)
-
+        inner = self._format_entries(candidates, max_chars)
         if not inner:
             return ""
         skills, points = parse_hot_pool_inner_meta(inner)
@@ -909,33 +906,16 @@ class HotSkillPool:
         self._telemetry.points_injected = points
         self._telemetry.point_count = len(points)
         self._telemetry.chars = len(block)
-        self._maybe_persist()
         return block
 
-    def _build_inner_per_skill(
-        self,
-        ranked: List[HotSkillEntry],
-        max_chars: int,
-        turn: int,
-    ) -> str:
-        max_skills = int(self._config.get("max_skills", 5) or 0)
-        if max_skills <= 0:
-            return ""
-
+    def _format_entries(self, entries: List[HotSkillEntry], max_chars: int) -> str:
         parts: List[str] = []
-        used_chars = 0
-        count = 0
-        per_skill_cap = int(self._config.get("max_points_per_skill", 8) or 8)
-        for entry in ranked:
-            if count >= max_skills:
-                break
-            points = entry.key_points[:per_skill_cap]
-            if not points:
-                continue
+        used = 0
+        for entry in entries:
             header = f"### {entry.name}\n"
-            bullets = "\n".join(f"- {pt}" for pt in points)
+            bullets = "\n".join(f"- {pt}" for pt in entry.key_points)
             chunk = header + bullets
-            remaining = max_chars - used_chars
+            remaining = max_chars - used
             if remaining <= 0:
                 break
             if len(chunk) > remaining:
@@ -943,10 +923,7 @@ class HotSkillPool:
                     break
                 chunk = chunk[: remaining - 20].rstrip() + "\n\n[... truncated ...]"
             parts.append(chunk)
-            used_chars += len(chunk)
-            count += 1
-            entry.last_used_turn = max(entry.last_used_turn, int(turn or 0))
-
+            used += len(chunk)
         if not parts:
             return ""
         inner = "\n\n---\n\n".join(parts)
@@ -954,95 +931,102 @@ class HotSkillPool:
             inner = inner[: max_chars - 20].rstrip() + "\n\n[... truncated ...]"
         return inner
 
-    def _build_inner_global_pool(
-        self,
-        ranked: List[HotSkillEntry],
-        max_chars: int,
-        turn: int,
-    ) -> str:
-        max_entries = int(self._config.get("max_entries", 12) or 0)
-        if max_entries <= 0:
-            return ""
+    def _total_points(self) -> int:
+        return sum(len(e.key_points) for e in self._entries.values())
 
-        per_skill_inject = int(self._config.get("max_points_per_skill_inject", 0) or 0)
-        grouped: "OrderedDict[str, List[str]]" = OrderedDict()
-        entries_touched: Set[str] = set()
-        used_chars = 0
-        entry_count = 0
+    def _point_items(self) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        n = 0
+        for name, entry in self._entries.items():
+            for idx, text in enumerate(entry.key_points):
+                items.append(
+                    {
+                        "id": str(n),
+                        "skill": name,
+                        "index": idx,
+                        "point": text,
+                        "recorded_turn": int(entry.recorded_turn),
+                    }
+                )
+                n += 1
+        return items
 
-        for entry in ranked:
-            skill_count = 0
-            for pt in entry.key_points:
-                if entry_count >= max_entries:
-                    break
-                if per_skill_inject > 0 and skill_count >= per_skill_inject:
-                    break
-
-                if entry.name not in grouped:
-                    prefix = ("\n\n---\n\n" if grouped else "") + f"### {entry.name}\n"
-                    add_cost = len(prefix) + len(f"- {pt}")
-                else:
-                    add_cost = len(f"\n- {pt}")
-
-                if used_chars + add_cost > max_chars:
-                    if not grouped:
-                        break
-                    continue
-
-                if entry.name not in grouped:
-                    grouped[entry.name] = []
-                grouped[entry.name].append(pt)
-                used_chars += add_cost
-                entry_count += 1
-                skill_count += 1
-                entries_touched.add(entry.name)
-
-            if entry_count >= max_entries:
-                break
-
-        for name in entries_touched:
-            entry = self._entries.get(name)
-            if entry is not None:
-                entry.last_used_turn = max(entry.last_used_turn, int(turn or 0))
-
-        if not grouped:
-            return ""
-
-        parts = []
-        for name, points in grouped.items():
-            parts.append(f"### {name}\n" + "\n".join(f"- {pt}" for pt in points))
-        inner = "\n\n---\n\n".join(parts)
-        if max_chars and len(inner) > max_chars:
-            inner = inner[: max_chars - 20].rstrip() + "\n\n[... truncated ...]"
-        return inner
-
-    def _rank_entries(self, entries: List[HotSkillEntry], user_message: str) -> List[HotSkillEntry]:
-        ordered = list(reversed(entries))
-        if not self._config.get("semantic_prefetch", True):
-            return ordered
-
-        query_tokens = _tokenize(user_message)
-        if not query_tokens:
-            return ordered
-
-        scored: List[tuple[int, int, HotSkillEntry]] = []
-        for idx, entry in enumerate(ordered):
-            score = _semantic_score(query_tokens, entry)
-            scored.append((score, idx, entry))
-
-        scored.sort(key=lambda t: (-t[0], t[1]))
-        return [entry for _, _, entry in scored]
-
-    def _trim_to_max_skills(self) -> None:
-        schedule = self._config.get("entry_schedule", "global_pool")
-        if schedule == "global_pool":
-            cap = int(self._config.get("max_pool_skills", 15) or 0)
-        else:
-            cap = int(self._config.get("max_skills", 5) or 0)
-        if cap <= 0:
+    def _drop_point(self, skill: str, index: int) -> None:
+        entry = self._entries.get(skill)
+        if entry is None or index < 0 or index >= len(entry.key_points):
             return
-        while len(self._entries) > cap:
-            self._entries.popitem(last=False)
+        entry.key_points.pop(index)
+        if not entry.key_points:
+            self._entries.pop(skill, None)
+
+    def _trim_to_max_entries(self, *, new_name: str, context: str) -> None:
+        cap = int(self._config.get("max_entries", 12) or 0)
+        if cap <= 0:
+            self._entries.clear()
+            return
+        incoming = self._entries.get(new_name)
+        if incoming is not None and len(incoming.key_points) > cap:
+            incoming.key_points = incoming.key_points[:cap]
+        if self._total_points() <= cap:
+            return
+
+        policy = str(self._config.get("eviction_policy") or "oldest")
+        evicted = 0
+        if policy == "llm":
+            dropped = self._apply_llm_keep(cap, context)
+            evicted += dropped
+
+        while self._total_points() > cap:
+            items = self._point_items()
+            if not items:
+                break
+            victim = self._oldest_victim(items, new_name=new_name)
+            if victim is None:
+                break
+            self._drop_point(victim[0], victim[1])
+            evicted += 1
+        if evicted:
+            self._telemetry.evicted_capacity += evicted
+
+    def _apply_llm_keep(self, cap: int, context: str) -> int:
+        """Ask the judge once for which point ids to keep. Returns how many dropped."""
+        items = self._point_items()
+        if not items:
+            return 0
+        keep_ids: Optional[List[str]] = None
+        if callable(self.eviction_judge):
+            try:
+                keep_ids = self.eviction_judge(items, cap, context)
+            except Exception:
+                logger.debug("hot skill llm eviction_judge failed", exc_info=True)
+                keep_ids = None
+        if not keep_ids:
+            return 0
+        keep = {str(i) for i in keep_ids}
+        drop = [it for it in items if str(it["id"]) not in keep]
+        drop.sort(key=lambda it: (str(it["skill"]), -int(it["index"])))
+        dropped = 0
+        for it in drop:
+            if self._total_points() <= cap:
+                break
+            self._drop_point(str(it["skill"]), int(it["index"]))
+            dropped += 1
+        return dropped
+
+    def _oldest_victim(
+        self, items: List[Dict[str, Any]], *, new_name: str
+    ) -> Optional[Tuple[str, int]]:
+        others = [it for it in items if it["skill"] != new_name]
+        pool = others or items
+        victim = min(
+            pool,
+            key=lambda it: (
+                int(it["recorded_turn"]),
+                str(it["skill"]),
+                -int(it["index"]),
+            ),
+        )
+        return str(victim["skill"]), int(victim["index"])
 
     def _entry_to_dict(self, entry: HotSkillEntry) -> dict:
         return {
@@ -1050,7 +1034,7 @@ class HotSkillPool:
             "key_points": list(entry.key_points),
             "skill_dir": entry.skill_dir,
             "skill_md_mtime": entry.skill_md_mtime,
-            "last_used_turn": entry.last_used_turn,
+            "recorded_turn": entry.recorded_turn,
             "description": entry.description,
             "tags": list(entry.tags),
         }
@@ -1067,12 +1051,15 @@ class HotSkillPool:
         if not clean_points:
             return None
         tags = data.get("tags")
+        recorded = data.get("recorded_turn")
+        if recorded is None:
+            recorded = data.get("last_used_turn") or 0
         return HotSkillEntry(
             name=name,
             key_points=clean_points,
             skill_dir=data.get("skill_dir"),
             skill_md_mtime=float(data.get("skill_md_mtime") or 0.0),
-            last_used_turn=int(data.get("last_used_turn") or 0),
+            recorded_turn=int(recorded or 0),
             description=str(data.get("description") or ""),
             tags=[str(t) for t in tags if t] if isinstance(tags, list) else [],
         )
@@ -1092,7 +1079,9 @@ class HotSkillPool:
             logger.warning("hot skill pool: unsupported persist schema in %s", path)
             return
         self._global_turn = max(0, int(raw.get("global_turn") or 0))
-        order = raw.get("lru_order")
+        order = raw.get("order")
+        if not isinstance(order, list):
+            order = raw.get("lru_order")
         entries_raw = raw.get("entries")
         if not isinstance(entries_raw, dict):
             return
@@ -1123,7 +1112,7 @@ class HotSkillPool:
             "schema": _PERSIST_SCHEMA,
             "updated_at": time.time(),
             "global_turn": self._global_turn,
-            "lru_order": list(self._entries.keys()),
+            "order": list(self._entries.keys()),
             "entries": {k: self._entry_to_dict(v) for k, v in self._entries.items()},
         }
         try:
@@ -1302,32 +1291,84 @@ def _reload_skill_content(name: str, *, session_id: Optional[str] = None) -> str
     return str(data.get("content") or "").strip()
 
 
-def _tokenize(text: str) -> Set[str]:
-    if not text:
-        return set()
-    return {m.group(0).lower() for m in _WORD_RE.finditer(text)}
+def build_llm_eviction_messages(
+    items: List[Dict[str, Any]],
+    keep_n: int,
+    context: str,
+) -> List[Dict[str, str]]:
+    """Isolated judge prompt — not appended to the conversation."""
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You pick which hot-skill guardrail points to KEEP in a small "
+                "prompt budget. Return JSON only: {\"keep\": [\"id\", ...]} "
+                f"with at most {keep_n} ids. Prefer transferable NEVER/ALWAYS "
+                "rules across tasks with potential same guardrail points over task-specific procedure. Do not invent ids."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {"context": context, "keep_n": keep_n, "points": items},
+                ensure_ascii=False,
+            ),
+        },
+    ]
 
 
-def _semantic_score(query_tokens: Set[str], entry: HotSkillEntry) -> int:
-    if not query_tokens:
-        return 0
-    score = 0
-    name_tokens = _tokenize(entry.name.replace("/", " ").replace("-", " "))
-    desc_tokens = _tokenize(entry.description)
-    tag_tokens = _tokenize(" ".join(entry.tags))
-    point_tokens = _tokenize(" ".join(entry.key_points))
-    for tok in query_tokens:
-        if tok in name_tokens:
-            score += 4
-        if tok in tag_tokens:
-            score += 2
-        if tok in point_tokens:
-            score += 3
-        if tok in desc_tokens:
-            score += 1
-        if len(tok) >= 4 and tok in entry.name.lower():
-            score += 2
-    return score
+def parse_llm_keep_ids(
+    text: str,
+    items: List[Dict[str, Any]],
+    keep_n: int,
+) -> Optional[List[str]]:
+    """Parse a judge completion into valid point ids. None → fall back to oldest."""
+    if keep_n <= 0 or not items:
+        return []
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    raw = re.sub(
+        r"<think(?:ing)?\b[^>]*>.*?</think(?:ing)?>",
+        "",
+        raw,
+        flags=re.I | re.DOTALL,
+    ).strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I).strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    keep = data.get("keep") if isinstance(data, dict) else data
+    if not isinstance(keep, list):
+        return None
+    valid = {str(it["id"]) for it in items}
+    out = [str(i) for i in keep if str(i) in valid]
+    return out[:keep_n] if out else None
+
+
+def llm_eviction_keep_ids(
+    items: List[Dict[str, Any]],
+    keep_n: int,
+    context: str,
+    complete_fn: Callable[[List[Dict[str, str]]], str],
+) -> Optional[List[str]]:
+    """Run the judge via ``complete_fn(messages) -> text``. None on failure."""
+    if not callable(complete_fn) or keep_n <= 0 or not items:
+        return None
+    try:
+        text = complete_fn(build_llm_eviction_messages(items, keep_n, context)) or ""
+    except Exception:
+        logger.debug("hot skill llm eviction complete_fn failed", exc_info=True)
+        return None
+    return parse_llm_keep_ids(text, items, keep_n)
 
 
 def sanitize_hot_skills_text(text: str) -> str:

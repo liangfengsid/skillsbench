@@ -39,7 +39,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
-from hermes_constants import get_hermes_home, display_hermes_home
+from hermes_constants import get_hermes_home, get_skills_dir
 from typing import Dict, Any, Optional, Tuple
 
 from utils import atomic_replace
@@ -100,21 +100,40 @@ def _security_scan_skill(skill_dir: Path) -> Optional[str]:
 import yaml
 
 
-# All skills live in ~/.hermes/skills/ (single source of truth)
+# All skills live under $HERMES_HOME/skills/ (single source of truth).
+# Keep the module-level name for tests that patch ``SKILLS_DIR``; runtime
+# code must use ``_skills_dir()`` so late HERMES_HOME changes
+# (e.g. SkillsBench ``--isolate-hermes-home``) are honored.
 HERMES_HOME = get_hermes_home()
-SKILLS_DIR = HERMES_HOME / "skills"
+SKILLS_DIR = get_skills_dir()
+_SKILLS_DIR_AT_IMPORT = SKILLS_DIR
 
 MAX_NAME_LENGTH = 64
 MAX_DESCRIPTION_LENGTH = 1024
 
 
+def _skills_dir() -> Path:
+    """Resolve the local skills directory at call time.
+
+    Honors ``unittest.mock.patch`` of ``SKILLS_DIR``. When the attribute still
+    holds the import-time snapshot (stale after ``HERMES_HOME`` is rewritten),
+    re-resolves via :func:`get_skills_dir`.
+
+    Compare by value (not identity): tests and refresh helpers may rebind
+    equal ``Path`` objects that are not the original import-time instance.
+    """
+    if SKILLS_DIR != _SKILLS_DIR_AT_IMPORT:
+        return Path(SKILLS_DIR)
+    return get_skills_dir()
+
+
 def _is_local_skill(skill_path: Path) -> bool:
-    """Check if a skill path is within the local SKILLS_DIR.
+    """Check if a skill path is within the local skills directory.
 
     Skills found in external_dirs are read-only from the agent's perspective.
     """
     try:
-        skill_path.resolve().relative_to(SKILLS_DIR.resolve())
+        skill_path.resolve().relative_to(_skills_dir().resolve())
         return True
     except ValueError:
         return False
@@ -227,9 +246,10 @@ def _validate_content_size(content: str, label: str = "SKILL.md") -> Optional[st
 
 def _resolve_skill_dir(name: str, category: str = None) -> Path:
     """Build the directory path for a new skill, optionally under a category."""
+    root = _skills_dir()
     if category:
-        return SKILLS_DIR / category / name
-    return SKILLS_DIR / name
+        return root / category / name
+    return root / name
 
 
 def _find_skill(name: str) -> Optional[Dict[str, Any]]:
@@ -399,7 +419,7 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
     result = {
         "success": True,
         "message": f"Skill '{name}' created.",
-        "path": str(skill_dir.relative_to(SKILLS_DIR)),
+        "path": str(skill_dir.relative_to(_skills_dir())),
         "skill_md": str(skill_md),
     }
     if category:
@@ -562,9 +582,9 @@ def _delete_skill(name: str) -> Dict[str, Any]:
     skill_dir = existing["path"]
     shutil.rmtree(skill_dir)
 
-    # Clean up empty category directories (don't remove SKILLS_DIR itself)
+    # Clean up empty category directories (don't remove the skills root itself)
     parent = skill_dir.parent
-    if parent != SKILLS_DIR and parent.exists() and not any(parent.iterdir()):
+    if parent != _skills_dir() and parent.exists() and not any(parent.iterdir()):
         parent.rmdir()
 
     return {
@@ -748,7 +768,9 @@ SKILL_MANAGE_SCHEMA = {
     "description": (
         "Manage skills (create, update, delete). Skills are your procedural "
         "memory — reusable approaches for recurring task types. "
-        f"New skills go to {display_hermes_home()}/skills/; existing skills can be modified wherever they live.\n\n"
+        "New skills go to the active HERMES_HOME/skills/ directory "
+        "(honors HERMES_HOME / profiles / experiment isolation); "
+        "existing skills can be modified wherever they live.\n\n"
         "Actions: create (full SKILL.md + optional category), "
         "patch (old_string/new_string — preferred for fixes), "
         "edit (full SKILL.md rewrite — major overhauls only), "
