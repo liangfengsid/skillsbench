@@ -101,6 +101,10 @@ yc-bench = ["yc-bench @ git+https://github.com/collinear-ai/yc-bench.git@bfb0c88
 # Version aligned with benchmark/skillsbench/pyproject.toml. Not included in [all].
 # The subproject declares requires-python >= 3.12; use 3.12+ when developing tasks there.
 skillsbench = ["benchflow>=0.3.0a7,<1"]
+# Harbor (`benchmark/harbor_adapter`): official Terminal-Bench harness.
+# Not included in [all] — requires Docker (or Modal/Daytona) at runtime.
+# `pip install -e ".[harbor]"` then optionally `pip install "harbor[modal]"`.
+harbor = ["harbor>=0.21,<1"]
 all = [
   "hermes-agent[modal]",
   "hermes-agent[daytona]",

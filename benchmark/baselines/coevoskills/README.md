@@ -1,4 +1,4 @@
-# CoEvoSkills baseline (SkillsBench)
+# CoEvoSkills baseline (SkillsBench + Terminal-Bench)
 
 Isolated reimplementation of **CoEvoSkills** (Zhang et al., [arXiv:2604.01687](https://arxiv.org/abs/2604.01687)) for use as a SkillsBench baseline inside Hermes.
 
@@ -21,7 +21,8 @@ benchmark/baselines/coevoskills/
   generator.py / verifier.py / oracle.py / prompts.py / skill_io.py
   hermes_backend.py
   run_skillsbench.py     # single-task evolve / oracle / hermes-eval
-  run_split_protocol.py  # split-aware evolve + frozen library + frozen eval
+  run_split_protocol.py  # SkillsBench split-aware evolve + frozen library + frozen eval
+  run_terminalbench_protocol.py  # Terminal-Bench Harbor evolve + frozen eval
 ```
 
 Per-task workspaces (default without `--experiment-dir`):
@@ -184,6 +185,46 @@ Per-task JSONL rows include `duration_sec`. Batch runs also append a
 A **user iteration** = one completed Hermes API turn (`api_calls` / `pass_at_turn` index).
 
 JSONL envelopes from this baseline use `schema: skillsbench.baseline_run.v1` with `method: coevoskills` and `phase: evolve|frozen_eval`, plus the same `evaluation` / `pass_at_turn` / `run_conversation_result` fields as Hermes so future baselines can plug into the same aggregators.
+
+## Terminal-Bench
+
+Official Harbor eval (same sandbox + `tests/test.sh` as Hermes
+`run_terminalbench_with_harbor.py`). No pass@k.
+
+```bash
+# Evolve on stratified train (Harbor sandbox + tests/test.sh oracle)
+python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \
+  --evolve \
+  --experiment-dir benchmark/runs/coevo_tb_exp1 \
+  --split-file benchmark/terminalbench_splits/stratified_v1.json \
+  --split-part train \
+  --model Qwen/Qwen3.6-27B \
+  --log-jsonl benchmark/runs/coevo_tb_exp1/evolve_train.jsonl
+
+# Freeze library, then frozen eval on test (HermesHarborAgent + skill overlay)
+python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \
+  --build-library --frozen-eval \
+  --experiment-dir benchmark/runs/coevo_tb_exp1 \
+  --split-part test \
+  --model Qwen/Qwen3.6-27B \
+  --log-jsonl benchmark/runs/coevo_tb_exp1/frozen_test.jsonl \
+  --aggregate-out benchmark/runs/coevo_tb_exp1/frozen_test_summary.json
+```
+
+Compare to Hermes (same split, `--env`, isolate, `--no-hot-pool`, no pass@k):
+
+```bash
+python3 benchmark/scripts/run_terminalbench_with_harbor.py --all \
+  --split-file benchmark/terminalbench_splits/stratified_v1.json \
+  --split-part test \
+  --experiment-dir benchmark/runs/tb_harbor_test \
+  --isolate-hermes-home --no-hot-pool \
+  --log-jsonl benchmark/runs/tb_harbor_test/runs.jsonl --print-summary
+```
+
+Frozen eval uses the same `HermesHarborAgent` as the Hermes driver; only isolated
+`HERMES_HOME` skills differ (CoEvo frozen library overlay). Aggregate **without**
+`--pass-k`.
 
 ## Hyperparameters (paper Table A1 defaults)
 

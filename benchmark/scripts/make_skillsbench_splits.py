@@ -4,7 +4,8 @@ Build reproducible SkillsBench train/test (and optional val) splits.
 
 Protocols:
   - difficulty_stratified: match easy/medium/hard mix across train/test (default 75/25)
-  - category_holdout: entire categories (>= min size) go to test only
+  - category_stratified: match category mix across train/test (for datasets without difficulty)
+  - category_holdout: entire categories (>= min size, or an explicit list) go to test only
 
 Examples (from Hermes repo root):
 
@@ -137,18 +138,53 @@ def difficulty_stratified_split(
     }
 
 
+def category_stratified_split(
+    tasks: Sequence[Dict[str, Any]],
+    *,
+    seed: int,
+    train_ratio: float = 0.70,
+    val_ratio: float = 0.15,
+    test_ratio: float = 0.15,
+) -> Dict[str, List[str]]:
+    """Same partition math as difficulty_stratified, keyed by ``category``."""
+    by_cat: Dict[str, List[str]] = defaultdict(list)
+    for row in tasks:
+        by_cat[row["category"]].append(row["task_id"])
+
+    rng = random.Random(seed)
+    train: List[str] = []
+    val: List[str] = []
+    test: List[str] = []
+    for category in sorted(by_cat):
+        ids = sorted(by_cat[category])
+        rng.shuffle(ids)
+        n_train, n_val, n_test = _partition_counts(len(ids), train_ratio, val_ratio, test_ratio)
+        train.extend(ids[:n_train])
+        val.extend(ids[n_train : n_train + n_val])
+        test.extend(ids[n_train + n_val : n_train + n_val + n_test])
+    return {
+        "train": sorted(train),
+        "val": sorted(val),
+        "test": sorted(test),
+    }
+
+
 def category_holdout_split(
     tasks: Sequence[Dict[str, Any]],
     *,
     min_category_tasks: int = 3,
+    holdout_categories: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     by_cat: Dict[str, List[str]] = defaultdict(list)
     for row in tasks:
         by_cat[row["category"]].append(row["task_id"])
 
-    held_out_categories = sorted(
-        cat for cat, ids in by_cat.items() if len(ids) >= min_category_tasks
-    )
+    if holdout_categories:
+        held_out_categories = sorted({str(c) for c in holdout_categories if str(c) in by_cat})
+    else:
+        held_out_categories = sorted(
+            cat for cat, ids in by_cat.items() if len(ids) >= min_category_tasks
+        )
     train: List[str] = []
     test: List[str] = []
     for cat, ids in by_cat.items():
@@ -173,6 +209,7 @@ def _split_stats(tasks: Sequence[Dict[str, Any]], split: Dict[str, List[str]]) -
         return {
             "count": len(ids),
             "difficulty": dict(sorted(diffs.items())),
+            "category": dict(sorted(cats.items())),
             "unique_categories": len(cats),
         }
 
@@ -192,6 +229,8 @@ def build_split_document(
     val_ratio: float,
     test_ratio: float,
     min_category_tasks: int,
+    holdout_categories: Optional[Sequence[str]] = None,
+    schema: str = "skillsbench.split.v1",
 ) -> Dict[str, Any]:
     if protocol == "difficulty_stratified":
         parts = difficulty_stratified_split(
@@ -208,8 +247,27 @@ def build_split_document(
                 else {"train": train_ratio, "val": val_ratio, "test": test_ratio}
             ),
         }
+    elif protocol == "category_stratified":
+        parts = category_stratified_split(
+            tasks,
+            seed=seed,
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+            test_ratio=test_ratio,
+        )
+        extra = {
+            "ratios": (
+                {"train": train_ratio, "test": test_ratio}
+                if val_ratio <= 0
+                else {"train": train_ratio, "val": val_ratio, "test": test_ratio}
+            ),
+        }
     elif protocol == "category_holdout":
-        holdout = category_holdout_split(tasks, min_category_tasks=min_category_tasks)
+        holdout = category_holdout_split(
+            tasks,
+            min_category_tasks=min_category_tasks,
+            holdout_categories=holdout_categories,
+        )
         parts = {
             "train": holdout["train"],
             "val": [],
@@ -235,11 +293,12 @@ def build_split_document(
         raise RuntimeError(f"Split partitions overlap: {sorted(overlap)!r}")
 
     doc: Dict[str, Any] = {
-        "schema": "skillsbench.split.v1",
+        "schema": schema,
         "protocol": protocol,
         "seed": seed,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "skillsbench_tasks_dir": None,
+        "tasks_dir": None,
         "total_tasks": len(tasks),
         "train": parts["train"],
         "test": parts["test"],
@@ -288,6 +347,7 @@ def write_defaults(out_dir: Path, tasks_dir: Path, seed: int) -> None:
             min_category_tasks=int(kwargs.get("min_category_tasks", 3)),
         )
         doc["skillsbench_tasks_dir"] = str(tasks_dir.resolve())
+        doc["tasks_dir"] = str(tasks_dir.resolve())
         doc["name"] = filename.replace(".json", "")
         out_path = out_dir / filename
         out_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -307,7 +367,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--protocol",
-        choices=("difficulty_stratified", "category_holdout"),
+        choices=("difficulty_stratified", "category_stratified", "category_holdout"),
         default="difficulty_stratified",
     )
     parser.add_argument("--seed", type=int, default=42)
@@ -324,6 +384,12 @@ def main() -> int:
         type=int,
         default=3,
         help="category_holdout: categories with this many tasks (or more) go entirely to test.",
+    )
+    parser.add_argument(
+        "--holdout-categories",
+        type=str,
+        default=None,
+        help="category_holdout: comma-separated category names to hold out (overrides --min-category-tasks).",
     )
     parser.add_argument(
         "-o",
@@ -353,6 +419,9 @@ def main() -> int:
         write_defaults(Path(args.out_dir).expanduser(), tasks_dir, args.seed)
         return 0
 
+    holdout: Optional[List[str]] = None
+    if args.holdout_categories:
+        holdout = [p.strip() for p in args.holdout_categories.split(",") if p.strip()]
     doc = build_split_document(
         protocol=args.protocol,
         tasks=tasks,
@@ -361,8 +430,10 @@ def main() -> int:
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         min_category_tasks=args.min_category_tasks,
+        holdout_categories=holdout,
     )
     doc["skillsbench_tasks_dir"] = str(tasks_dir)
+    doc["tasks_dir"] = str(tasks_dir)
     doc["name"] = args.output or f"{args.protocol}_seed{args.seed}"
 
     text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"

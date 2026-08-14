@@ -18,16 +18,24 @@ class SkillGenerator:
         instruction: str,
         paths: Dict[str, Path],
         env_hint: str = "",
+        prompt_mode: str = "host",
     ):
         self.cfg = cfg
         self.hermes_root = hermes_root
         self.instruction = instruction
         self.paths = paths
         self.env_hint = env_hint
+        self.prompt_mode = prompt_mode
         self.history: List[Dict[str, Any]] = []
         self._agent = None
 
     def _system(self) -> str:
+        if self.prompt_mode == "harbor":
+            return prompts.generator_system_prompt_terminalbench(
+                instruction=self.instruction,
+                skills_dir=str(self.paths["skills"]),
+                artifacts_dir=str(self.paths["artifacts"]),
+            )
         return prompts.generator_system_prompt(
             instruction=self.instruction,
             skills_dir=str(self.paths["skills"]),

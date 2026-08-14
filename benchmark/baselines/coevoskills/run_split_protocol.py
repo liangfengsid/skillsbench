@@ -10,6 +10,8 @@ CoEvoSkills train/test protocol on SkillsBench splits.
 JSONL rows use ``schema=skillsbench.baseline_run.v1`` with the same metric fields
 as Hermes (``evaluation``, ``pass_at_turn``, ``run_conversation_result``) so
 ``aggregate_skillsbench_runs.py`` / ``analyze_hot_pool_runs.py`` work unchanged.
+Terminal-Bench eval is Harbor-only (``run_terminalbench_with_harbor.py``); this
+protocol is SkillsBench.
 
 Examples
 --------
@@ -161,6 +163,7 @@ def run_frozen_eval_task(
     quiet_mode: bool,
     install_into_task: bool,
     per_task_skills_dir: Optional[Path] = None,
+    benchmark_label: str = "SkillsBench",
 ) -> Dict[str, Any]:
     """Fresh Hermes solve with frozen skills + optional pass@k host evals."""
     _ensure_path(hermes_root)
@@ -177,7 +180,7 @@ def run_frozen_eval_task(
     skills_text = _library_skills_prompt(skills_src) if skills_src.is_dir() else "(no skills)"
     prompt_base = str((skillsbench_root / "tasks").resolve())
     user = (
-        f"Complete the SkillsBench task at {prompt_base}/{task_id}, "
+        f"Complete the {benchmark_label} task at {prompt_base}/{task_id}, "
         f"following instruction.md. Produce outputs in that task directory.\n\n"
         f"Frozen CoEvoSkills library (do not create new skills; reuse these):\n"
         f"Path: {skills_src}\n\n{skills_text}\n\n"
@@ -263,6 +266,7 @@ def run_frozen_eval_task(
         "schema": "skillsbench.baseline_run.v1",
         "method": "coevoskills",
         "phase": "frozen_eval",
+        "benchmark": benchmark_label.lower().replace(" ", "-"),
         "ts_end_iso": datetime.now(timezone.utc).isoformat(),
         "duration_sec": round(elapsed, 6),
         "skillsbench_task_id": task_id,
@@ -286,21 +290,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     repo = _repo_root()
     p = argparse.ArgumentParser(
         description=(
-            "CoEvoSkills: evolve on a SkillsBench split, freeze skills, "
-            "evaluate on another split with shared pass@k metrics."
+            "CoEvoSkills: evolve on a SkillsBench split, freeze "
+            "skills, evaluate on another split with shared pass@k metrics."
         )
     )
     p.add_argument("--hermes-root", type=Path, default=repo)
     p.add_argument(
         "--skillsbench-root",
+        "--dataset-root",
         type=Path,
-        default=repo / "benchmark" / "skillsbench",
+        default=None,
+        dest="skillsbench_root",
+        help="SkillsBench checkout root containing tasks/ (default: benchmark/skillsbench).",
     )
     p.add_argument(
         "--split-file",
         type=Path,
-        default=repo / "benchmark" / "skillsbench_splits" / "stratified_v1.json",
-        help="Split JSON (default: stratified_v1.json).",
+        default=None,
+        help="Split JSON (default: <dataset>_splits/stratified_v1.json).",
     )
     p.add_argument(
         "--split-part",
@@ -450,6 +457,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--end-task-index", type=int, default=None)
     args = p.parse_args(argv)
 
+    if args.skillsbench_root is None:
+        args.skillsbench_root = repo / "benchmark" / "skillsbench"
+    if args.split_file is None:
+        args.split_file = repo / "benchmark" / "skillsbench_splits" / "stratified_v1.json"
+    dataset_dirname = "skillsbench"
+    benchmark_label = "SkillsBench"
+
     if args.reset_task_workspaces and not args.experiment_dir:
         p.error("--reset-task-workspaces requires --experiment-dir")
 
@@ -521,6 +535,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if args.isolate_hermes_home
                 else None
             ),
+            dataset_dirname=dataset_dirname,
         )
         if copy_tasks:
             skillsbench_root = Path(manifest["skillsbench_root"])
@@ -636,6 +651,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "schema": "skillsbench.baseline_run.v1",
                     "method": "coevoskills",
                     "phase": "evolve",
+                    "benchmark": "skillsbench",
                     "ts_end_iso": datetime.now(timezone.utc).isoformat(),
                     "duration_sec": round(time.perf_counter() - t0, 6),
                     "skillsbench_task_id": task_id,
@@ -767,6 +783,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     quiet_mode=args.quiet,
                     install_into_task=args.install_skills_into_task,
                     per_task_skills_dir=per_task,
+                    benchmark_label=benchmark_label,
                 )
                 envelope["split_file"] = str(args.split_file.resolve())
                 envelope["split_part"] = args.split_part

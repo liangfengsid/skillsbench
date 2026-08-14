@@ -12,6 +12,8 @@ ERROR_SCHEMAS = frozenset(
     {
         "skillsbench.hermes_run_error.v1",
         "skillsbench.baseline_run_error.v1",
+        "terminalbench.hermes_run_error.v1",
+        "terminalbench.baseline_run_error.v1",
     }
 )
 

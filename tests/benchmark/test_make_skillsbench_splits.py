@@ -34,6 +34,35 @@ def test_difficulty_stratified_covers_all_tasks():
     assert not (set(split["train"]) & set(split["test"]))
 
 
+def test_category_stratified_covers_all_tasks():
+    mod = _load_module()
+    tasks = [
+        {"task_id": "a", "category": "Software", "difficulty": "unknown"},
+        {"task_id": "b", "category": "Software", "difficulty": "unknown"},
+        {"task_id": "c", "category": "ML", "difficulty": "unknown"},
+        {"task_id": "d", "category": "ML", "difficulty": "unknown"},
+        {"task_id": "e", "category": "Science", "difficulty": "unknown"},
+    ]
+    split = mod.category_stratified_split(tasks, seed=42, train_ratio=0.75, val_ratio=0.0, test_ratio=0.25)
+    assigned = sorted(split["train"] + split["val"] + split["test"])
+    assert assigned == ["a", "b", "c", "d", "e"]
+    assert not (set(split["train"]) & set(split["test"]))
+    assert split["test"], "expected a non-empty test partition"
+
+
+def test_category_holdout_explicit_list():
+    mod = _load_module()
+    tasks = [
+        {"task_id": "h1", "category": "Hardware", "difficulty": "unknown"},
+        {"task_id": "s1", "category": "Software", "difficulty": "unknown"},
+        {"task_id": "m1", "category": "Media", "difficulty": "unknown"},
+    ]
+    split = mod.category_holdout_split(tasks, holdout_categories=["Hardware", "Media"])
+    assert split["test"] == ["h1", "m1"]
+    assert split["train"] == ["s1"]
+    assert split["held_out_categories"] == ["Hardware", "Media"]
+
+
 def test_category_holdout_keeps_categories_disjoint():
     mod = _load_module()
     tasks = [

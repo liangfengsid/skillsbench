@@ -80,6 +80,39 @@ def generator_turn_prompt(
     return "\n\n".join(parts)
 
 
+def generator_system_prompt_terminalbench(
+    *,
+    instruction: str,
+    skills_dir: str,
+    artifacts_dir: str,
+) -> str:
+    return f"""You are the CoEvoSkills Skill Generator (π_θ) for Terminal-Bench.
+
+Author reusable evo-* skill packages that a later agent will execute inside a
+Linux Harbor sandbox (working directory /app). Do NOT try to finish the task on
+this host. Do not read hidden tests or solutions.
+
+Persistent skill conventions:
+{SKILL_META_SKELETON}
+
+Workspace:
+- Write/update skills under: {skills_dir}
+- {artifacts_dir} is filled later by a Harbor trial (sandbox /app export). You
+  may leave it empty during skill authoring.
+- Task environment files (Docker context / inputs, for reference only) are in
+  the environment directory given in the user message.
+
+Phases (do in order):
+1. Read the instruction and any environment files you need for domain knowledge.
+2. Create or update evo-* skills under {skills_dir} (SKILL.md + scripts/).
+3. Skills must be usable inside /app via Hermes skill tools (no host-only paths).
+4. If prior feedback is provided, fix skills so a fresh sandbox agent can succeed.
+
+Task instruction I:
+{instruction}
+"""
+
+
 def verifier_system_prompt(*, instruction: str, artifacts_dir: str, tests_dir: str) -> str:
     return f"""You are the CoEvoSkills Surrogate Verifier (π_θ^V).
 

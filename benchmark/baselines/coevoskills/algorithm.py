@@ -28,6 +28,10 @@ def run_coevo_skills(
     skillsbench_root: Path,
     work_root: Path,
     progress: bool = True,
+    env_hint: Optional[str] = None,
+    prompt_mode: str = "host",
+    materialize_fn=None,
+    oracle_fn=None,
 ) -> Dict[str, Any]:
     """
     Execute Alg. 1 for one SkillsBench task.
@@ -39,12 +43,13 @@ def run_coevo_skills(
     paths = skill_io.ensure_workspace(work_root, task_id)
     skill_io.copy_task_environment(task_dir, paths["env"])
 
-    env_hint = (
-        f"Input files are under {paths['env']}. "
-        f"If doc/ or data/ exist there, read them fully before authoring skills. "
-        f"Write ALL task outputs under {paths['artifacts']} (same relative layout "
-        f"the instruction / tests expect under /root or the task directory)."
-    )
+    if env_hint is None:
+        env_hint = (
+            f"Input files are under {paths['env']}. "
+            f"If doc/ or data/ exist there, read them fully before authoring skills. "
+            f"Write ALL task outputs under {paths['artifacts']} (same relative layout "
+            f"the instruction / tests expect under /root or the task directory)."
+        )
 
     def _p(msg: str) -> None:
         if not progress:
@@ -62,6 +67,7 @@ def run_coevo_skills(
         instruction=instruction,
         paths=paths,
         env_hint=env_hint,
+        prompt_mode=prompt_mode,
     )
     # Fresh verifier session — information isolation
     verifier = SurrogateVerifier(
@@ -98,6 +104,35 @@ def run_coevo_skills(
                 "final_response_tail": (gen_out.get("final_response") or "")[-1500:],
             }},
         )
+
+        last_mat: Optional[Dict[str, Any]] = None
+        if materialize_fn is not None:
+            _p(f"  [evolve:{task_id}] surrogate_iter={m} → Harbor materialize")
+            try:
+                mat = materialize_fn(task_id=task_id, paths=paths, iteration=m) or {}
+            except Exception as exc:
+                mat = {
+                    "evaluation": {
+                        "task_success": False,
+                        "reward": 0.0,
+                        "ran": False,
+                        "error": str(exc),
+                    }
+                }
+            gen_out["materialize"] = {
+                "task_success": (mat.get("evaluation") or {}).get("task_success"),
+                "error": (mat.get("evaluation") or {}).get("error"),
+            }
+            skill_io.append_history(
+                paths["history"],
+                {
+                    "type": "materialize",
+                    "m": m,
+                    "n": n,
+                    "evaluation_opaque": oracle_mod.opaque_signal(mat.get("evaluation") or {}),
+                },
+            )
+            last_mat = mat
 
         _p(
             f"  [evolve:{task_id}] surrogate_iter={m} → verifier "
@@ -136,14 +171,22 @@ def run_coevo_skills(
             f"  [evolve:{task_id}] surrogate PASS → opaque oracle "
             f"({n}/{cfg.max_oracle_iters})"
         )
-        full_eval = oracle_mod.run_ground_truth_oracle(
-            hermes_root=hermes_root,
-            skillsbench_root=skillsbench_root,
-            task_id=task_id,
-            artifacts_dir=paths["artifacts"],
-            timeout_sec=cfg.eval_timeout_sec,
-            sync_into_task=False,
-        )
+        if oracle_fn is not None:
+            full_eval = oracle_fn(
+                task_id=task_id,
+                paths=paths,
+                iteration=m,
+                last_materialize=last_mat,
+            )
+        else:
+            full_eval = oracle_mod.run_ground_truth_oracle(
+                hermes_root=hermes_root,
+                skillsbench_root=skillsbench_root,
+                task_id=task_id,
+                artifacts_dir=paths["artifacts"],
+                timeout_sec=cfg.eval_timeout_sec,
+                sync_into_task=False,
+            )
         opaque = oracle_mod.opaque_signal(full_eval)
         final_oracle = {"opaque": opaque, "full": full_eval}
         skill_io.append_history(

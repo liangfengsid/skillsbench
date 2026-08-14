@@ -52,8 +52,10 @@ hermes-agent/
 ├── cron/                 # Scheduler — jobs.py, scheduler.py
 ├── environments/         # RL training environments (Atropos)
 ├── benchmark/          # Benchmark drivers — see benchmark/README.md
-│   ├── scripts/        # run_skillsbench_with_hermes.py, AppWorld, analyzers
-│   └── skillsbench/    # SkillsBench (BenchFlow); see benchmark/skillsbench/README.md
+│   ├── scripts/        # run_skillsbench_with_hermes.py, run_terminalbench_with_harbor.py, AppWorld, analyzers
+│   ├── harbor_adapter/ # Hermes Harbor BaseAgent (official Terminal-Bench eval)
+│   ├── skillsbench/    # SkillsBench (BenchFlow); see benchmark/skillsbench/README.md
+│   └── terminal-bench/ # Terminal-Bench (Harbor); see benchmark/README.md
 ├── scripts/              # run_tests.sh, release.py, auxiliary scripts
 ├── website/              # Docusaurus docs site
 └── tests/                # Pytest suite (~15k tests across ~700 files as of Apr 2026)

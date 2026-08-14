@@ -69,6 +69,8 @@ def latest_record_per_task(records: Sequence[dict]) -> Dict[str, dict]:
         if rec.get("schema") in (
             "skillsbench.hermes_run_error.v1",
             "skillsbench.baseline_run_error.v1",
+            "terminalbench.hermes_run_error.v1",
+            "terminalbench.baseline_run_error.v1",
         ):
             continue
         tid = rec.get("skillsbench_task_id") or rec.get("task_id")
@@ -299,7 +301,12 @@ def aggregate_skillsbench_metrics(
         1
         for r in records
         if r.get("schema")
-        in ("skillsbench.hermes_run_error.v1", "skillsbench.baseline_run_error.v1")
+        in (
+            "skillsbench.hermes_run_error.v1",
+            "skillsbench.baseline_run_error.v1",
+            "terminalbench.hermes_run_error.v1",
+            "terminalbench.baseline_run_error.v1",
+        )
     )
 
     if not by_task:

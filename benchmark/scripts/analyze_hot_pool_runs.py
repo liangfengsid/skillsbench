@@ -94,10 +94,10 @@ def _get_messages(record: dict) -> List[dict]:
 
 
 def enrich_task(record: dict) -> Optional[dict]:
-    tid = record.get("skillsbench_task_id")
+    tid = record.get("skillsbench_task_id") or record.get("task_id")
     if not tid or not isinstance(tid, str):
         return None
-    if record.get("schema") == "skillsbench.hermes_run_error.v1":
+    if str(record.get("schema") or "").endswith("_error.v1"):
         return {
             "task_id": tid,
             "error": str(record.get("error") or "")[:500],

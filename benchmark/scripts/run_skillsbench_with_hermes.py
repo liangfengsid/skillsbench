@@ -106,6 +106,22 @@ _DEFAULT_SKILLSBENCH = _bundled_skillsbench_root()
 DEFAULT_HERMES_ROOT = _DEFAULT_HERMES
 DEFAULT_PROMPT_TASKS_BASE = str((_DEFAULT_SKILLSBENCH / "tasks").resolve())
 
+
+def benchmark_presets() -> Dict[str, Dict[str, Any]]:
+    bench = _benchmark_dir()
+    return {
+        "skillsbench": {
+            "root": bench / "skillsbench",
+            "split_file": bench / "skillsbench_splits" / "stratified_v1.json",
+            "schema": "skillsbench.hermes_run.v1",
+            "error_schema": "skillsbench.hermes_run_error.v1",
+            "batch_schema": "skillsbench.batch_timing.v1",
+            "label": "SkillsBench",
+            "platform": "skillsbench-batch",
+            "dataset_dirname": "skillsbench",
+        },
+    }
+
 SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX = (
     "\n\n**SkillsBench batch context (platform=skillsbench-batch):**\n"
     "The conversation above was a benchmark task run, not a casual user chat.\n\n"
@@ -316,6 +332,9 @@ def run_one_task(
     eval_timeout_sec: float = 600.0,
     runtime: Optional[Dict[str, Any]] = None,
     config_hermes_home: Optional[Path] = None,
+    benchmark_id: str = "skillsbench",
+    run_schema: str = "skillsbench.hermes_run.v1",
+    platform: str = "skillsbench-batch",
 ) -> Dict[str, Any]:
     apply_hot_pool_cli_overrides(
         hot_pool=hot_pool,
@@ -346,7 +365,7 @@ def run_one_task(
         skip_context_files=skip_context_files,
         skip_memory=skip_memory,
         save_trajectories=save_trajectories,
-        platform="skillsbench-batch",
+        platform=platform,
     )
     try:
         from skillsbench_console_window import get_active_window
@@ -369,7 +388,7 @@ def run_one_task(
         )
 
     user_message = build_user_message(prompt_tasks_base, task_id)
-    hermes_task_id = f"skillsbench-{task_id}"
+    hermes_task_id = f"{benchmark_id}-{task_id}"
 
     pass_tracker = None
     if pass_k_turns:
@@ -407,11 +426,13 @@ def run_one_task(
     elapsed = time.perf_counter() - t0
 
     envelope: Dict[str, Any] = {
-        "schema": "skillsbench.hermes_run.v1",
+        "schema": run_schema,
+        "benchmark": benchmark_id,
         "ts_start_iso": None,  # filled by caller
         "ts_end_iso": datetime.now(timezone.utc).isoformat(),
         "duration_sec": round(elapsed, 6),
         "skillsbench_task_id": task_id,
+        "task_id": task_id,
         "skillsbench_root": str(skillsbench_root),
         "hermes_root": str(hermes_root),
         "hermes_conversation_task_id": hermes_task_id,
@@ -529,9 +550,9 @@ def format_run_summary(envelope: Dict[str, Any]) -> str:
     return " ".join(parts)
 
 
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run Hermes AIAgent on one or all SkillsBench tasks.",
+        description="Run Hermes AIAgent on SkillsBench tasks (host pytest eval).",
     )
     g = parser.add_mutually_exclusive_group(required=False)
     g.add_argument(
@@ -554,8 +575,8 @@ def main() -> int:
         type=str,
         default=str(_bundled_skillsbench_root()),
         help=(
-            "SkillsBench checkout root (default: this repo's benchmark/skillsbench, "
-            "sibling of benchmark/scripts)."
+            "SkillsBench checkout root (default: this repo's "
+            "benchmark/skillsbench)."
         ),
     )
     parser.add_argument(
@@ -794,8 +815,9 @@ def main() -> int:
         default=None,
         metavar="PATH",
         help=(
-            "JSON split from make_skillsbench_splits.py. With --all, run only tasks "
-            "in the selected --split-part instead of the full task list."
+            "JSON split from make_skillsbench_splits.py. "
+            "With --all, run only tasks in the selected --split-part instead of the "
+            "full task list."
         ),
     )
     parser.add_argument(
@@ -810,9 +832,9 @@ def main() -> int:
         default=None,
         metavar="DIR",
         help=(
-            "Isolated experiment workspace for SkillsBench *task* files. Copies "
-            "selected tasks under DIR/skillsbench/tasks/, points --skillsbench-root "
-            "/ --prompt-tasks-base there, and defaults --hot-pool-persist to "
+            "Isolated experiment workspace for *task* files. Copies selected tasks "
+            "under DIR/<dataset>/tasks/, points --skillsbench-root / "
+            "--prompt-tasks-base there, and defaults --hot-pool-persist to "
             "DIR/hot_pool.json. Does NOT rewrite HERMES_HOME by default — Hermes "
             "keeps using ~/.hermes (default skills). Opt into Hermes isolation with "
             "--isolate-hermes-home."
@@ -842,7 +864,8 @@ def main() -> int:
         ),
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    preset = benchmark_presets()["skillsbench"]
     if args.reset_task_workspaces and not args.experiment_dir:
         parser.error("--reset-task-workspaces requires --experiment-dir")
     source_skillsbench_root = _expand(args.skillsbench_root)
@@ -926,6 +949,8 @@ def main() -> int:
         run_ids = [args.task]
 
     prompt_tasks_base = args.prompt_tasks_base
+    if prompt_tasks_base == DEFAULT_PROMPT_TASKS_BASE:
+        prompt_tasks_base = str((skillsbench_root / "tasks").resolve())
     experiment_dir: Optional[Path] = None
     # Resolve LLM credentials against the real ~/.hermes *before* any
     # --experiment-dir isolation rewrites HERMES_HOME (empty experiment homes
@@ -976,6 +1001,7 @@ def main() -> int:
             isolate_hermes_home=bool(args.isolate_hermes_home),
             apply_hermes_home_env=bool(args.isolate_hermes_home),
             source_hermes_home=config_hermes_home,
+            dataset_dirname=str(preset["dataset_dirname"]),
         )
         skillsbench_root = Path(manifest["skillsbench_root"])
         prompt_tasks_base = str(manifest["prompt_tasks_base"])
@@ -1101,11 +1127,13 @@ def main() -> int:
                 )
                 elapsed = time.perf_counter() - t0
                 envelope = {
-                    "schema": "skillsbench.hermes_run.v1",
+                    "schema": preset["schema"],
+                    "benchmark": "skillsbench",
                     "ts_start_iso": ts_start,
                     "ts_end_iso": datetime.now(timezone.utc).isoformat(),
                     "duration_sec": round(elapsed, 6),
                     "skillsbench_task_id": tid,
+                    "task_id": tid,
                     "skillsbench_root": str(skillsbench_root),
                     "hermes_root": str(hermes_root),
                     "evaluate_only": True,
@@ -1134,6 +1162,9 @@ def main() -> int:
                     eval_timeout_sec=args.eval_timeout_sec,
                     runtime=shared_runtime,
                     config_hermes_home=config_hermes_home,
+                    benchmark_id="skillsbench",
+                    run_schema=str(preset["schema"]),
+                    platform=str(preset["platform"]),
                 )
                 envelope["ts_start_iso"] = ts_start
                 if args.evaluate_after_run:
@@ -1180,10 +1211,12 @@ def main() -> int:
         except Exception as e:
             any_failed = True
             err = {
-                "schema": "skillsbench.hermes_run_error.v1",
+                "schema": preset["error_schema"],
+                "benchmark": "skillsbench",
                 "ts_start_iso": ts_start,
                 "ts_end_iso": datetime.now(timezone.utc).isoformat(),
                 "skillsbench_task_id": tid,
+                "task_id": tid,
                 "error": repr(e),
                 "traceback": traceback.format_exc(),
             }
@@ -1199,7 +1232,8 @@ def main() -> int:
                         log_path,
                         json_safe(
                             {
-                                "schema": "skillsbench.batch_timing.v1",
+                                "schema": preset["batch_schema"],
+                                "benchmark": "skillsbench",
                                 "method": "hermes",
                                 "phase": "hermes",
                                 "ts_end_iso": datetime.now(timezone.utc).isoformat(),
@@ -1215,7 +1249,8 @@ def main() -> int:
             log_path,
             json_safe(
                 {
-                    "schema": "skillsbench.batch_timing.v1",
+                    "schema": preset["batch_schema"],
+                    "benchmark": "skillsbench",
                     "method": "hermes",
                     "phase": "hermes",
                     "ts_end_iso": datetime.now(timezone.utc).isoformat(),
@@ -1234,7 +1269,7 @@ def main() -> int:
             split_part=args.split_part if split_file_path else None,
         )
         print(
-            f"\n=== SkillsBench batch summary ({len(batch_envelopes)} tasks this run; "
+            f"\n=== {preset['label']} batch summary ({len(batch_envelopes)} tasks this run; "
             f"{len(skipped)} skipped via --resume) ===",
             flush=True,
         )

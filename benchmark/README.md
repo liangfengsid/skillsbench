@@ -1,6 +1,6 @@
 # Hermes benchmark drivers
 
-Hermes ships evaluation harnesses under `benchmark/` for running **`AIAgent`** against public benchmarks and comparing runs. All **Hermes-specific drivers** live in [`scripts/`](scripts/). Vendored benchmark trees (`skillsbench/`, `appworld/`) keep their upstream docs.
+Hermes ships evaluation harnesses under `benchmark/` for running **`AIAgent`** against public benchmarks and comparing runs. All **Hermes-specific drivers** live in [`scripts/`](scripts/). Vendored benchmark trees (`skillsbench/`, `terminal-bench/`, `appworld/`) keep their upstream docs.
 
 **Run commands from the Hermes repo root** unless noted otherwise.
 
@@ -13,6 +13,7 @@ source .venv/bin/activate   # or: source venv/bin/activate
 - **Hermes config:** `~/.hermes/config.yaml` and API keys in `~/.hermes/.env` (see [Configuration](https://hermes-agent.nousresearch.com/docs/user-guide/configuration)).
 - **Import path:** drivers prepend `--hermes-root` (default: this repo) to `sys.path` and import `run_agent.AIAgent`.
 - **SkillsBench / BenchFlow (optional):** `pip install -e ".[skillsbench]"` from repo root — see [`skillsbench/README.md`](skillsbench/README.md).
+- **Harbor / official Terminal-Bench (optional):** `pip install -e ".[harbor]"` plus Docker (or `pip install "harbor[modal]"` + Modal). Not included in `[all]`.
 - **AppWorld:** `pip install -e benchmark/appworld` — see [`appworld/README.md`](appworld/README.md).
 
 ## Layout
@@ -20,8 +21,10 @@ source .venv/bin/activate   # or: source venv/bin/activate
 | Path | Role |
 |------|------|
 | [`scripts/`](scripts/) | Hermes batch drivers and analysis tools |
+| [`harbor_adapter/`](harbor_adapter/) | Hermes `BaseAgent` for official Harbor / Terminal-Bench eval |
 | [`baselines/`](baselines/) | Isolated third-party / paper baselines (e.g. CoEvoSkills) |
 | [`skillsbench/`](skillsbench/) | SkillsBench tasks + BenchFlow (nested project) |
+| [`terminal-bench/`](terminal-bench/) | Terminal-Bench tasks (Harbor dataset tree) |
 | [`appworld/`](appworld/) | AppWorld environment (vendored) |
 
 ### CoEvoSkills baseline (SkillsBench)
@@ -49,6 +52,22 @@ python -m benchmark.baselines.coevoskills.run_split_protocol \
 ```
 
 Full details: [`baselines/coevoskills/README.md`](baselines/coevoskills/README.md).
+
+CoEvoSkills on **Terminal-Bench** uses Harbor for both the evolve oracle and frozen eval (same verifier as Hermes). See [`baselines/coevoskills/README.md`](baselines/coevoskills/README.md#terminal-bench).
+
+```bash
+python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \
+  --evolve --experiment-dir benchmark/runs/coevo_tb_exp1 \
+  --split-file benchmark/terminalbench_splits/stratified_v1.json \
+  --split-part train --model Qwen/Qwen3.6-27B \
+  --log-jsonl benchmark/runs/coevo_tb_exp1/evolve_train.jsonl
+
+python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \
+  --build-library --frozen-eval \
+  --experiment-dir benchmark/runs/coevo_tb_exp1 --split-part test \
+  --model Qwen/Qwen3.6-27B \
+  --log-jsonl benchmark/runs/coevo_tb_exp1/frozen_test.jsonl
+```
 
 ### Shared metrics (Hermes, CoEvoSkills, future baselines)
 
@@ -79,11 +98,14 @@ python benchmark/scripts/analyze_hot_pool_runs.py RUN.jsonl \
 | Script | Purpose |
 |--------|---------|
 | [`run_skillsbench_with_hermes.py`](scripts/run_skillsbench_with_hermes.py) | Run Hermes on SkillsBench tasks; JSONL logs + host eval |
-| [`evaluate_skillsbench_task.py`](scripts/evaluate_skillsbench_task.py) | Host pytest verifier for one task (used by driver) |
+| [`run_terminalbench_with_harbor.py`](scripts/run_terminalbench_with_harbor.py) | Terminal-Bench: Hermes agent + official Harbor verifier |
+| [`run_terminalbench_protocol.py`](baselines/coevoskills/run_terminalbench_protocol.py) | CoEvoSkills on Terminal-Bench (Harbor evolve oracle + frozen eval) |
+| [`evaluate_skillsbench_task.py`](scripts/evaluate_skillsbench_task.py) | Host pytest / `test.sh` verifier for SkillsBench |
 | [`skillsbench_metrics.py`](scripts/skillsbench_metrics.py) | Build compact `metrics` blocks for JSONL rows |
 | [`aggregate_skillsbench_runs.py`](scripts/aggregate_skillsbench_runs.py) | Shared macro/micro success@k + cost-to-succeed mean±std |
 | [`skillsbench_aggregate_core.py`](scripts/skillsbench_aggregate_core.py) | Core metrics library used by aggregators + baselines |
-| [`make_skillsbench_splits.py`](scripts/make_skillsbench_splits.py) | Generate train/val/test split JSON (stratified or category holdout) |
+| [`make_skillsbench_splits.py`](scripts/make_skillsbench_splits.py) | Generate SkillsBench train/val/test split JSON |
+| [`make_terminalbench_splits.py`](scripts/make_terminalbench_splits.py) | Generate Terminal-Bench category-stratified / holdout splits |
 | [`compare_skillsbench_runs.py`](scripts/compare_skillsbench_runs.py) | Compare two SkillsBench JSONL runs (tokens, cost, API calls) |
 | [`analyze_hot_pool_runs.py`](scripts/analyze_hot_pool_runs.py) | Hot skill pool telemetry + procedure proxies + core metrics |
 | [`read_skillsbench_jsonl.py`](scripts/read_skillsbench_jsonl.py) | Load SkillsBench JSONL into Python |
@@ -494,6 +516,71 @@ Load JSONL in Python: `from read_skillsbench_jsonl import load_skillsbench_run_r
 
 ---
 
+## Terminal-Bench
+
+Vendored Harbor task tree: [`terminal-bench/`](terminal-bench/).
+
+**Official eval** uses Harbor: Hermes `AIAgent` stays on the host, `terminal` / file tools exec inside the trial sandbox (`/app`), then Harbor runs `tests/test.sh` (verifier image). Pass@k does not apply (one verifier score per trial). Default concurrency is 1 (local vLLM does not parallelize well).
+
+There is no host-pytest path for Terminal-Bench. Do **not** set `terminal.backend: harbor` in `config.yaml`. `TERMINAL_ENV=harbor` is trial-scoped and only valid while a Harbor session is bound.
+
+```bash
+pip install -e ".[harbor]"   # plus Docker; or: pip install "harbor[modal]"
+
+# Oracle sanity check (no LLM)
+python3 benchmark/scripts/run_terminalbench_with_harbor.py \
+    --task cad-model --oracle --env docker --dry-run
+
+python3 benchmark/scripts/run_terminalbench_with_harbor.py --all \
+    --split-file benchmark/terminalbench_splits/stratified_v1.json \
+    --split-part train \
+    --model Qwen/Qwen3.6-27B --env docker --n-concurrent 1 \
+    --experiment-dir benchmark/runs/tb_harbor_train \
+    --isolate-hermes-home --no-hot-pool \
+    --max-iterations 60 \
+    --log-jsonl benchmark/runs/tb_harbor_train/runs.jsonl \
+    --print-summary --resume
+```
+
+`--resume` skips tasks that already have a finished (non-error) JSONL row **or** a Harbor trial `result.json` under `--jobs-dir` (defaults to `DIR/jobs`). Re-run the same command after an interrupt: finished Harbor trials are not re-queued even if JSONL was never flushed, and those artifacts are backfilled into `--log-jsonl`. In-progress trials (no `result.json` yet) start over. Ctrl-C on the driver also salvages finished trials into JSONL before exit.
+
+`--isolate-hermes-home` requires `--experiment-dir` (same as SkillsBench): `HERMES_HOME` becomes `DIR/hermes_home` (writable skills copy; `config.yaml` / `.env` / `SOUL.md` symlink to `~/.hermes`). `--no-hot-pool` / `--hot-pool` override `config.yaml` for the Harbor child. `--jobs-dir` defaults to `DIR/jobs` when `--experiment-dir` is set. Skip-context and skip-memory stay on.
+
+Harbor CLI equivalent (PYTHONPATH must include the Hermes repo root):
+
+```bash
+harbor run -p benchmark/terminal-bench/tasks \
+    -a benchmark.harbor_adapter.hermes_agent:HermesHarborAgent \
+    -m Qwen/Qwen3.6-27B --env docker --jobs-dir benchmark/runs/harbor_jobs \
+    --include-task-name cad-model
+```
+
+Aggregate Harbor JSONL with the same SkillsBench aggregator (`skillsbench_task_id` is the task id field):
+
+```bash
+python3 benchmark/scripts/aggregate_skillsbench_runs.py \
+  benchmark/runs/tb_harbor_train/runs.jsonl --print-summary
+```
+
+### Train / test splits
+
+Terminal-Bench has no upstream train/test partition and typically no `difficulty` in `task.toml`. Hermes ships splits under [`terminalbench_splits/`](terminalbench_splits/):
+
+| File | Protocol | Notes |
+|------|----------|--------|
+| [`stratified_v1.json`](terminalbench_splits/stratified_v1.json) | Category-stratified 75/25, seed 42 | Default train/test |
+| [`category_holdout_v1.json`](terminalbench_splits/category_holdout_v1.json) | Hold out Hardware + Media + Security | Domain OOD test |
+
+```bash
+python3 benchmark/scripts/make_terminalbench_splits.py --write-defaults
+
+python3 benchmark/scripts/make_terminalbench_splits.py \
+  --protocol category_stratified --seed 42 \
+  -o benchmark/terminalbench_splits/stratified_v1.json
+```
+
+---
+
 ## AppWorld
 
 Install AppWorld from the vendored tree, then run the Hermes driver. Pass **`--model`** explicitly (OpenRouter-style id); omitting it only works when `~/.hermes/config.yaml` already resolves a default model.
@@ -616,6 +703,7 @@ JSONL logs are usually written under `benchmark/`:
 | Driver | Schema | Notes |
 |--------|--------|--------|
 | SkillsBench | `skillsbench.hermes_run.v1` | `run_conversation_result`, `hot_pool_enabled`, `hot_pool_persist`, optional `hot_pool_telemetry`, `background_review` (`actions`, `telemetry`) |
+| Terminal-Bench | `terminalbench.hermes_run.v1` | `eval_mode: harbor`; verifier reward from Harbor `result.json` |
 | AppWorld (run) | `appworld.hermes_run.v1` | `steps`, `hermes_stats`, `evaluation` (unless `--no-evaluate`) |
 | AppWorld (eval only) | `appworld.hermes_eval.v1` | `evaluation`; optional `run_hermes_stats` when `--run-log-jsonl` matches |
 | AppWorld (eval skip) | `appworld.hermes_eval_skip.v1` | `skip_reason` when task was not run (`--evaluate-only`) |

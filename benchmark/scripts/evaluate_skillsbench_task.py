@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-Host-side SkillsBench verifier for Hermes batch runs.
+Host-side Harbor-style verifier for Hermes SkillsBench batch runs.
 
 Maps container paths (``/root/...``, ``/app/...``, ``/tests/...``, ``/logs/...``)
-to a staged task tree, runs ``tests/test_outputs.py`` via pytest, and returns
-macro (task) + micro (test-case) metrics.
+to a staged task tree and returns macro (task) + micro (test-case) metrics.
 
-Official container eval (``bench eval``) is not required; this module is for
-repeatable Hermes JSONL logging. Set ``eval_mode: host`` on envelopes.
+Evaluation order:
+  1. ``tests/test_outputs.py`` via pytest
+  2. any other ``tests/test_*.py`` via pytest
+  3. adapted ``tests/test.sh`` when no pytest files exist
+
+This is a **host approximation** for repeatable JSONL logging. Terminal-Bench
+uses Harbor (``run_terminalbench_with_harbor.py``), not this module.
+Set ``eval_mode: host`` on envelopes.
 """
 
 from __future__ import annotations
@@ -35,10 +40,15 @@ _PYTEST_SUMMARY_RE = re.compile(
     r"(?:, (?P<errors>\d+) errors)?"
 )
 
-# Container workspace mounts used by SkillsBench task tests.
+# Container workspace mounts used by SkillsBench tests.
 _WORKSPACE_PREFIXES: Tuple[str, ...] = ("/root", "/app")
 _TESTS_PREFIX = "/tests"
 _LOGS_PREFIX = "/logs"
+_OUTPUT_PREFIX = "/output"
+_SETPRIV_RE = re.compile(r"\bsetpriv\b[^\n]*?--\s*")
+_CTRF_FLAG_RE = re.compile(r"--ctrf(?:\s+|=)\S+")
+_OPT_VENV_PYTHON_RE = re.compile(r"/opt/venv/bin/python(?:3)?")
+_REMAP_SCRIPT_SUFFIXES = {".py", ".sh", ".bash"}
 
 
 def task_dir_for(skillsbench_root: Path, task_id: str) -> Path:
@@ -92,6 +102,8 @@ def adapt_container_paths(
         text = _remap_abs_prefix(text, _TESTS_PREFIX, tests_dir)
     if logs_dir is not None:
         text = _remap_abs_prefix(text, _LOGS_PREFIX, logs_dir)
+    output_dir = Path(host_root) / "output"
+    text = _remap_abs_prefix(text, _OUTPUT_PREFIX, output_dir)
     return text
 
 
@@ -124,6 +136,7 @@ def stage_task_for_host_eval(task_dir: Path, stage_dir: Path) -> Path:
         elif entry.is_dir():
             shutil.copytree(entry, dest, dirs_exist_ok=True)
 
+    (host_root / "output").mkdir(parents=True, exist_ok=True)
     return host_root
 
 
@@ -153,8 +166,8 @@ def stage_tests_for_host_eval(
         rel = src.relative_to(src_tests)
         dest = tests_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if src.suffix == ".py":
-            raw = src.read_text(encoding="utf-8")
+        if src.suffix.lower() in _REMAP_SCRIPT_SUFFIXES:
+            raw = src.read_text(encoding="utf-8", errors="replace")
             dest.write_text(
                 adapt_container_paths(
                     raw,
@@ -164,6 +177,8 @@ def stage_tests_for_host_eval(
                 ),
                 encoding="utf-8",
             )
+            if src.suffix.lower() in {".sh", ".bash"}:
+                dest.chmod(dest.stat().st_mode | 0o111)
         else:
             shutil.copy2(src, dest)
 
@@ -243,6 +258,76 @@ def _parse_ctrf(ctrf_path: Path) -> Optional[List[Dict[str, Any]]]:
     return cases or None
 
 
+def _ctrf_plugin_available() -> bool:
+    try:
+        import pytest_json_ctrf  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def adapt_verifier_script(content: str, *, host_python: str) -> str:
+    """Make Harbor ``test.sh`` runnable on the host (no setpriv / image python)."""
+    text = _SETPRIV_RE.sub("", content)
+    text = _OPT_VENV_PYTHON_RE.sub(host_python, text)
+    if not _ctrf_plugin_available():
+        text = _CTRF_FLAG_RE.sub("", text)
+    return text
+
+
+def _pytest_targets(tests_dir: Path) -> List[str]:
+    preferred = tests_dir / "test_outputs.py"
+    if preferred.is_file():
+        return ["tests/test_outputs.py"]
+    found = sorted(p.name for p in tests_dir.glob("test_*.py") if p.is_file())
+    return [f"tests/{name}" for name in found]
+
+
+def _read_reward(logs_dir: Path) -> Optional[float]:
+    reward_txt = logs_dir / "verifier" / "reward.txt"
+    if not reward_txt.is_file():
+        reward_json = logs_dir / "verifier" / "reward.json"
+        if reward_json.is_file():
+            try:
+                data = json.loads(reward_json.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                return None
+            if isinstance(data, dict) and data.get("reward") is not None:
+                try:
+                    return float(data["reward"])
+                except (TypeError, ValueError):
+                    return None
+        return None
+    raw = reward_txt.read_text(encoding="utf-8", errors="replace").strip().split()
+    if not raw:
+        return None
+    try:
+        return float(raw[0])
+    except ValueError:
+        return None
+
+
+def _metrics_from_cases(
+    cases: List[Dict[str, Any]],
+    *,
+    exit_code: Optional[int],
+    reward_override: Optional[float],
+) -> Tuple[bool, float, int, int, int, int]:
+    passed = sum(1 for c in cases if c.get("outcome") == "passed")
+    failed = sum(1 for c in cases if c.get("outcome") == "failed")
+    skipped = sum(1 for c in cases if c.get("outcome") == "skipped")
+    total = passed + failed + skipped
+    if reward_override is not None:
+        task_success = reward_override >= 1.0 and (exit_code in (0, None) or failed == 0)
+        reward = 1.0 if task_success else float(reward_override)
+        return task_success, reward, passed, failed, skipped, total
+    task_success = exit_code == 0 and failed == 0 and total > 0
+    reward = round(passed / total, 6) if total else 0.0
+    if task_success:
+        reward = 1.0
+    return task_success, reward, passed, failed, skipped, total
+
+
 def evaluate_task_host(
     *,
     task_id: str,
@@ -250,16 +335,23 @@ def evaluate_task_host(
     timeout_sec: float = 600.0,
 ) -> Dict[str, Any]:
     """
-    Run SkillsBench pytest verifier on the host for one task directory.
+    Run the host verifier for one Harbor-style task directory.
 
-    Returns an ``evaluation`` dict suitable for JSONL envelopes.
+    Prefer pytest on ``test_outputs.py`` (SkillsBench). Fall back to other
+    ``test_*.py`` files, then adapted ``tests/test.sh``.
     """
     task_dir = task_dir_for(skillsbench_root, task_id)
-    test_src = task_dir / "tests" / "test_outputs.py"
     if not task_dir.is_dir():
         return _eval_error(task_id, f"Task directory not found: {task_dir}")
-    if not test_src.is_file():
-        return _eval_error(task_id, f"Missing tests/test_outputs.py under {task_dir}")
+
+    src_tests = task_dir / "tests"
+    has_any_pytest = bool(src_tests.is_dir() and list(src_tests.glob("test_*.py")))
+    has_test_sh = (src_tests / "test.sh").is_file()
+    if not has_any_pytest and not has_test_sh:
+        return _eval_error(
+            task_id,
+            f"Missing tests/test_outputs.py, test_*.py, or test.sh under {task_dir}",
+        )
 
     with tempfile.TemporaryDirectory(prefix=f"skillsbench-eval-{task_id}-") as tmp:
         stage = Path(tmp)
@@ -267,76 +359,219 @@ def evaluate_task_host(
         sim_info = maybe_run_simulation(host_root)
         tests_dir, logs_dir = stage_tests_for_host_eval(task_dir, stage, host_root)
 
-        adapted_test = tests_dir / "test_outputs.py"
-        if not adapted_test.is_file():
-            return _eval_error(
-                task_id, f"Failed to stage tests/test_outputs.py for {task_id}"
+        pytest_targets = _pytest_targets(tests_dir)
+        if pytest_targets:
+            return _run_pytest_eval(
+                task_id=task_id,
+                stage=stage,
+                host_root=host_root,
+                tests_dir=tests_dir,
+                logs_dir=logs_dir,
+                targets=pytest_targets,
+                sim_info=sim_info,
+                timeout_sec=timeout_sec,
             )
+        return _run_test_sh_eval(
+            task_id=task_id,
+            stage=stage,
+            host_root=host_root,
+            tests_dir=tests_dir,
+            logs_dir=logs_dir,
+            sim_info=sim_info,
+            timeout_sec=timeout_sec,
+        )
 
-        ctrf_path = stage / "ctrf.json"
-        # Prefer package-style discovery so sibling conftest.py is loaded.
-        cmd = [
-            sys.executable,
-            "-m",
-            "pytest",
-            "tests/test_outputs.py",
-            "-v",
-            "--tb=short",
-        ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd=str(stage),
-                capture_output=True,
-                text=True,
-                timeout=timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            return _eval_error(
-                task_id, f"pytest timed out after {timeout_sec}s", eval_mode="host"
-            )
-        except FileNotFoundError:
-            return _eval_error(
-                task_id,
-                "pytest not available in current interpreter",
-                eval_mode="host",
-            )
 
-        stdout = proc.stdout or ""
-        stderr = proc.stderr or ""
-        ctrf_cases = _parse_ctrf(ctrf_path)
-        if ctrf_cases is not None:
-            cases = ctrf_cases
-            passed = sum(1 for c in cases if c.get("outcome") == "passed")
-            failed = sum(1 for c in cases if c.get("outcome") == "failed")
-            skipped = sum(1 for c in cases if c.get("outcome") == "skipped")
-        else:
-            passed, failed, skipped, cases = _parse_pytest_stdout(stdout)
+def _eval_result(
+    *,
+    task_id: str,
+    task_success: bool,
+    reward: float,
+    passed: int,
+    failed: int,
+    skipped: int,
+    total: int,
+    cases: List[Dict[str, Any]],
+    exit_code: Optional[int],
+    sim_info: Dict[str, Any],
+    host_root: Path,
+    tests_dir: Path,
+    logs_dir: Path,
+    stdout: str,
+    stderr: str,
+    backend: str,
+) -> Dict[str, Any]:
+    return {
+        "eval_mode": "host",
+        "eval_backend": backend,
+        "task_id": task_id,
+        "task_success": task_success,
+        "reward": reward,
+        "tests_passed": passed,
+        "tests_failed": failed,
+        "tests_skipped": skipped,
+        "tests_total": total,
+        "test_cases": cases,
+        "pytest_exit_code": exit_code,
+        "simulation": sim_info,
+        "host_root": str(host_root),
+        "tests_dir": str(tests_dir),
+        "logs_dir": str(logs_dir),
+        "stdout_tail": stdout[-4000:],
+        "stderr_tail": stderr[-2000:],
+    }
 
-        total = passed + failed + skipped
-        task_success = proc.returncode == 0 and failed == 0 and total > 0
-        reward = round(passed / total, 6) if total else 0.0
-        if task_success:
-            reward = 1.0
 
-        return {
-            "eval_mode": "host",
-            "task_id": task_id,
-            "task_success": task_success,
-            "reward": reward,
-            "tests_passed": passed,
-            "tests_failed": failed,
-            "tests_skipped": skipped,
-            "tests_total": total,
-            "test_cases": cases,
-            "pytest_exit_code": proc.returncode,
-            "simulation": sim_info,
-            "host_root": str(host_root),
-            "tests_dir": str(tests_dir),
-            "logs_dir": str(logs_dir),
-            "stdout_tail": stdout[-4000:],
-            "stderr_tail": stderr[-2000:],
-        }
+def _run_pytest_eval(
+    *,
+    task_id: str,
+    stage: Path,
+    host_root: Path,
+    tests_dir: Path,
+    logs_dir: Path,
+    targets: Sequence[str],
+    sim_info: Dict[str, Any],
+    timeout_sec: float,
+) -> Dict[str, Any]:
+    ctrf_path = logs_dir / "verifier" / "ctrf.json"
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        *list(targets),
+        "-v",
+        "--tb=short",
+    ]
+    if _ctrf_plugin_available():
+        cmd.extend(["--ctrf", str(ctrf_path)])
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(stage),
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired:
+        return _eval_error(
+            task_id, f"pytest timed out after {timeout_sec}s", eval_mode="host"
+        )
+    except FileNotFoundError:
+        return _eval_error(
+            task_id,
+            "pytest not available in current interpreter",
+            eval_mode="host",
+        )
+
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
+    ctrf_cases = _parse_ctrf(ctrf_path)
+    if ctrf_cases is not None:
+        cases = ctrf_cases
+    else:
+        _, _, _, cases = _parse_pytest_stdout(stdout)
+    reward_override = _read_reward(logs_dir)
+    task_success, reward, passed, failed, skipped, total = _metrics_from_cases(
+        cases, exit_code=proc.returncode, reward_override=reward_override
+    )
+    return _eval_result(
+        task_id=task_id,
+        task_success=task_success,
+        reward=reward,
+        passed=passed,
+        failed=failed,
+        skipped=skipped,
+        total=total,
+        cases=cases,
+        exit_code=proc.returncode,
+        sim_info=sim_info,
+        host_root=host_root,
+        tests_dir=tests_dir,
+        logs_dir=logs_dir,
+        stdout=stdout,
+        stderr=stderr,
+        backend="pytest",
+    )
+
+
+def _run_test_sh_eval(
+    *,
+    task_id: str,
+    stage: Path,
+    host_root: Path,
+    tests_dir: Path,
+    logs_dir: Path,
+    sim_info: Dict[str, Any],
+    timeout_sec: float,
+) -> Dict[str, Any]:
+    script = tests_dir / "test.sh"
+    if not script.is_file():
+        return _eval_error(task_id, f"Failed to stage tests/test.sh for {task_id}")
+    adapted = adapt_verifier_script(
+        script.read_text(encoding="utf-8", errors="replace"),
+        host_python=sys.executable,
+    )
+    script.write_text(adapted, encoding="utf-8")
+    try:
+        proc = subprocess.run(
+            ["bash", str(script)],
+            cwd=str(host_root),
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired:
+        return _eval_error(
+            task_id, f"test.sh timed out after {timeout_sec}s", eval_mode="host"
+        )
+    except FileNotFoundError:
+        return _eval_error(task_id, "bash not available", eval_mode="host")
+
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
+    ctrf_path = logs_dir / "verifier" / "ctrf.json"
+    cases = _parse_ctrf(ctrf_path) or []
+    if not cases:
+        _, _, _, cases = _parse_pytest_stdout(stdout)
+    reward_override = _read_reward(logs_dir)
+    if not cases and reward_override is None:
+        task_success = proc.returncode == 0
+        reward = 1.0 if task_success else 0.0
+        passed = 1 if task_success else 0
+        failed = 0 if task_success else 1
+        skipped = 0
+        total = 1
+        cases = [{"nodeid": "test.sh", "outcome": "passed" if task_success else "failed"}]
+    else:
+        task_success, reward, passed, failed, skipped, total = _metrics_from_cases(
+            cases, exit_code=proc.returncode, reward_override=reward_override
+        )
+        if reward_override is not None and not cases:
+            task_success = reward_override >= 1.0 and proc.returncode == 0
+            reward = 1.0 if task_success else float(reward_override)
+            passed = 1 if task_success else 0
+            failed = 0 if task_success else 1
+            skipped = 0
+            total = 1
+            cases = [{"nodeid": "test.sh", "outcome": "passed" if task_success else "failed"}]
+    return _eval_result(
+        task_id=task_id,
+        task_success=task_success,
+        reward=reward,
+        passed=passed,
+        failed=failed,
+        skipped=skipped,
+        total=total,
+        cases=cases,
+        exit_code=proc.returncode,
+        sim_info=sim_info,
+        host_root=host_root,
+        tests_dir=tests_dir,
+        logs_dir=logs_dir,
+        stdout=stdout,
+        stderr=stderr,
+        backend="test.sh",
+    )
 
 
 def _eval_error(task_id: str, message: str, eval_mode: str = "host") -> Dict[str, Any]:

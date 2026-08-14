@@ -44,12 +44,18 @@ _TASK_DEF_NAMES = frozenset(
 _SHARED_HERMES_HOME_FILES: Tuple[str, ...] = ("config.yaml", ".env", "SOUL.md")
 
 
-def experiment_skillsbench_root(experiment_dir: Path) -> Path:
-    return experiment_dir.resolve() / "skillsbench"
+def experiment_skillsbench_root(
+    experiment_dir: Path,
+    dataset_dirname: str = "skillsbench",
+) -> Path:
+    return experiment_dir.resolve() / dataset_dirname
 
 
-def experiment_tasks_dir(experiment_dir: Path) -> Path:
-    return experiment_skillsbench_root(experiment_dir) / "tasks"
+def experiment_tasks_dir(
+    experiment_dir: Path,
+    dataset_dirname: str = "skillsbench",
+) -> Path:
+    return experiment_skillsbench_root(experiment_dir, dataset_dirname) / "tasks"
 
 
 def experiment_hot_pool_path(experiment_dir: Path) -> Path:
@@ -321,6 +327,7 @@ def prepare_experiment_workspace(
     source_hermes_home: Optional[Path] = None,
     seed_hermes_skills_from_source: bool = True,
     reset_hermes_skills: Optional[bool] = None,
+    dataset_dirname: str = "skillsbench",
 ) -> Dict[str, Any]:
     """
     Ensure ``experiment_dir`` has writable copies of the given tasks.
@@ -348,7 +355,7 @@ def prepare_experiment_workspace(
     if task_ids and not src_tasks.is_dir():
         raise FileNotFoundError(f"Source tasks dir not found: {src_tasks}")
 
-    dest_tasks = experiment_tasks_dir(experiment_dir)
+    dest_tasks = experiment_tasks_dir(experiment_dir, dataset_dirname)
     if task_ids:
         dest_tasks.mkdir(parents=True, exist_ok=True)
 
@@ -363,7 +370,7 @@ def prepare_experiment_workspace(
 
     if missing:
         preview = ", ".join(missing[:8]) + (" ..." if len(missing) > 8 else "")
-        raise FileNotFoundError(f"Unknown task ids in source SkillsBench: {preview}")
+        raise FileNotFoundError(f"Unknown task ids in source dataset: {preview}")
 
     hermes_home = experiment_hermes_home(experiment_dir)
     skills_seed: Optional[Dict[str, Any]] = None
@@ -401,12 +408,13 @@ def prepare_experiment_workspace(
             refresh_skills_dir_caches(hermes_home / "skills")
 
     hot_pool = experiment_hot_pool_path(experiment_dir)
-    skillsbench_root = experiment_skillsbench_root(experiment_dir)
+    skillsbench_root = experiment_skillsbench_root(experiment_dir, dataset_dirname)
     prompt_tasks_base = str(dest_tasks.resolve()) if task_ids else None
 
     manifest = {
         "schema": "skillsbench.experiment_workspace.v1",
         "experiment_dir": str(experiment_dir),
+        "dataset_dirname": dataset_dirname,
         "source_skillsbench_root": str(source_skillsbench_root),
         "skillsbench_root": str(skillsbench_root) if task_ids else None,
         "prompt_tasks_base": prompt_tasks_base,

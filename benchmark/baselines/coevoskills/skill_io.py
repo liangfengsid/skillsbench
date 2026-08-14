@@ -156,6 +156,23 @@ def install_skills_into_task(skills_dir: Path, task_dir: Path) -> Path:
     return dest
 
 
+def overlay_skills(src_skills: Path, dest_skills: Path) -> int:
+    """Copy skill packages from ``src_skills`` into ``dest_skills`` (overwrite by name)."""
+    src = Path(src_skills)
+    dest = Path(dest_skills)
+    if not src.is_dir():
+        return 0
+    dest.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for pack in list_skills(src):
+        target = dest / pack.name
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(pack.path, target)
+        n += 1
+    return n
+
+
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")

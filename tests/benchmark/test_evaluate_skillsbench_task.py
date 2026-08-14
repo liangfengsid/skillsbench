@@ -207,3 +207,60 @@ def test_pass_at_turn_tracker_records_completed_turn():
     assert set(out.keys()) == {"1", "3"}
     assert out["1"]["tokens"]["total"] == 123
     assert calls == ["demo", "demo"]
+
+
+def test_evaluate_task_host_pytest_not_named_test_outputs(tmp_path):
+    mod = _load_module()
+    task_dir = tmp_path / "tasks" / "alt"
+    task_dir.mkdir(parents=True)
+    (task_dir / "out.txt").write_text("ok", encoding="utf-8")
+    tests = task_dir / "tests"
+    tests.mkdir()
+    (tests / "test_state.py").write_text(
+        "from pathlib import Path\n"
+        "def test_out():\n"
+        '    assert Path("/app/out.txt").is_file()\n',
+        encoding="utf-8",
+    )
+    result = mod.evaluate_task_host(
+        task_id="alt",
+        skillsbench_root=tmp_path,
+        timeout_sec=60.0,
+    )
+    assert result.get("error") is None, result
+    assert result["eval_backend"] == "pytest"
+    assert result["task_success"] is True
+    assert result["tests_passed"] == 1
+
+
+def test_evaluate_task_host_test_sh_reward(tmp_path):
+    mod = _load_module()
+    task_dir = tmp_path / "tasks" / "shonly"
+    task_dir.mkdir(parents=True)
+    (task_dir / "answer.txt").write_text("42\n", encoding="utf-8")
+    tests = task_dir / "tests"
+    tests.mkdir()
+    (tests / "test.sh").write_text(
+        "#!/bin/bash\n"
+        "mkdir -p /logs/verifier\n"
+        'if [ -f /app/answer.txt ]; then echo 1 > /logs/verifier/reward.txt; exit 0; '
+        "else echo 0 > /logs/verifier/reward.txt; exit 1; fi\n",
+        encoding="utf-8",
+    )
+    result = mod.evaluate_task_host(
+        task_id="shonly",
+        skillsbench_root=tmp_path,
+        timeout_sec=60.0,
+    )
+    assert result.get("error") is None, result
+    assert result["eval_backend"] == "test.sh"
+    assert result["task_success"] is True
+    assert result["reward"] == 1.0
+
+
+def test_adapt_verifier_script_strips_setpriv():
+    mod = _load_module()
+    raw = "setpriv --reuid=nobody --regid=nogroup --init-groups -- python gate.py\n"
+    adapted = mod.adapt_verifier_script(raw, host_python="/usr/bin/python3")
+    assert "setpriv" not in adapted
+    assert "python gate.py" in adapted
