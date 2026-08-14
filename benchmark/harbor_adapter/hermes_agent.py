@@ -6,7 +6,7 @@ inside ``/app``, then Harbor runs the official ``tests/test.sh`` verifier.
 
 Loaded as::
 
-    --agent benchmark.harbor_adapter.hermes_agent:HermesHarborAgent
+    --agent-import-path benchmark.harbor_adapter.hermes_agent:HermesHarborAgent
 """
 
 from __future__ import annotations

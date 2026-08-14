@@ -71,6 +71,69 @@ def test_frozen_eval_argv_tags_coevoskills(tmp_path: Path):
     assert "--pass-k" not in argv
 
 
+def test_frozen_eval_argv_forwards_exclude_task_names(tmp_path: Path):
+    argv = harbor_eval.frozen_eval_argv(
+        dataset_path=tmp_path / "tasks",
+        split_file=tmp_path / "split.json",
+        split_part="train",
+        model="Qwen/Qwen3.6-27B",
+        harbor_env="docker",
+        experiment_dir=tmp_path / "exp",
+        library_dir=tmp_path / "lib",
+        log_jsonl=tmp_path / "runs.jsonl",
+        max_iterations=60,
+        exclude_task_names=["math-eval-grader", "jax-speedrun-gpu"],
+    )
+    assert argv.count("--exclude-task-name") == 2
+    assert argv[argv.index("--exclude-task-name") + 1] == "math-eval-grader"
+    assert "jax-speedrun-gpu" in argv
+
+
+def test_protocol_list_tasks_honors_exclude(tmp_path: Path, capsys):
+    root = tmp_path / "terminal-bench" / "tasks"
+    for name in ("keep-me", "math-eval-grader", "jax-speedrun-gpu"):
+        d = root / name
+        d.mkdir(parents=True)
+        (d / "instruction.md").write_text("x\n", encoding="utf-8")
+    split = tmp_path / "split.json"
+    split.write_text(
+        json.dumps(
+            {
+                "train": ["keep-me", "math-eval-grader", "jax-speedrun-gpu"],
+                "test": [],
+                "val": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc = tb_protocol_main(
+        [
+            "--hermes-root",
+            str(_REPO),
+            "--dataset-path",
+            str(root),
+            "--split-file",
+            str(split),
+            "--split-part",
+            "train",
+            "--experiment-dir",
+            str(tmp_path / "exp"),
+            "--list-tasks",
+            "--exclude-task-name",
+            "math-eval-grader",
+            "--",
+            "--exclude-task-name",
+            "jax-speedrun-gpu",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "keep-me" in out
+    assert "math-eval-grader" not in out.splitlines()
+    assert "jax-speedrun-gpu" not in out.splitlines()
+    assert "excluding 2 task(s)" in out
+
+
 def test_tb_generator_prompt_mentions_sandbox():
     text = prompts.generator_system_prompt_terminalbench(
         instruction="do the thing",
@@ -162,3 +225,64 @@ def test_protocol_frozen_eval_dry_run(tmp_path: Path, capsys):
     assert "coevoskills" in out
     assert "frozen_eval" in out
     assert "--pass-k" not in out
+    assert "--print-summary" not in out
+
+
+def test_protocol_frozen_eval_dry_run_print_summary(tmp_path: Path, capsys):
+    tasks = tmp_path / "terminal-bench" / "tasks" / "cad-model"
+    tasks.mkdir(parents=True)
+    (tasks / "instruction.md").write_text("do it\n", encoding="utf-8")
+    split = tmp_path / "split.json"
+    split.write_text(
+        json.dumps({"train": [], "test": ["cad-model"], "val": []}),
+        encoding="utf-8",
+    )
+    exp = tmp_path / "exp"
+    lib = exp / "coevoskills" / "_frozen_library"
+    lib.mkdir(parents=True)
+    _write_skill(lib, "evo-demo")
+    rc = tb_protocol_main(
+        [
+            "--hermes-root",
+            str(_REPO),
+            "--dataset-path",
+            str(tmp_path / "terminal-bench" / "tasks"),
+            "--split-file",
+            str(split),
+            "--split-part",
+            "test",
+            "--experiment-dir",
+            str(exp),
+            "--frozen-eval",
+            "--dry-run",
+            "--print-summary",
+            "--log-jsonl",
+            str(exp / "frozen.jsonl"),
+        ]
+    )
+    assert rc == 0
+    assert "--print-summary" in capsys.readouterr().out
+
+
+def test_print_task_summary_format(capsys):
+    from benchmark.baselines.coevoskills.run_terminalbench_protocol import (
+        _print_task_summary,
+    )
+
+    _print_task_summary(
+        [
+            {
+                "skillsbench_task_id": "cad-model",
+                "evaluation": {"task_success": True, "reward": 1.0},
+            },
+            {
+                "skillsbench_task_id": "wdm-design",
+                "evaluation": {"task_success": False, "reward": 0.0},
+            },
+        ],
+        label="evolve",
+    )
+    out = capsys.readouterr().out
+    assert "[evolve] tasks=2 passed=1 rate=0.500" in out
+    assert "cad-model: success=True reward=1.0" in out
+    assert "wdm-design: success=False reward=0.0" in out

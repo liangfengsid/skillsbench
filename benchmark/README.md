@@ -60,7 +60,9 @@ python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \
   --evolve --experiment-dir benchmark/runs/coevo_tb_exp1 \
   --split-file benchmark/terminalbench_splits/stratified_v1.json \
   --split-part train --model Qwen/Qwen3.6-27B \
-  --log-jsonl benchmark/runs/coevo_tb_exp1/evolve_train.jsonl
+  --max-iterations 60 \
+  --log-jsonl benchmark/runs/coevo_tb_exp1/evolve_train.jsonl \
+  --exclude-task-name math-eval-grader --exclude-task-name jax-speedrun-gpu
 
 python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \
   --build-library --frozen-eval \
@@ -550,7 +552,7 @@ Harbor CLI equivalent (PYTHONPATH must include the Hermes repo root):
 
 ```bash
 harbor run -p benchmark/terminal-bench/tasks \
-    -a benchmark.harbor_adapter.hermes_agent:HermesHarborAgent \
+    --agent-import-path benchmark.harbor_adapter.hermes_agent:HermesHarborAgent \
     -m Qwen/Qwen3.6-27B --env docker --jobs-dir benchmark/runs/harbor_jobs \
     --include-task-name cad-model
 ```

@@ -19,7 +19,9 @@ python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \\
   --split-file benchmark/terminalbench_splits/stratified_v1.json \\
   --split-part train \\
   --model Qwen/Qwen3.6-27B \\
-  --log-jsonl benchmark/runs/coevo_tb_exp1/evolve_train.jsonl
+  --max-iterations 60 \\
+  --log-jsonl benchmark/runs/coevo_tb_exp1/evolve_train.jsonl \\
+  --exclude-task-name math-eval-grader --exclude-task-name jax-speedrun-gpu
 
 python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \\
   --build-library --frozen-eval \\
@@ -58,6 +60,22 @@ def _append_jsonl(path: Path, row: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, default=str) + "\n")
+
+
+def _print_task_summary(rows: List[Dict[str, Any]], *, label: str) -> None:
+    n = len(rows)
+    ok = sum(1 for e in rows if (e.get("evaluation") or {}).get("task_success"))
+    if n:
+        print(f"[{label}] tasks={n} passed={ok} rate={ok / n:.3f}", flush=True)
+    else:
+        print(f"[{label}] no task results", flush=True)
+    for e in rows:
+        ev = e.get("evaluation") or {}
+        print(
+            f"  {e.get('skillsbench_task_id')}: "
+            f"success={ev.get('task_success')!r} reward={ev.get('reward')!r}",
+            flush=True,
+        )
 
 
 def _load_split_ids(split_file: Path, part: str) -> List[str]:
@@ -154,13 +172,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--list-tasks", action="store_true")
     p.add_argument("--start-task-index", type=int, default=0)
     p.add_argument("--end-task-index", type=int, default=None)
-    p.add_argument("--print-summary", action="store_true")
+    p.add_argument(
+        "--print-summary",
+        action="store_true",
+        help=(
+            "After evolve / frozen-eval, print per-task success and reward "
+            "(same recap as the Hermes Harbor driver)."
+        ),
+    )
+    p.add_argument(
+        "--exclude-task-name",
+        action="append",
+        default=None,
+        metavar="TASK_ID",
+        help=(
+            "Skip this task id (repeatable). Drops GPU tasks before evolve "
+            "materialize and frozen eval. Same as Harbor -x / the Hermes driver "
+            "`-- --exclude-task-name`."
+        ),
+    )
     p.add_argument(
         "--dry-run",
         action="store_true",
         help="Print Harbor frozen-eval command (and evolve plan) without running.",
     )
     p.add_argument("--reset-task-workspaces", action="store_true")
+    p.add_argument(
+        "harbor_args",
+        nargs="*",
+        help="Extra Harbor CLI args after `--` (scanned for --exclude-task-name).",
+    )
     args = p.parse_args(argv)
 
     hermes_root = args.hermes_root.resolve()
@@ -184,14 +225,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.resume and not args.log_jsonl:
         p.error("--resume requires --log-jsonl")
 
-    from run_terminalbench_with_harbor import discover_task_ids
+    from run_terminalbench_with_harbor import collect_exclude_task_names, discover_task_ids
 
     task_ids = discover_task_ids(dataset_path)
+    excludes = collect_exclude_task_names(args.exclude_task_name, args.harbor_args)
     if args.list_tasks or args.evolve or args.frozen_eval:
         run_ids = _load_split_ids(split_file, args.split_part)
         unknown = [tid for tid in run_ids if tid not in task_ids]
         if unknown:
             p.error(f"Split file lists unknown task ids: {', '.join(unknown[:5])}")
+        if excludes:
+            skip = set(excludes)
+            dropped = [tid for tid in run_ids if tid in skip]
+            run_ids = [tid for tid in run_ids if tid not in skip]
+            if dropped:
+                print(
+                    f"[protocol] excluding {len(dropped)} task(s): {', '.join(dropped)}",
+                    flush=True,
+                )
         run_ids = run_ids[args.start_task_index : args.end_task_index]
     else:
         run_ids = []
@@ -264,6 +315,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.dry_run:
             print(f"[evolve] dry-run pending={len(pending)} isolate={isolate_home}")
         else:
+            evolve_rows: List[Dict[str, Any]] = []
             for i, task_id in enumerate(pending, start=1):
                 t0 = prog.task_start(i, task_id)
 
@@ -330,6 +382,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         },
                     }
                     envelope["metrics"] = build_envelope_metrics(envelope)
+                    evolve_rows.append(envelope)
                     if log_path:
                         _append_jsonl(log_path, envelope)
                     prog.task_end(
@@ -349,15 +402,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "phase": "evolve",
                         "skillsbench_task_id": task_id,
                         "error": str(exc),
+                        "evaluation": {
+                            "task_success": False,
+                            "reward": 0.0,
+                            "ran": False,
+                            "error": str(exc),
+                        },
                         "ts_end_iso": datetime.now(timezone.utc).isoformat(),
                         "split_file": str(split_file),
                         "split_part": args.split_part,
                     }
                     if log_path:
                         _append_jsonl(log_path, err)
+                    evolve_rows.append(err)
                     prog.task_end(i, task_id, t0=t0, ok=False, detail=str(exc)[:200])
                     print(f"evolve FAILED {task_id}: {exc}", file=sys.stderr, flush=True)
         prog.finish()
+        if args.print_summary and not args.dry_run:
+            _print_task_summary(evolve_rows, label="evolve")
 
     if args.build_library:
         src_ids = _load_split_ids(split_file, args.library_source_part)
@@ -421,6 +483,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     resume=bool(args.resume),
                     print_summary=args.print_summary,
                     per_task=tid,
+                    exclude_task_names=excludes,
                 )
                 if args.dry_run:
                     print(" ".join(["run_terminalbench_with_harbor.py", *argv]))
@@ -443,7 +506,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 max_iterations=args.max_iterations,
                 n_concurrent=args.n_concurrent,
                 resume=bool(args.resume),
-                print_summary=True,
+                print_summary=args.print_summary,
+                exclude_task_names=excludes,
             )
             if args.dry_run:
                 print(" ".join(["run_terminalbench_with_harbor.py", *argv]))

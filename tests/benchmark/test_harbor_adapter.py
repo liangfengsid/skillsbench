@@ -129,7 +129,8 @@ def test_build_harbor_command_uses_include_task_name():
     assert "--task-name" not in cmd
     assert cmd.count("cad-model") == 1
     assert "--ak" in cmd and "max_iterations=90" in cmd
-    assert "-a" in cmd and driver._HERMES_AGENT in cmd
+    assert cmd[cmd.index("--agent-import-path") + 1] == driver._HERMES_AGENT
+    assert "-a" not in cmd
 
 
 def test_oracle_command_omits_agent_kwargs():
@@ -146,10 +147,49 @@ def test_oracle_command_omits_agent_kwargs():
         n_concurrent=1,
         max_iterations=90,
     )
-    assert "-a" in cmd and "oracle" in cmd
+    assert cmd[cmd.index("-a") + 1] == "oracle"
+    assert "--agent-import-path" not in cmd
     after_run = cmd[cmd.index("run") :]
     assert "-m" not in after_run
     assert "--ak" not in cmd
+
+
+def test_collect_exclude_task_names_from_flag_and_remainder():
+    driver = _load(_DRIVER, "run_terminalbench_with_harbor", extra_paths=(_BENCH, _REPO))
+    names = driver.collect_exclude_task_names(
+        ["math-eval-grader"],
+        ["--exclude-task-name", "jax-speedrun-gpu", "-x", "math-eval-grader"],
+    )
+    assert names == ["math-eval-grader", "jax-speedrun-gpu"]
+
+
+def test_exclude_task_name_omitted_from_harbor_command(tmp_path, capsys):
+    driver = _load(_DRIVER, "run_terminalbench_with_harbor", extra_paths=(_BENCH, _REPO))
+    root = tmp_path / "tasks"
+    for name in ("keep-me", "math-eval-grader"):
+        d = root / name
+        d.mkdir(parents=True)
+        (d / "instruction.md").write_text("x\n", encoding="utf-8")
+    rc = driver.main(
+        [
+            "--all",
+            "--dataset-path",
+            str(root),
+            "--oracle",
+            "--dry-run",
+            "--jobs-dir",
+            str(tmp_path / "jobs"),
+            "--job-name",
+            "dry-ex",
+            "--exclude-task-name",
+            "math-eval-grader",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "excluding 1 task(s): math-eval-grader" in out
+    assert "--include-task-name keep-me" in out
+    assert "--include-task-name math-eval-grader" not in out
 
 
 def test_dry_run_prints_command(tmp_path, capsys):

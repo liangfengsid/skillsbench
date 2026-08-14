@@ -199,7 +199,9 @@ python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \
   --split-file benchmark/terminalbench_splits/stratified_v1.json \
   --split-part train \
   --model Qwen/Qwen3.6-27B \
-  --log-jsonl benchmark/runs/coevo_tb_exp1/evolve_train.jsonl
+  --max-iterations 60 \
+  --log-jsonl benchmark/runs/coevo_tb_exp1/evolve_train.jsonl \
+  --exclude-task-name math-eval-grader --exclude-task-name jax-speedrun-gpu
 
 # Freeze library, then frozen eval on test (HermesHarborAgent + skill overlay)
 python -m benchmark.baselines.coevoskills.run_terminalbench_protocol \
@@ -219,7 +221,8 @@ python3 benchmark/scripts/run_terminalbench_with_harbor.py --all \
   --split-part test \
   --experiment-dir benchmark/runs/tb_harbor_test \
   --isolate-hermes-home --no-hot-pool \
-  --log-jsonl benchmark/runs/tb_harbor_test/runs.jsonl --print-summary
+  --log-jsonl benchmark/runs/tb_harbor_test/runs.jsonl --print-summary \
+  --exclude-task-name math-eval-grader --exclude-task-name jax-speedrun-gpu
 ```
 
 Frozen eval uses the same `HermesHarborAgent` as the Hermes driver; only isolated

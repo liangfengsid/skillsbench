@@ -104,7 +104,8 @@ skillsbench = ["benchflow>=0.3.0a7,<1"]
 # Harbor (`benchmark/harbor_adapter`): official Terminal-Bench harness.
 # Not included in [all] — requires Docker (or Modal/Daytona) at runtime.
 # `pip install -e ".[harbor]"` then optionally `pip install "harbor[modal]"`.
-harbor = ["harbor>=0.21,<1"]
+# click>=8.2.1: Typer 0.24 uses click.Choice[...] and crashes on Click 8.1.x.
+harbor = ["harbor>=0.21,<1", "click>=8.2.1"]
 all = [
   "hermes-agent[modal]",
   "hermes-agent[daytona]",

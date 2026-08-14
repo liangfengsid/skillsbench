@@ -176,6 +176,7 @@ def frozen_eval_argv(
     print_summary: bool = True,
     job_name: Optional[str] = None,
     per_task: Optional[str] = None,
+    exclude_task_names: Optional[List[str]] = None,
 ) -> List[str]:
     argv: List[str] = [
         "--dataset-path",
@@ -217,4 +218,6 @@ def frozen_eval_argv(
         argv.append("--resume")
     if job_name:
         argv.extend(["--job-name", job_name])
+    for name in exclude_task_names or []:
+        argv.extend(["--exclude-task-name", name])
     return argv

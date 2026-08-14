@@ -69,6 +69,55 @@ _HERMES_AGENT = "benchmark.harbor_adapter.hermes_agent:HermesHarborAgent"
 _DEFAULT_TASKS = _REPO / "benchmark" / "terminal-bench" / "tasks"
 
 
+def _is_import_path_agent(agent: str) -> bool:
+    """Custom Harbor agents are ``module.path:ClassName``."""
+    return ":" in agent
+
+
+def collect_exclude_task_names(
+    named: Optional[List[str]] = None,
+    extra_argv: Optional[List[str]] = None,
+) -> List[str]:
+    """Deduped task ids from ``--exclude-task-name`` and Harbor remainder argv."""
+    out: List[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str) -> None:
+        name = str(raw).strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+
+    for item in named or []:
+        _add(item)
+    tokens = list(extra_argv or [])
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ("--exclude-task-name", "-x") and i + 1 < len(tokens):
+            _add(tokens[i + 1])
+            i += 2
+            continue
+        if tok.startswith("--exclude-task-name="):
+            _add(tok.split("=", 1)[1])
+        i += 1
+    return out
+
+
+def agent_cli_flags(agent: str) -> List[str]:
+    """Flags that load ``agent`` on Harbor 0.3.x and 0.21+.
+
+    Harbor 0.3.x types ``-a`` as a built-in ``AgentName`` enum, so import
+    paths must use ``--agent-import-path``. Harbor 0.21+ accepts
+    ``module:Class`` on ``-a`` but still honors ``--agent-import-path``.
+    Do not pass ``-a hermes`` with an import path: 0.3.x prefers the
+    built-in in-container ``hermes`` agent over ``import_path``.
+    """
+    if _is_import_path_agent(agent):
+        return ["--agent-import-path", agent]
+    return ["-a", agent]
+
+
 def _which_harbor() -> List[str]:
     exe = shutil.which("harbor")
     if exe:
@@ -115,8 +164,7 @@ def build_harbor_command(
         "run",
         "-p",
         str(dataset_path),
-        "-a",
-        agent,
+        *agent_cli_flags(agent),
         "--env",
         harbor_env,
         "--jobs-dir",
@@ -549,6 +597,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     p.add_argument("--print-summary", action="store_true")
     p.add_argument(
+        "--exclude-task-name",
+        action="append",
+        default=None,
+        metavar="TASK_ID",
+        help=(
+            "Skip this task id (repeatable). Applied before Harbor run so GPU "
+            "tasks never reach docker. Same names as Harbor -x."
+        ),
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the harbor run command and exit.",
@@ -569,6 +627,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             preview = ", ".join(unknown[:5])
             p.error(f"Split file lists unknown task ids: {preview}")
         task_ids = split_ids
+    excludes = collect_exclude_task_names(args.exclude_task_name, args.harbor_args)
+    if excludes:
+        skip = set(excludes)
+        dropped = [tid for tid in task_ids if tid in skip]
+        task_ids = [tid for tid in task_ids if tid not in skip]
+        if dropped:
+            print(
+                f"[harbor] excluding {len(dropped)} task(s): {', '.join(dropped)}",
+                flush=True,
+            )
     if args.list_tasks:
         for tid in task_ids:
             print(tid)
@@ -576,6 +644,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.task and not args.all:
         p.error("Specify --task TASK_ID, --all, or --list-tasks.")
     if args.task:
+        if args.task in set(excludes):
+            p.error(f"Task {args.task!r} is excluded by --exclude-task-name")
         if args.task not in task_ids:
             p.error(f"Unknown task {args.task!r}")
         run_ids = [args.task]
