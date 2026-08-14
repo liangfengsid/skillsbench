@@ -52,7 +52,7 @@ hermes-agent/
 ├── cron/                 # Scheduler — jobs.py, scheduler.py
 ├── environments/         # RL training environments (Atropos)
 ├── benchmark/          # Benchmark drivers — see benchmark/README.md
-│   ├── scripts/        # run_skillsbench_with_hermes.py, HLE, AppWorld, analyzers
+│   ├── scripts/        # run_skillsbench_with_hermes.py, AppWorld, analyzers
 │   └── skillsbench/    # SkillsBench (BenchFlow); see benchmark/skillsbench/README.md
 ├── scripts/              # run_tests.sh, release.py, auxiliary scripts
 ├── website/              # Docusaurus docs site

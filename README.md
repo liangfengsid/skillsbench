@@ -50,7 +50,7 @@ hermes              # start chatting!
 
 ### Benchmarks
 
-Hermes batch drivers (SkillsBench, HLE, AppWorld), hot-pool evaluation, and run comparison live under **`benchmark/`**. See **[`benchmark/README.md`](benchmark/README.md)** for install prerequisites, example commands, and script reference. Conceptually, the hot skill pool is described under [Hot skills](#hot-skills-ephemeral-key-point-pool) below.
+Hermes batch drivers (SkillsBench, AppWorld), hot-pool evaluation, and run comparison live under **`benchmark/`**. See **[`benchmark/README.md`](benchmark/README.md)** for install prerequisites, example commands, and script reference. Conceptually, the hot skill pool is described under [Hot skills](#hot-skills-ephemeral-key-point-pool) below.
 
 ### Skills: step-level variant pools (optional)
 

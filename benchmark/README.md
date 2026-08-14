@@ -1,6 +1,6 @@
 # Hermes benchmark drivers
 
-Hermes ships evaluation harnesses under `benchmark/` for running **`AIAgent`** against public benchmarks and comparing runs. All **Hermes-specific drivers** live in [`scripts/`](scripts/). Vendored benchmark trees (`skillsbench/`, `hle/`, `appworld/`, `alfworld/`) keep their upstream docs.
+Hermes ships evaluation harnesses under `benchmark/` for running **`AIAgent`** against public benchmarks and comparing runs. All **Hermes-specific drivers** live in [`scripts/`](scripts/). Vendored benchmark trees (`skillsbench/`, `appworld/`) keep their upstream docs.
 
 **Run commands from the Hermes repo root** unless noted otherwise.
 
@@ -13,7 +13,6 @@ source .venv/bin/activate   # or: source venv/bin/activate
 - **Hermes config:** `~/.hermes/config.yaml` and API keys in `~/.hermes/.env` (see [Configuration](https://hermes-agent.nousresearch.com/docs/user-guide/configuration)).
 - **Import path:** drivers prepend `--hermes-root` (default: this repo) to `sys.path` and import `run_agent.AIAgent`.
 - **SkillsBench / BenchFlow (optional):** `pip install -e ".[skillsbench]"` from repo root — see [`skillsbench/README.md`](skillsbench/README.md).
-- **HLE judge deps:** `pip install -r benchmark/hle/requirements.txt`.
 - **AppWorld:** `pip install -e benchmark/appworld` — see [`appworld/README.md`](appworld/README.md).
 
 ## Layout
@@ -23,9 +22,7 @@ source .venv/bin/activate   # or: source venv/bin/activate
 | [`scripts/`](scripts/) | Hermes batch drivers and analysis tools |
 | [`baselines/`](baselines/) | Isolated third-party / paper baselines (e.g. CoEvoSkills) |
 | [`skillsbench/`](skillsbench/) | SkillsBench tasks + BenchFlow (nested project) |
-| [`hle/`](hle/) | Humanity's Last Exam dataset / upstream eval notes |
 | [`appworld/`](appworld/) | AppWorld environment (vendored) |
-| [`alfworld/`](alfworld/) | ALFWorld environment (vendored) |
 
 ### CoEvoSkills baseline (SkillsBench)
 
@@ -90,9 +87,6 @@ python benchmark/scripts/analyze_hot_pool_runs.py RUN.jsonl \
 | [`compare_skillsbench_runs.py`](scripts/compare_skillsbench_runs.py) | Compare two SkillsBench JSONL runs (tokens, cost, API calls) |
 | [`analyze_hot_pool_runs.py`](scripts/analyze_hot_pool_runs.py) | Hot skill pool telemetry + procedure proxies + core metrics |
 | [`read_skillsbench_jsonl.py`](scripts/read_skillsbench_jsonl.py) | Load SkillsBench JSONL into Python |
-| [`run_model_predictions_hermes.py`](scripts/run_model_predictions_hermes.py) | HLE predictions via in-process Hermes |
-| [`run_judge_results_hermes.py`](scripts/run_judge_results_hermes.py) | HLE judge pass on predictions |
-| [`hle_hermes_inprocess.py`](scripts/hle_hermes_inprocess.py) | Shared HLE helper (imported by drivers) |
 | [`run_appworld_with_hermes.py`](scripts/run_appworld_with_hermes.py) | AppWorld ReAct loop with Hermes code generation |
 
 Each script supports `--help`.
@@ -500,38 +494,6 @@ Load JSONL in Python: `from read_skillsbench_jsonl import load_skillsbench_run_r
 
 ---
 
-## HLE (Humanity's Last Exam)
-
-Upstream dataset docs: [`hle/README.md`](hle/README.md). Hermes drivers call in-process **`AIAgent` with tools disabled**.
-
-```bash
-pip install -r benchmark/hle/requirements.txt   # once, in Hermes venv
-
-DATASET="cais/hle"
-MODEL="gpt-4o-2024-11-20"
-
-# Predictions → benchmark/hle/hle_<model>_hermes.json (slashes in model → underscores)
-python3 benchmark/scripts/run_model_predictions_hermes.py \
-  --dataset "$DATASET" --model "$MODEL" \
-  --num_workers 10 --max_completion_tokens 8192
-
-# Quick smoke test with local JSON
-python3 benchmark/scripts/run_model_predictions_hermes.py \
-  --dataset_file benchmark/hle/_smoke_first_question.json \
-  --model "$MODEL" --max_samples 1
-
-# Judge → benchmark/hle/judged_<basename>_hermes.json
-python3 benchmark/scripts/run_judge_results_hermes.py \
-  --dataset "$DATASET" \
-  --predictions "benchmark/hle/hle_${MODEL}_hermes.json" \
-  --judge "$MODEL" \
-  --num_workers 10
-```
-
-Optional: set `HERMES_AGENT_REPO` if `run_agent` is not importable from the current checkout.
-
----
-
 ## AppWorld
 
 Install AppWorld from the vendored tree, then run the Hermes driver. Pass **`--model`** explicitly (OpenRouter-style id); omitting it only works when `~/.hermes/config.yaml` already resolves a default model.
@@ -644,21 +606,6 @@ appworld evaluate hermes-agent dev    # experiment name ^   dataset ^
 ```
 
 See [`appworld/README.md`](appworld/README.md) for environment setup and leaderboard packing.
-
----
-
-## ALFWorld
-
-Vendored at [`alfworld/`](alfworld/). Install from source (Python 3.9+ recommended upstream; 3.12 works with Hermes venv):
-
-```bash
-cd benchmark/alfworld
-uv pip install -e ".[full]"
-```
-
-If `visdom` fails to build under `uv`, `benchmark/alfworld/pyproject.toml` pins `[tool.uv.extra-build-dependencies]` for that package. See [`alfworld/README.md`](alfworld/README.md) for data download and play scripts.
-
-There is no Hermes batch driver in `benchmark/scripts/` for ALFWorld yet; use upstream training/play scripts or add a driver following the SkillsBench pattern.
 
 ---
 
