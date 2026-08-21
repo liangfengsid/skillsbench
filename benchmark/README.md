@@ -115,7 +115,7 @@ python benchmark/scripts/analyze_hot_pool_runs.py RUN.jsonl \
 | [`compare_skillsbench_runs.py`](scripts/compare_skillsbench_runs.py) | Compare two SkillsBench JSONL runs (tokens, cost, API calls) |
 | [`analyze_hot_pool_runs.py`](scripts/analyze_hot_pool_runs.py) | Hot skill pool telemetry + procedure proxies + core metrics |
 | [`read_skillsbench_jsonl.py`](scripts/read_skillsbench_jsonl.py) | Load SkillsBench JSONL into Python |
-| [`run_appworld_with_hermes.py`](scripts/run_appworld_with_hermes.py) | AppWorld ReAct loop with Hermes code generation |
+| [`run_appworld_with_hermes.py`](scripts/run_appworld_with_hermes.py) | AppWorld ReAct loop with Hermes code generation; hot-pool / experiment-dir / resume parity with SkillsBench & ALFWorld |
 
 Each script supports `--help`.
 
@@ -389,7 +389,7 @@ Hot pool injects recently learned skill **key points** ephemerally each API turn
 
 Capacity eviction is **admission-time** (`skills.hot_pool.eviction_policy`): `llm` (default — side-channel judge on the running agent's LLM client when the pool overflows; falls back to `oldest`) or `oldest` (FIFO of extract on a persisted `global_turn` clock — one tick per `run_conversation` / SkillsBench task; deprecated as primary). Because retain = inject, the judge keeps a broadcast-worthy subset (transferable abstraction over context-local relevance); see [Hot skills](../README.md#hot-skills-ephemeral-key-point-pool). `max_entries` is both retain and inject size — the prompt dumps the whole pool. JSONL `hot_pool_telemetry.eviction` reports `capacity` drops.
 
-**Outcome feedback** (`skills.hot_pool.outcome_feedback`, default **on**): after host evaluation (SkillsBench `--evaluate-after-run`) or episode end (ALFWorld), a side-channel LLM attributes exposed tips using multi-dimensional metrics (success, reward, **iterations/steps**, tests). Utilities appear on eviction point payloads and in `hot_pool_telemetry.outcome_feedback`. Set `outcome_feedback: false` to A/B without attribution cost.
+**Outcome feedback** (`skills.hot_pool.outcome_feedback`, default **on**): after host evaluation (SkillsBench `--evaluate-after-run`), episode end (ALFWorld), or AppWorld `evaluate_task()`, a side-channel LLM attributes exposed tips using multi-dimensional metrics (success, reward, **iterations/steps**, tests). Utilities appear on eviction point payloads and in `hot_pool_telemetry.outcome_feedback`. Set `outcome_feedback: false` to A/B without attribution cost.
 
 **Treatment** — pool enabled with persistence across a split or batch:
 
@@ -630,28 +630,64 @@ If `ALFWORLD_DATA` is unset, the driver also looks at `/data/liangfeng/alfwordDa
 
 Install AppWorld from the vendored tree, then run the Hermes driver. Pass **`--model`** explicitly (OpenRouter-style id); omitting it only works when `~/.hermes/config.yaml` already resolves a default model.
 
+Hot-pool / experiment isolation mirrors ALFWorld and SkillsBench: `--hot-pool` / `--no-hot-pool` / `--hot-pool-persist`, `--experiment-dir`, `--isolate-hermes-home`, `--resume`. `--experiment-name` remains AppWorld’s output namespace under `experiments/outputs/` (orthogonal to `--experiment-dir`).
+
+**Hot-skill experiment paradigm** (official AppWorld splits): build the pool on **`train`** (89), evaluate transfer on **`test_normal`** (167); optionally replay **`train`** with the frozen pool for train-repeat. Use **`dev`** only for smoke tests. Optional harder transfer: **`test_challenge`**.
+
 ```bash
 pip install -e benchmark/appworld
+# Fix broken editable IPython if import fails: pip install --force-reinstall ipython
 
-python3 benchmark/scripts/run_appworld_with_hermes.py --list-tasks
-python3 benchmark/scripts/run_appworld_with_hermes.py --list-tasks --dataset dev
+python3 benchmark/scripts/run_appworld_with_hermes.py --list-tasks --dataset train
 
+# 1) Train — generate / grow hot pool
 python3 benchmark/scripts/run_appworld_with_hermes.py \
-  --dataset dev --task 50e1ac9_1 \
+  --dataset train --all \
   --model Qwen/Qwen3.6-27B \
-  --log-jsonl benchmark/appworld_hermes_runs.jsonl
+  --experiment-dir benchmark/runs/appworld_hot_train \
+  --isolate-hermes-home --hot-pool \
+  --experiment-name hermes-train \
+  --log-jsonl benchmark/runs/appworld_hot_train/runs.jsonl \
+  --resume --print-summary
 
+# 2) Unseen test — inject frozen train pool (do not rebuild on test_*)
 python3 benchmark/scripts/run_appworld_with_hermes.py \
-  --dataset dev --all --start-task-index 0 --end-task-index 5 \
+  --dataset test_normal --all \
   --model Qwen/Qwen3.6-27B \
-  --experiment-name hermes-dev \
-  --log-jsonl benchmark/appworld_runs.jsonl \
-  --print-summary
+  --experiment-dir benchmark/runs/appworld_hot_test \
+  --isolate-hermes-home \
+  --hot-pool --hot-pool-persist benchmark/runs/appworld_hot_train/hot_pool.json \
+  --experiment-name hermes-test \
+  --log-jsonl benchmark/runs/appworld_hot_test/runs.jsonl \
+  --resume --print-summary
+
+# 3) Optional train-repeat — same frozen pool on train again
+python3 benchmark/scripts/run_appworld_with_hermes.py \
+  --dataset train --all \
+  --model Qwen/Qwen3.6-27B \
+  --experiment-dir benchmark/runs/appworld_hot_train_repeat \
+  --isolate-hermes-home \
+  --hot-pool --hot-pool-persist benchmark/runs/appworld_hot_train/hot_pool.json \
+  --experiment-name hermes-train-repeat \
+  --log-jsonl benchmark/runs/appworld_hot_train_repeat/runs.jsonl \
+  --resume --print-summary
+
+# Control (no hot pool) on unseen test
+python3 benchmark/scripts/run_appworld_with_hermes.py \
+  --dataset test_normal --all \
+  --model Qwen/Qwen3.6-27B \
+  --experiment-dir benchmark/runs/appworld_no_hot_test \
+  --isolate-hermes-home --no-hot-pool \
+  --experiment-name hermes-no-hot-test \
+  --log-jsonl benchmark/runs/appworld_no_hot_test/runs.jsonl \
+  --resume --print-summary
 ```
 
-**AppWorld data:** from `benchmark/appworld/`, run `appworld download` once (sets up `data/` under `APPWORLD_ROOT`; default is the AppWorld repo root). See [`appworld/README.md`](appworld/README.md) for `APPWORLD_ROOT` and full setup.
+**AppWorld data:** from `benchmark/appworld/`, run `appworld download data` once (sets up `data/` under `APPWORLD_ROOT`; default is the AppWorld repo root). See [`appworld/README.md`](appworld/README.md) for `APPWORLD_ROOT` and full setup.
 
 **Hermes tools:** the driver exposes all configured Hermes toolsets by default (terminal, files, web search, skills, etc.). AppWorld API actions still run via ` ```python ` blocks executed in the AppWorld REPL. Use `--no-tools` to restore the original code-only ReAct mode. With tools enabled, each AppWorld step allows up to 90 Hermes tool-calling iterations by default (`--max-hermes-iterations` overrides).
+
+**Hot pool:** same CLI as SkillsBench/ALFWorld. With `--experiment-dir` + `--hot-pool` and no `--hot-pool-persist`, the pool defaults to `DIR/hot_pool.json`. After evaluation, outcome feedback updates tip utilities (iterations = AppWorld steps when present). JSONL includes `hot_pool_enabled`, `hot_pool_persist`, optional `hot_pool_telemetry`, and `evaluation.task_success` (alias of AppWorld `success`) for shared aggregators.
 
 ### Evaluate task results
 
@@ -749,8 +785,8 @@ JSONL logs are usually written under `benchmark/`:
 |--------|--------|--------|
 | SkillsBench | `skillsbench.hermes_run.v1` | `run_conversation_result`, `hot_pool_enabled`, `hot_pool_persist`, optional `hot_pool_telemetry`, `background_review` (`actions`, `telemetry`) |
 | Terminal-Bench | `terminalbench.hermes_run.v1` | `eval_mode: harbor`; verifier reward from Harbor `result.json` |
-| AppWorld (run) | `appworld.hermes_run.v1` | `steps`, `hermes_stats`, `evaluation` (unless `--no-evaluate`) |
-| AppWorld (eval only) | `appworld.hermes_eval.v1` | `evaluation`; optional `run_hermes_stats` when `--run-log-jsonl` matches |
+| AppWorld (run) | `appworld.hermes_run.v1` | `steps`, `hermes_stats`, `run_conversation_result`, `evaluation` (unless `--no-evaluate`), `hot_pool_enabled` / `hot_pool_persist`, optional `hot_pool_telemetry` |
+| AppWorld (eval only) | `appworld.hermes_eval.v1` | `evaluation` (`success` + `task_success`); optional `run_hermes_stats` when `--run-log-jsonl` matches |
 | AppWorld (eval skip) | `appworld.hermes_eval_skip.v1` | `skip_reason` when task was not run (`--evaluate-only`) |
 
 Errors use `*.hermes_run_error.v1` schemas on failure lines.

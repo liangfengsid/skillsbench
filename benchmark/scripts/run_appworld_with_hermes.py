@@ -13,23 +13,29 @@ Requires:
 
 Examples (from Hermes repo root):
 
-  python3 benchmark/scripts/run_appworld_with_hermes.py --list-tasks
-  python3 benchmark/scripts/run_appworld_with_hermes.py --list-tasks --dataset dev
-
+  # 1) Train — generate hot pool
   python3 benchmark/scripts/run_appworld_with_hermes.py \\
-      --dataset dev --task 50e1ac9_1 --log-jsonl ./appworld_hermes_runs.jsonl
+      --dataset train --all --model Qwen/Qwen3.6-27B \\
+      --experiment-dir benchmark/runs/appworld_hot_train \\
+      --isolate-hermes-home --hot-pool --experiment-name hermes-train \\
+      --log-jsonl benchmark/runs/appworld_hot_train/runs.jsonl \\
+      --resume --print-summary
 
+  # 2) Unseen test_normal — frozen train pool
   python3 benchmark/scripts/run_appworld_with_hermes.py \\
-      --dataset dev --all --start-task-index 0 --end-task-index 5 \\
-      --experiment-name hermes-dev --log-jsonl ./runs.jsonl
-
-  python3 benchmark/scripts/run_appworld_with_hermes.py \\
-      --evaluate-only --dataset dev --task 50e1ac9_1 --experiment-name hermes-dev
+      --dataset test_normal --all --model Qwen/Qwen3.6-27B \\
+      --experiment-dir benchmark/runs/appworld_hot_test \\
+      --isolate-hermes-home \\
+      --hot-pool --hot-pool-persist benchmark/runs/appworld_hot_train/hot_pool.json \\
+      --experiment-name hermes-test \\
+      --log-jsonl benchmark/runs/appworld_hot_test/runs.jsonl \\
+      --resume --print-summary
 """
 
 from __future__ import annotations
 
 import argparse
+import builtins
 import copy
 import json
 import os
@@ -41,7 +47,65 @@ import traceback
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+# AppWorld's SafetyGuard patches host I/O (Path.mkdir, os.putenv, builtins.open,
+# …) process-wide during ``world.execute()`` and may leak. Bind the real
+# functions now, before AppWorld is imported, and reinstall them after each task.
+_HOST_OPEN = builtins.open
+_HOST_PATH_MKDIR = Path.mkdir
+_HOST_ATTRS: List[Tuple[Any, str, Any]] = []
+
+
+def _remember_host_attr(obj: Any, name: str) -> None:
+    fn = getattr(obj, name, None)
+    if fn is not None:
+        _HOST_ATTRS.append((obj, name, fn))
+
+
+for _os_name in (
+    "putenv",
+    "unsetenv",
+    "system",
+    "open",
+    "remove",
+    "removedirs",
+    "rmdir",
+    "rename",
+    "replace",
+    "unlink",
+    "chmod",
+    "chdir",
+    "walk",
+    "kill",
+    "_exit",
+):
+    _remember_host_attr(os, _os_name)
+for _sh_name in ("rmtree", "move", "copy", "copy2", "copyfile", "copytree"):
+    _remember_host_attr(shutil, _sh_name)
+for _p_name in (
+    "open",
+    "write_text",
+    "read_bytes",
+    "write_bytes",
+    "unlink",
+    "rmdir",
+    "rename",
+    "replace",
+    "chmod",
+    "lchmod",
+    "chown",
+    "lchown",
+    "touch",
+    "symlink_to",
+    "link_to",
+    "mkdir",
+    "expanduser",
+):
+    _remember_host_attr(Path, _p_name)
+_remember_host_attr(builtins, "open")
+_remember_host_attr(json, "dump")
+_remember_host_attr(json, "load")
 
 # Feishu optional deps (lark_oapi) emit setuptools pkg_resources noise on import.
 warnings.filterwarnings(
@@ -51,6 +115,8 @@ warnings.filterwarnings(
 )
 
 _SCRIPT = Path(__file__).resolve()
+if str(_SCRIPT.parent) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT.parent))
 _BENCHMARK_DIR = _SCRIPT.parents[1]
 _DEFAULT_HERMES = _SCRIPT.parents[2]
 _DEFAULT_APPWORLD = _BENCHMARK_DIR / "appworld"
@@ -58,6 +124,20 @@ _DEFAULT_PROMPT = (
     _DEFAULT_APPWORLD / "experiments/prompts/react_code_agent/instructions.txt"
 )
 DEFAULT_EXPERIMENT_NAME = "hermes-agent"
+
+from run_skillsbench_with_hermes import (  # noqa: E402
+    apply_hot_pool_cli_overrides,
+    resolve_agent_runtime,
+    resolve_model_id,
+)
+from skillsbench_experiment_workspace import (  # noqa: E402
+    experiment_hermes_home,
+    experiment_hot_pool_path,
+    link_shared_hermes_files,
+    refresh_skills_dir_caches,
+    resolve_source_hermes_home,
+    seed_hermes_skills,
+)
 
 DATASET_NAMES = ("train", "dev", "test_normal", "test_challenge")
 
@@ -122,6 +202,38 @@ def _restore_stdio_for_appworld() -> None:
         sys.stdout = sys.__stdout__
     if sys.__stderr__ is not None:
         sys.stderr = sys.__stderr__
+
+
+def _restore_host_os_io() -> None:
+    """Reinstall host functions captured before AppWorld SafetyGuard patched them.
+
+    ``guard.disable()`` is not enough: if a guard leaked, the *next* AppWorld
+    instance snapshots the disabled functions as its "originals".
+    """
+    for obj, name, fn in _HOST_ATTRS:
+        try:
+            setattr(obj, name, fn)
+        except Exception:
+            pass
+
+
+def _disable_appworld_safety_guard(world: Any = None) -> None:
+    """Undo AppWorld's process-wide I/O patches if they leaked past execute()."""
+    guard = getattr(world, "safety_guard", None)
+    if guard is not None and hasattr(guard, "disable"):
+        try:
+            guard.disable()
+        except Exception:
+            pass
+    _restore_host_os_io()
+
+
+def _ensure_host_dir(path: Path) -> None:
+    """Create *path* even when ``Path.mkdir`` is SafetyGuard-disabled."""
+    try:
+        _HOST_PATH_MKDIR(path, parents=True, exist_ok=True)
+    except PermissionError:
+        os.makedirs(path, exist_ok=True)
 
 
 def _configure_appworld(appworld_root: Path) -> None:
@@ -445,15 +557,46 @@ def evaluate_one_task(
         / "report.md"
     )
     return {
-        "success": tracker.success,
+        "success": bool(tracker.success),
+        "task_success": bool(tracker.success),
+        "reward": 1.0 if tracker.success else 0.0,
         "pass_count": tracker.pass_count,
         "fail_count": tracker.fail_count,
         "num_tests": tracker.num_tests,
+        "tests_passed": tracker.pass_count,
+        "tests_total": tracker.num_tests,
         "pass_percentage": tracker.pass_percentage,
         "difficulty": tracker.difficulty,
         "report_path": str(report_path) if report_path.is_file() else None,
         "evaluation": tracker.to_dict(stats_only=True),
     }
+
+
+def _finished_task_ids(log_path: Path, *, successes_only: bool = False) -> Set[str]:
+    """Task ids already present in JSONL (last row wins)."""
+    if not log_path.is_file():
+        return set()
+    last: Dict[str, Dict[str, Any]] = {}
+    with log_path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            tid = row.get("appworld_task_id") or row.get("task_id") or row.get("skillsbench_task_id")
+            if tid:
+                last[str(tid)] = row
+    out: Set[str] = set()
+    for tid, row in last.items():
+        if successes_only:
+            ev = row.get("evaluation") or {}
+            if not (ev.get("task_success") or ev.get("success")):
+                continue
+        out.add(tid)
+    return out
 
 
 def _accumulate_hermes_stats(total: Dict[str, Any], step_result: Dict[str, Any]) -> None:
@@ -483,7 +626,13 @@ def run_one_task(
     evaluate_after_run: bool,
     no_tools: bool = False,
     max_hermes_iterations: Optional[int] = None,
+    hot_pool: Optional[bool] = None,
+    hot_pool_persist: Optional[str] = None,
+    runtime: Optional[Dict[str, Any]] = None,
+    config_hermes_home: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    _restore_host_os_io()
+    apply_hot_pool_cli_overrides(hot_pool=hot_pool, hot_pool_persist=hot_pool_persist)
     _configure_appworld(appworld_root)
 
     from appworld import AppWorld
@@ -508,6 +657,7 @@ def run_one_task(
     run_error: Optional[str] = None
     task_completed = False
     duration_sec = 0.0
+    agent = None
 
     conversation = copy.deepcopy(initial_messages)
     hermes_task_id = f"appworld-{dataset}-{task_id}"
@@ -515,17 +665,34 @@ def run_one_task(
         max_hermes_iterations,
         no_tools=no_tools,
     )
+    resolved_model = resolve_model_id(model)
+    if not resolved_model:
+        raise SystemExit(
+            "No model id resolved. Pass --model <id>, or set model.default via "
+            "`hermes model` / ~/.hermes/config.yaml."
+        )
+    agent_runtime = runtime or resolve_agent_runtime(
+        model=resolved_model,
+        config_hermes_home=config_hermes_home,
+    )
 
     t0 = time.perf_counter()
+    world_guard_host = None
     try:
         _restore_stdio_for_appworld()
         # AppWorld must initialize before importing AIAgent: Hermes wraps stdout
         # with _SafeWriter, which breaks IPython's shell setup inside AppWorld.
         with AppWorld(task_id=task_id, experiment_name=experiment_name) as world:
+            world_guard_host = world
             _ensure_hermes_on_path(hermes_root)
             from run_agent import AIAgent  # type: ignore
 
             agent_kwargs: Dict[str, Any] = {
+                "model": resolved_model,
+                "api_key": agent_runtime.get("api_key"),
+                "base_url": agent_runtime.get("base_url"),
+                "provider": agent_runtime.get("provider"),
+                "api_mode": agent_runtime.get("api_mode"),
                 "quiet_mode": quiet_mode,
                 "max_iterations": hermes_iterations,
                 "skip_context_files": skip_context_files,
@@ -538,9 +705,10 @@ def run_one_task(
             }
             if no_tools:
                 agent_kwargs["enabled_toolsets"] = []
-            if model:
-                agent_kwargs["model"] = model
             agent = AIAgent(**agent_kwargs)
+            pool = getattr(agent, "_hot_skill_pool", None)
+            if pool is not None and hasattr(pool, "clear_exposed_tips"):
+                pool.clear_exposed_tips()
 
             for step_number in range(1, max_steps + 1):
                 history, user_message = split_history_for_turn(conversation)
@@ -576,7 +744,10 @@ def run_one_task(
                     steps.append(step_record)
                     break
 
-                execution_output = world.execute(code)
+                try:
+                    execution_output = world.execute(code)
+                finally:
+                    _disable_appworld_safety_guard(world)
                 step_record["execution_output_preview"] = (execution_output or "")[:2000]
                 steps.append(step_record)
 
@@ -603,6 +774,7 @@ def run_one_task(
         run_error = repr(exc)
         steps.append({"error": run_error, "traceback": traceback.format_exc()})
     finally:
+        _disable_appworld_safety_guard(world_guard_host)
         _restore_stdio_for_appworld()
     duration_sec = round(time.perf_counter() - t0, 6)
 
@@ -616,39 +788,81 @@ def run_one_task(
             )
         except Exception as exc:
             evaluation = {"error": repr(exc), "traceback": traceback.format_exc()}
+        finally:
+            _restore_host_os_io()
+
+    if evaluation is not None and isinstance(evaluation, dict):
+        evaluation.setdefault("steps", len(steps))
+        evaluation.setdefault("task_success", bool(evaluation.get("success")))
+        if evaluation.get("reward") is None:
+            evaluation["reward"] = 1.0 if evaluation.get("task_success") else 0.0
+
+    if agent is not None and evaluation is not None:
+        try:
+            agent.apply_hot_pool_outcome_feedback(
+                evaluation=evaluation,
+                run_result=hermes_stats,
+                duration_sec=duration_sec,
+                benchmark="appworld",
+            )
+        except Exception:
+            pass
 
     output_dir = (
         appworld_root / "experiments" / "outputs" / experiment_name / "tasks" / task_id
     )
 
-    return {
+    envelope: Dict[str, Any] = {
         "schema": "appworld.hermes_run.v1",
+        "benchmark": "appworld",
         "appworld_task_id": task_id,
+        "task_id": task_id,
+        "skillsbench_task_id": task_id,
         "dataset": dataset,
         "experiment_name": experiment_name,
         "appworld_root": str(appworld_root),
         "hermes_root": str(hermes_root),
         "prompt_file": str(prompt_file),
+        "model": resolved_model,
         "instruction": task_meta.instruction,
         "num_instruction_messages": num_instruction_messages,
         "duration_sec": duration_sec,
         "max_steps": max_steps,
         "max_hermes_iterations": hermes_iterations,
         "hermes_tools_enabled": not no_tools,
+        "hot_pool_enabled": False if hot_pool is False else (True if hot_pool else None),
+        "hot_pool_persist": hot_pool_persist,
         "steps_taken": len(steps),
         "task_completed": task_completed,
         "run_error": run_error,
         "steps": steps,
         "hermes_stats": hermes_stats,
+        "run_conversation_result": {
+            "api_calls": hermes_stats.get("api_calls"),
+            "input_tokens": hermes_stats.get("input_tokens"),
+            "output_tokens": hermes_stats.get("output_tokens"),
+            "total_tokens": hermes_stats.get("total_tokens"),
+            "estimated_cost_usd": hermes_stats.get("estimated_cost_usd"),
+        },
         "output_directory": str(output_dir),
         "evaluation": evaluation,
     }
+    if agent is not None:
+        try:
+            tel = agent.export_hot_pool_telemetry()
+            if tel is not None:
+                envelope["hot_pool_telemetry"] = tel
+        except Exception:
+            pass
+    return envelope
 
 
 def append_jsonl(path: Path, record: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    """Append one JSONL row using host I/O captured before AppWorld patches."""
+    _ensure_host_dir(path.parent)
+    payload = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+    with _HOST_OPEN(path, "a", encoding="utf-8") as f:
+        f.write(payload)
 
 
 def main() -> int:
@@ -804,11 +1018,70 @@ def main() -> int:
         metavar="Y",
         help="With --all: exclusive end index (Python slice end).",
     )
+    hot_pool_group = parser.add_mutually_exclusive_group()
+    hot_pool_group.add_argument(
+        "--hot-pool",
+        dest="hot_pool",
+        action="store_true",
+        help="Force-enable skills.hot_pool for this run.",
+    )
+    hot_pool_group.add_argument(
+        "--no-hot-pool",
+        dest="hot_pool",
+        action="store_false",
+        help="Force-disable skills.hot_pool for this run.",
+    )
+    parser.set_defaults(hot_pool=None)
+    parser.add_argument(
+        "--hot-pool-persist",
+        default=None,
+        help="Persist hot pool JSON across tasks (implies pool enabled).",
+    )
+    parser.add_argument(
+        "--experiment-dir",
+        type=str,
+        default=None,
+        help=(
+            "Writable run dir (default JSONL + hot_pool paths). "
+            "Does not replace --experiment-name (AppWorld output namespace)."
+        ),
+    )
+    parser.add_argument(
+        "--isolate-hermes-home",
+        action="store_true",
+        help=(
+            "With --experiment-dir: set HERMES_HOME=DIR/hermes_home. Skills are "
+            "seeded from repo skills/; config/.env/SOUL.md link to the real home."
+        ),
+    )
+    parser.add_argument(
+        "--reset-task-workspaces",
+        action="store_true",
+        help=(
+            "With --isolate-hermes-home: re-seed DIR/hermes_home/skills from "
+            "the repo skills/ tree."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip task ids already present in --log-jsonl / experiment runs.jsonl.",
+    )
+    parser.add_argument(
+        "--resume-successes-only",
+        action="store_true",
+        help="With --resume, only skip tasks whose last row has task_success/success.",
+    )
 
     args = parser.parse_args()
     hermes_root = _expand(args.hermes_root)
     appworld_root = _expand(args.appworld_root)
     prompt_file = _expand(args.prompt_file)
+
+    if args.isolate_hermes_home and not args.experiment_dir:
+        parser.error("--isolate-hermes-home requires --experiment-dir")
+    if args.reset_task_workspaces and not args.isolate_hermes_home:
+        parser.error("--reset-task-workspaces requires --isolate-hermes-home")
 
     if args.list_tasks:
         list_tasks_report(appworld_root=appworld_root, dataset=args.dataset)
@@ -854,12 +1127,64 @@ def main() -> int:
             return 1
         run_ids = [args.task]
 
+    experiment_dir: Optional[Path] = None
+    config_hermes_home: Optional[Path] = None
+    log_path = Path(args.log_jsonl).expanduser() if args.log_jsonl else None
+    hot_pool = args.hot_pool
+    hot_pool_persist = args.hot_pool_persist
+    if args.experiment_dir:
+        experiment_dir = Path(args.experiment_dir).expanduser().resolve()
+        _ensure_host_dir(experiment_dir)
+        if log_path is None:
+            log_path = experiment_dir / "runs.jsonl"
+        _ensure_host_dir(log_path.parent)
+        if args.isolate_hermes_home:
+            source_home = resolve_source_hermes_home()
+            home = experiment_hermes_home(experiment_dir)
+            seed = seed_hermes_skills(
+                home,
+                reset_skills=bool(args.reset_task_workspaces),
+                hermes_root=hermes_root,
+            )
+            link_shared_hermes_files(home, source_hermes_home=source_home)
+            os.environ["HERMES_HOME"] = str(home)
+            refresh_skills_dir_caches(home / "skills")
+            print(
+                f"[appworld] HERMES_HOME → {home} "
+                f"(skills {seed.get('action')}, n={seed.get('n_skills')} "
+                f"from {seed.get('source_skills')})",
+                flush=True,
+            )
+            config_hermes_home = source_home if source_home.is_dir() else None
+        if hot_pool and not hot_pool_persist:
+            hot_pool_persist = str(experiment_hot_pool_path(experiment_dir))
+
+    if log_path is not None:
+        _ensure_host_dir(log_path.parent)
+
+    apply_hot_pool_cli_overrides(hot_pool=hot_pool, hot_pool_persist=hot_pool_persist)
+
+    skip_ids: Set[str] = set()
+    if args.resume:
+        if log_path is None:
+            parser.error("--resume requires --log-jsonl or --experiment-dir")
+        skip_ids = _finished_task_ids(
+            log_path, successes_only=bool(args.resume_successes_only)
+        )
+        if skip_ids:
+            before = len(run_ids)
+            run_ids = [tid for tid in run_ids if tid not in skip_ids]
+            print(
+                f"[appworld] resume: skipping {before - len(run_ids)} finished "
+                f"({len(run_ids)} pending)",
+                flush=True,
+            )
+
     if args.clear_experiment and not args.evaluate_only:
         removed = clear_experiment_output(appworld_root, args.experiment_name)
         if removed and args.print_summary:
             print(f"Cleared experiment output: {removed}", flush=True)
 
-    log_path = Path(args.log_jsonl).expanduser() if args.log_jsonl else None
     any_failed = False
 
     eval_batch = {
@@ -880,6 +1205,19 @@ def main() -> int:
                 Path(run_log).expanduser(),
                 experiment_name=args.experiment_name,
             )
+
+    shared_runtime: Optional[Dict[str, Any]] = None
+    if run_ids and not args.evaluate_only:
+        resolved_model = resolve_model_id(args.model)
+        if not resolved_model:
+            raise SystemExit(
+                "No model id resolved. Pass --model <id>, or set model.default via "
+                "`hermes model` / ~/.hermes/config.yaml."
+            )
+        shared_runtime = resolve_agent_runtime(
+            model=resolved_model,
+            config_hermes_home=config_hermes_home,
+        )
 
     for tid in run_ids:
         ts_start = datetime.now(timezone.utc).isoformat()
@@ -905,6 +1243,8 @@ def main() -> int:
                                 "ts_start_iso": ts_start,
                                 "ts_end_iso": datetime.now(timezone.utc).isoformat(),
                                 "appworld_task_id": tid,
+                                "task_id": tid,
+                                "skillsbench_task_id": tid,
                                 "dataset": args.dataset,
                                 "experiment_name": args.experiment_name,
                                 "skip_reason": skip_reason,
@@ -920,18 +1260,23 @@ def main() -> int:
                 run_stats = run_stats_by_task.get(tid)
                 envelope: Dict[str, Any] = {
                     "schema": "appworld.hermes_eval.v1",
+                    "benchmark": "appworld",
                     "ts_start_iso": ts_start,
                     "ts_end_iso": datetime.now(timezone.utc).isoformat(),
                     "appworld_task_id": tid,
+                    "task_id": tid,
+                    "skillsbench_task_id": tid,
                     "dataset": args.dataset,
                     "experiment_name": args.experiment_name,
                     "evaluation": evaluation,
                 }
                 if run_stats:
                     envelope["run_hermes_stats"] = run_stats
+                if experiment_dir is not None:
+                    envelope["experiment_dir"] = str(experiment_dir)
                 eval_batch["evaluated"] += 1
                 eval_batch["evaluated_task_ids"].append(tid)
-                if evaluation.get("success"):
+                if evaluation.get("success") or evaluation.get("task_success"):
                     eval_batch["task_successes"] += 1
                 eval_batch["pass_count"] += int(evaluation.get("pass_count") or 0)
                 eval_batch["num_tests"] += int(evaluation.get("num_tests") or 0)
@@ -952,9 +1297,15 @@ def main() -> int:
                     save_trajectories=args.save_trajectories,
                     evaluate_after_run=not args.no_evaluate,
                     no_tools=args.no_tools,
+                    hot_pool=hot_pool,
+                    hot_pool_persist=hot_pool_persist,
+                    runtime=shared_runtime,
+                    config_hermes_home=config_hermes_home,
                 )
                 envelope["ts_start_iso"] = ts_start
                 envelope["ts_end_iso"] = datetime.now(timezone.utc).isoformat()
+                if experiment_dir is not None:
+                    envelope["experiment_dir"] = str(experiment_dir)
 
             serializable = json_safe(envelope)
             if log_path:
@@ -977,6 +1328,7 @@ def main() -> int:
                         f"task_completed={envelope.get('task_completed')!r} "
                         f"run_error={envelope.get('run_error')!r} "
                         f"eval_success={ev.get('success')!r} "
+                        f"hot_pool={envelope.get('hot_pool_enabled')!r} "
                         f"tokens={envelope.get('hermes_stats', {}).get('total_tokens')!r}",
                         flush=True,
                     )
@@ -994,6 +1346,8 @@ def main() -> int:
                 "ts_start_iso": ts_start,
                 "ts_end_iso": datetime.now(timezone.utc).isoformat(),
                 "appworld_task_id": tid,
+                "task_id": tid,
+                "skillsbench_task_id": tid,
                 "dataset": args.dataset,
                 "error": repr(exc),
                 "traceback": traceback.format_exc(),

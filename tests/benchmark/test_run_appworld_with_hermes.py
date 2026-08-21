@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -250,3 +251,109 @@ def test_print_evaluate_batch_summary(capsys):
     assert "test passes: 3/4 (75.0%)" in out
     assert "tokens: 1,500 total" in out
     assert "750 avg" in out
+
+
+def test_finished_task_ids_resume(tmp_path):
+    mod = _load_module()
+    log = tmp_path / "runs.jsonl"
+    log.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "appworld_task_id": "a",
+                        "evaluation": {"task_success": False, "success": False},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "appworld_task_id": "b",
+                        "evaluation": {"task_success": True, "success": True},
+                    }
+                ),
+                json.dumps({"appworld_task_id": "a", "evaluation": {"success": True}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert mod._finished_task_ids(log) == {"a", "b"}
+    assert mod._finished_task_ids(log, successes_only=True) == {"a", "b"}
+
+
+def test_script_documents_hot_pool_cli_flags():
+    text = _SCRIPT.read_text(encoding="utf-8")
+    assert "--hot-pool" in text
+    assert "--isolate-hermes-home" in text
+    assert "--experiment-dir" in text
+    assert "apply_hot_pool_outcome_feedback" in text
+    assert "task_success" in text
+
+
+def test_append_jsonl_survives_appworld_safety_guard(tmp_path, monkeypatch):
+    """Host JSONL logging must work after AppWorld patches Path.mkdir / open."""
+    import builtins
+
+    mod = _load_module()
+    log = tmp_path / "exp" / "runs.jsonl"
+
+    def blocked_mkdir(self, *args, **kwargs):
+        raise PermissionError(
+            "Usage of the following function is not allowed: pathlib.Path.mkdir."
+        )
+
+    real_open = builtins.open
+
+    def read_only_open(file, mode="r", *args, **kwargs):
+        if any(flag in str(mode) for flag in ("w", "a", "x", "+")):
+            raise PermissionError("Writing to OS file system is disabled.")
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", blocked_mkdir)
+    monkeypatch.setattr(builtins, "open", read_only_open)
+
+    mod.append_jsonl(log, {"schema": "appworld.hermes_run.v1", "ok": True})
+    rows = log.read_text(encoding="utf-8").strip().splitlines()
+    assert json.loads(rows[0])["ok"] is True
+
+    mod.append_jsonl(log, {"schema": "appworld.hermes_run.v1", "ok": False})
+    rows = log.read_text(encoding="utf-8").strip().splitlines()
+    assert [json.loads(r)["ok"] for r in rows] == [True, False]
+
+
+def test_restore_host_os_io_allows_environ_after_putenv_guard(monkeypatch):
+    """--no-hot-pool sets os.environ; that must work after SafetyGuard leaks."""
+    mod = _load_module()
+
+    def blocked_putenv(*args, **kwargs):
+        raise PermissionError(
+            "Usage of the following function is not allowed: os.putenv."
+        )
+
+    monkeypatch.setattr(os, "putenv", blocked_putenv)
+    with pytest.raises(PermissionError, match="os.putenv"):
+        os.environ["_HERMES_TEST_HOT_POOL"] = "0"
+
+    mod._restore_host_os_io()
+    mod.apply_hot_pool_cli_overrides(hot_pool=False, hot_pool_persist=None)
+    assert os.environ.get("HERMES_HOT_POOL_ENABLED") == "0"
+
+
+def test_restore_host_os_io_allows_expanduser_after_path_guard(tmp_path, monkeypatch):
+    """Hot-pool persist resolves Path.expanduser after a leaked SafetyGuard."""
+    mod = _load_module()
+    persist = tmp_path / "hot_pool.json"
+
+    def blocked_expanduser(self):
+        raise PermissionError(
+            "Usage of the following function is not allowed: pathlib.Path.expanduser."
+        )
+
+    monkeypatch.setattr(Path, "expanduser", blocked_expanduser)
+    with pytest.raises(PermissionError, match="expanduser"):
+        Path(persist).expanduser()
+
+    mod._restore_host_os_io()
+    mod.apply_hot_pool_cli_overrides(hot_pool=True, hot_pool_persist=str(persist))
+    assert os.environ.get("HERMES_HOT_POOL_ENABLED") == "1"
+    assert os.environ.get("HERMES_HOT_POOL_PATH") == str(persist.resolve())
