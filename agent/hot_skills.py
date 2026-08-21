@@ -128,6 +128,9 @@ _DEFAULT_HOT_POOL = {
     "fallback_extract": True,
     "persist_across_conversations": False,
     "persist_path": "",
+    # After a labeled task/episode, LLM-attribute exposed tips and update
+    # multi-dimensional utilities (default on). Used at admit/evict, not inject.
+    "outcome_feedback": True,
 }
 
 _VALID_EVICTION_POLICIES = frozenset({"oldest", "llm"})
@@ -161,6 +164,7 @@ def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     cfg["inject_on_turn"] = bool(cfg.get("inject_on_turn", True))
     cfg["skip_if_in_history"] = bool(cfg.get("skip_if_in_history", True))
     cfg["hydrate_from_history"] = bool(cfg.get("hydrate_from_history", True))
+    cfg["outcome_feedback"] = bool(cfg.get("outcome_feedback", True))
     return cfg
 
 
@@ -250,6 +254,147 @@ class HotSkillEntry:
     # Short natural-language applicability hint (shown in inject / eviction).
     # Not used to filter at inject — retain = inject; soft guidance only.
     scope: str = ""
+    # Parallel to key_points: multi-dimensional utility stats per tip.
+    point_utilities: List[Dict[str, Any]] = field(default_factory=list)
+
+
+def empty_point_utility() -> Dict[str, Any]:
+    """Multi-dimensional tip utility (not success-rate alone)."""
+    return {
+        "n_labeled": 0,
+        "helpful": 0,
+        "harmful": 0,
+        "irrelevant": 0,
+        "success_sum": 0.0,
+        "reward_sum": 0.0,
+        "iterations_sum": 0.0,
+        "n_success": 0,
+        "iterations_when_success_sum": 0.0,
+    }
+
+
+def summarize_point_utility(raw: Optional[dict]) -> Dict[str, Any]:
+    """Compact utility view for eviction judge / telemetry."""
+    u = raw if isinstance(raw, dict) else {}
+    n = int(u.get("n_labeled") or 0)
+    if n <= 0:
+        return {"n_labeled": 0}
+    n_success = int(u.get("n_success") or 0)
+    out: Dict[str, Any] = {
+        "n_labeled": n,
+        "helpful": int(u.get("helpful") or 0),
+        "harmful": int(u.get("harmful") or 0),
+        "irrelevant": int(u.get("irrelevant") or 0),
+        "success_rate": round(float(u.get("success_sum") or 0.0) / n, 4),
+        "avg_reward": round(float(u.get("reward_sum") or 0.0) / n, 4),
+        "avg_iterations": round(float(u.get("iterations_sum") or 0.0) / n, 4),
+    }
+    if n_success > 0:
+        out["avg_iterations_when_success"] = round(
+            float(u.get("iterations_when_success_sum") or 0.0) / n_success, 4
+        )
+    return out
+
+
+def _utility_strongly_harmful(util: dict, *, min_n: int = 3) -> bool:
+    """Conservative admit filter: drop tips with a clear harmful majority."""
+    n = int(util.get("n_labeled") or 0)
+    if n < min_n:
+        return False
+    harmful = int(util.get("harmful") or 0)
+    helpful = int(util.get("helpful") or 0)
+    return harmful >= 2 and harmful >= helpful + 2
+
+
+def align_point_utilities(
+    points: List[str],
+    utilities: Optional[List[Any]] = None,
+    *,
+    previous: Optional["HotSkillEntry"] = None,
+) -> List[Dict[str, Any]]:
+    """Ensure one utility dict per point; inherit by matching tip text when possible."""
+    prev_by_text: Dict[str, Dict[str, Any]] = {}
+    if previous is not None:
+        for text, util in zip(previous.key_points, previous.point_utilities or []):
+            if isinstance(util, dict):
+                prev_by_text[str(text)] = dict(util)
+    if isinstance(utilities, list):
+        for i, text in enumerate(points):
+            if i < len(utilities) and isinstance(utilities[i], dict):
+                prev_by_text.setdefault(str(text), dict(utilities[i]))
+    out: List[Dict[str, Any]] = []
+    for text in points:
+        inherited = prev_by_text.get(str(text))
+        out.append(dict(inherited) if inherited else empty_point_utility())
+    return out
+
+
+def build_hot_pool_outcome(
+    *,
+    evaluation: Optional[dict] = None,
+    run_result: Optional[dict] = None,
+    duration_sec: Optional[float] = None,
+    benchmark: str = "",
+) -> Dict[str, Any]:
+    """Normalize harness / run metrics into a multi-dimensional outcome record."""
+    ev = evaluation if isinstance(evaluation, dict) else {}
+    res = run_result if isinstance(run_result, dict) else {}
+
+    success = bool(ev.get("task_success") if "task_success" in ev else ev.get("success") or ev.get("won"))
+    try:
+        reward = float(ev["reward"]) if ev.get("reward") is not None else (1.0 if success else 0.0)
+    except (TypeError, ValueError):
+        reward = 1.0 if success else 0.0
+
+    iterations = None
+    iterations_kind = ""
+    for key, kind in (
+        ("steps", "env_steps"),
+        ("env_steps", "env_steps"),
+        ("api_calls", "api_calls"),
+        ("tool_rounds", "tool_rounds"),
+    ):
+        if ev.get(key) is not None:
+            try:
+                iterations = int(ev[key])
+                iterations_kind = kind
+                break
+            except (TypeError, ValueError):
+                pass
+    if iterations is None and res.get("api_calls") is not None:
+        try:
+            iterations = int(res["api_calls"])
+            iterations_kind = "api_calls"
+        except (TypeError, ValueError):
+            iterations = None
+
+    dur = duration_sec
+    if dur is None and ev.get("duration_sec") is not None:
+        try:
+            dur = float(ev["duration_sec"])
+        except (TypeError, ValueError):
+            dur = None
+
+    outcome: Dict[str, Any] = {
+        "success": success,
+        "reward": reward,
+        "iterations": iterations,
+        "iterations_kind": iterations_kind,
+        "benchmark": (benchmark or "").strip(),
+    }
+    if dur is not None:
+        outcome["duration_sec"] = dur
+    if ev.get("tests_passed") is not None:
+        try:
+            outcome["tests_passed"] = int(ev["tests_passed"])
+        except (TypeError, ValueError):
+            pass
+    if ev.get("tests_total") is not None:
+        try:
+            outcome["tests_total"] = int(ev["tests_total"])
+        except (TypeError, ValueError):
+            pass
+    return outcome
 
 
 def derive_hot_scope(
@@ -353,6 +498,9 @@ class HotPoolTelemetry:
     skill_manage_sync: int = 0
     skill_manage_evict: int = 0
     evicted_capacity: int = 0
+    outcome_feedback_applied: bool = False
+    outcome_feedback_points: int = 0
+    outcome_attributions: Dict[str, int] = field(default_factory=dict)
     _skill_view_seen: Set[str] = field(default_factory=set, repr=False)
 
     @property
@@ -399,6 +547,11 @@ class HotPoolTelemetry:
             },
             "eviction": {
                 "capacity": self.evicted_capacity,
+            },
+            "outcome_feedback": {
+                "applied": self.outcome_feedback_applied,
+                "points_scored": self.outcome_feedback_points,
+                "attributions": dict(self.outcome_attributions),
             },
         }
 
@@ -597,6 +750,8 @@ class HotSkillPool:
         self._telemetry = HotPoolTelemetry()
         self._telemetry_turn_started = False
         self._pool_at_turn_start: Set[str] = set()
+        # Tips exposed this episode (injected or skipped via history) for outcome feedback.
+        self._exposed_tips: "OrderedDict[Tuple[str, str], Dict[str, Any]]" = OrderedDict()
         if self._persist_enabled():
             self._load_persisted()
 
@@ -710,6 +865,7 @@ class HotSkillPool:
             "eviction_policy": self._config.get("eviction_policy"),
             "persist_across_conversations": self._persist_enabled(),
             "skip_if_in_history": bool(self._config.get("skip_if_in_history", True)),
+            "outcome_feedback": bool(self._config.get("outcome_feedback", True)),
         }
         return out
 
@@ -750,11 +906,33 @@ class HotSkillPool:
             self._telemetry.records_skipped_no_points += 1
             return
 
+        previous = self._entries.get(key)
+        if previous is not None and self._config.get("outcome_feedback", True):
+            prev_utils = {
+                str(t): u
+                for t, u in zip(previous.key_points, previous.point_utilities or [])
+                if isinstance(u, dict)
+            }
+            filtered: List[str] = []
+            for p in points:
+                util = prev_utils.get(str(p))
+                if util and _utility_strongly_harmful(util):
+                    continue
+                filtered.append(p)
+            points = filtered
+            if not points:
+                logger.debug(
+                    "hot skill pool: all tips for %r filtered by harmful utilities — skipping",
+                    key,
+                )
+                self._telemetry.records_skipped_no_points += 1
+                return
+
         mtime = _skill_md_mtime(skill_dir)
         tag_list = [str(t) for t in (tags or []) if t]
         desc = (description or "").strip()
         scope = derive_hot_scope(key, description=desc, tags=tag_list)
-        self._entries.pop(key, None)
+        previous = self._entries.pop(key, None)
         now = self._effective_turn(turn)
         entry = HotSkillEntry(
             name=key,
@@ -765,6 +943,7 @@ class HotSkillPool:
             description=desc,
             tags=tag_list,
             scope=scope,
+            point_utilities=align_point_utilities(points, previous=previous),
         )
         self._entries[key] = entry
         context = user_message if user_message is not None else self._admission_context
@@ -982,6 +1161,16 @@ class HotSkillPool:
         self._telemetry.points_excluded_in_history = sum(
             len(e.key_points) for e in skipped
         )
+        # Track exposure for outcome feedback (injected + history-skipped).
+        for entry in skipped:
+            for text in entry.key_points:
+                key = (entry.name, text)
+                self._exposed_tips[key] = {
+                    "skill": entry.name,
+                    "point": text,
+                    "scope": entry.scope or "",
+                    "via": "history",
+                }
 
         candidates = [
             entry for entry in self._entries.values()
@@ -1008,6 +1197,15 @@ class HotSkillPool:
         self._telemetry.points_injected = points
         self._telemetry.point_count = len(points)
         self._telemetry.chars = len(block)
+        for entry in candidates:
+            for text in entry.key_points:
+                key = (entry.name, text)
+                self._exposed_tips[key] = {
+                    "skill": entry.name,
+                    "point": text,
+                    "scope": entry.scope or "",
+                    "via": "inject",
+                }
         return block
 
     def _format_entries(self, entries: List[HotSkillEntry]) -> str:
@@ -1027,6 +1225,9 @@ class HotSkillPool:
         items: List[Dict[str, Any]] = []
         n = 0
         for name, entry in self._entries.items():
+            utils = list(entry.point_utilities or [])
+            while len(utils) < len(entry.key_points):
+                utils.append(empty_point_utility())
             for idx, text in enumerate(entry.key_points):
                 items.append(
                     {
@@ -1035,6 +1236,7 @@ class HotSkillPool:
                         "index": idx,
                         "point": text,
                         "scope": entry.scope or "",
+                        "utility": summarize_point_utility(utils[idx]),
                         "recorded_turn": int(entry.recorded_turn),
                     }
                 )
@@ -1046,6 +1248,8 @@ class HotSkillPool:
         if entry is None or index < 0 or index >= len(entry.key_points):
             return
         entry.key_points.pop(index)
+        if entry.point_utilities and index < len(entry.point_utilities):
+            entry.point_utilities.pop(index)
         if not entry.key_points:
             self._entries.pop(skill, None)
 
@@ -1057,6 +1261,8 @@ class HotSkillPool:
         incoming = self._entries.get(new_name)
         if incoming is not None and len(incoming.key_points) > cap:
             incoming.key_points = incoming.key_points[:cap]
+            if incoming.point_utilities:
+                incoming.point_utilities = incoming.point_utilities[:cap]
         if self._total_points() <= cap:
             return
 
@@ -1119,7 +1325,123 @@ class HotSkillPool:
         )
         return str(victim["skill"]), int(victim["index"])
 
+    def clear_exposed_tips(self) -> None:
+        """Reset episode exposure tracking (call at episode / task start if needed)."""
+        self._exposed_tips.clear()
+
+    def apply_outcome_feedback(
+        self,
+        outcome: dict,
+        *,
+        complete_fn: Optional[Callable[[List[Dict[str, str]]], str]] = None,
+    ) -> Dict[str, Any]:
+        """LLM-attribute exposed tips after a labeled task; update utilities.
+
+        Uses multi-dimensional outcome fields (success, reward, iterations, …).
+        Does not change inject behavior (retain = inject).
+        """
+        summary = {
+            "applied": False,
+            "points_scored": 0,
+            "attributions": {},
+            "skipped_reason": "",
+        }
+        if not self.enabled or not self._config.get("outcome_feedback", True):
+            summary["skipped_reason"] = "disabled"
+            return summary
+        if not isinstance(outcome, dict) or not outcome:
+            summary["skipped_reason"] = "missing_outcome"
+            return summary
+        if not self._exposed_tips:
+            summary["skipped_reason"] = "no_exposed_tips"
+            return summary
+        if not callable(complete_fn):
+            summary["skipped_reason"] = "no_complete_fn"
+            return summary
+
+        items = []
+        for i, ((_sk, _pt), tip) in enumerate(self._exposed_tips.items()):
+            items.append(
+                {
+                    "id": str(i),
+                    "skill": tip.get("skill"),
+                    "point": tip.get("point"),
+                    "scope": tip.get("scope") or "",
+                    "via": tip.get("via") or "",
+                }
+            )
+        try:
+            text = complete_fn(
+                build_outcome_attribution_messages(items, outcome)
+            ) or ""
+        except Exception:
+            logger.debug("hot pool outcome attribution complete_fn failed", exc_info=True)
+            summary["skipped_reason"] = "complete_fn_failed"
+            return summary
+
+        labels = parse_outcome_attributions(text, items)
+        if not labels:
+            summary["skipped_reason"] = "unparseable_or_empty"
+            return summary
+
+        success = bool(outcome.get("success"))
+        try:
+            reward = float(outcome.get("reward") if outcome.get("reward") is not None else (1.0 if success else 0.0))
+        except (TypeError, ValueError):
+            reward = 1.0 if success else 0.0
+        try:
+            iterations = float(outcome["iterations"]) if outcome.get("iterations") is not None else None
+        except (TypeError, ValueError):
+            iterations = None
+
+        attr_counts: Dict[str, int] = {"helpful": 0, "harmful": 0, "irrelevant": 0}
+        scored = 0
+        for item in items:
+            label = labels.get(str(item["id"]))
+            if label not in ("helpful", "harmful", "irrelevant"):
+                continue
+            skill = str(item.get("skill") or "")
+            point = str(item.get("point") or "")
+            entry = self._entries.get(skill)
+            if entry is None:
+                continue
+            try:
+                idx = entry.key_points.index(point)
+            except ValueError:
+                continue
+            while len(entry.point_utilities) < len(entry.key_points):
+                entry.point_utilities.append(empty_point_utility())
+            util = entry.point_utilities[idx]
+            util["n_labeled"] = int(util.get("n_labeled") or 0) + 1
+            util[label] = int(util.get(label) or 0) + 1
+            util["success_sum"] = float(util.get("success_sum") or 0.0) + (1.0 if success else 0.0)
+            util["reward_sum"] = float(util.get("reward_sum") or 0.0) + reward
+            if iterations is not None:
+                util["iterations_sum"] = float(util.get("iterations_sum") or 0.0) + iterations
+                if success:
+                    util["n_success"] = int(util.get("n_success") or 0) + 1
+                    util["iterations_when_success_sum"] = (
+                        float(util.get("iterations_when_success_sum") or 0.0) + iterations
+                    )
+            attr_counts[label] = attr_counts.get(label, 0) + 1
+            scored += 1
+
+        self._telemetry.outcome_feedback_applied = scored > 0
+        self._telemetry.outcome_feedback_points = scored
+        self._telemetry.outcome_attributions = dict(attr_counts)
+        if scored:
+            self._maybe_persist()
+        summary.update(
+            {
+                "applied": scored > 0,
+                "points_scored": scored,
+                "attributions": attr_counts,
+            }
+        )
+        return summary
+
     def _entry_to_dict(self, entry: HotSkillEntry) -> dict:
+        utils = align_point_utilities(entry.key_points, entry.point_utilities)
         return {
             "name": entry.name,
             "key_points": list(entry.key_points),
@@ -1129,6 +1451,7 @@ class HotSkillPool:
             "description": entry.description,
             "tags": list(entry.tags),
             "scope": entry.scope or "",
+            "point_utilities": utils,
         }
 
     @staticmethod
@@ -1152,6 +1475,7 @@ class HotSkillPool:
         recorded = data.get("recorded_turn")
         if recorded is None:
             recorded = data.get("last_used_turn") or 0
+        utilities = data.get("point_utilities")
         return HotSkillEntry(
             name=name,
             key_points=clean_points,
@@ -1161,6 +1485,7 @@ class HotSkillPool:
             description=description,
             tags=tag_list,
             scope=scope,
+            point_utilities=align_point_utilities(clean_points, utilities),
         )
 
     def _load_persisted(self) -> None:
@@ -1415,6 +1740,10 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "- Use each point's natural-language scope (when present) as a soft hint "
         "about where it applies; prefer tips whose stated scope is broadly "
         "transferable over narrow niche scopes when choosing among equals\n"
+        "- When utility stats are present (n_labeled > 0), prefer tips with more "
+        "helpful than harmful attributions; also prefer lower "
+        "avg_iterations_when_success / avg_iterations when success rates are "
+        "similar — efficiency matters when almost all tasks succeed\n"
         "\n"
         "DROP or deprioritize tips that:\n"
         "- Are bound to absolute paths, hostnames, credentials, account names, "
@@ -1422,11 +1751,84 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "- Encode one task's I/O or setup recipe rather than a general pitfall\n"
         "- Duplicate a stronger tip already being kept\n"
         "- Would mislead or waste effort if shown on an unrelated later task\n"
+        "- Have clearly worse utility than alternatives (high harmful count, or "
+        "much higher iteration cost for similar success)\n"
         "\n"
         "About context: it describes the overflow / incoming extract only. Use "
         "it to understand what is being admitted and to break ties. Do NOT "
         "treat \"most relevant to context\" as the primary keep criterion."
     )
+
+
+def build_outcome_attribution_messages(
+    items: List[Dict[str, Any]],
+    outcome: dict,
+) -> List[Dict[str, str]]:
+    """Isolated judge: label each exposed tip helpful / harmful / irrelevant."""
+    system = (
+        "You attribute credit for task outcome to hot-skill tips that were "
+        "exposed during the episode (injected or opened via skill_view).\n"
+        "\n"
+        "The outcome is multi-dimensional — do NOT use success alone. Consider "
+        "reward, iterations/steps (efficiency; lower is better when the task "
+        "succeeded), tests_passed/tests_total, and duration when present. On "
+        "benchmarks where success is near-ceiling, prefer judging whether a tip "
+        "helped or hurt efficiency and reliability.\n"
+        "\n"
+        "Return JSON only: {\"labels\": {\"<id>\": \"helpful\"|\"harmful\"|"
+        "\"irrelevant\", ...}} for the given point ids. Do not invent ids.\n"
+        "- helpful: tip plausibly improved outcome or efficiency\n"
+        "- harmful: tip plausibly caused waste, wrong paths, or failure modes\n"
+        "- irrelevant: tip did not meaningfully affect this episode\n"
+    )
+    payload = {
+        "outcome": outcome,
+        "points": items,
+    }
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+
+
+def parse_outcome_attributions(
+    text: str,
+    items: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Parse attribution JSON into id -> label. Empty dict on failure."""
+    valid_ids = {str(it["id"]) for it in items}
+    allowed = {"helpful", "harmful", "irrelevant"}
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+    raw = re.sub(
+        r"<think(?:ing)?\b[^>]*>.*?</think(?:ing)?>",
+        "",
+        raw,
+        flags=re.I | re.DOTALL,
+    ).strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I).strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if not match:
+            return {}
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return {}
+    labels = data.get("labels") if isinstance(data, dict) else None
+    if not isinstance(labels, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for key, val in labels.items():
+        kid = str(key)
+        label = str(val or "").strip().lower()
+        if kid in valid_ids and label in allowed:
+            out[kid] = label
+    return out
 
 
 def build_llm_eviction_messages(

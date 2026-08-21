@@ -6,10 +6,13 @@ import pytest
 
 from agent.hot_skills import (
     HotSkillPool,
+    build_hot_pool_outcome,
     build_hot_skills_block,
     build_llm_eviction_messages,
+    build_outcome_attribution_messages,
     compute_alignment_hits,
     derive_hot_scope,
+    empty_point_utility,
     extract_hot_key_points,
     format_hot_skill_section,
     llm_eviction_keep_ids,
@@ -17,8 +20,10 @@ from agent.hot_skills import (
     normalize_hot_scope_value,
     parse_hot_pool_inner_meta,
     parse_llm_keep_ids,
+    parse_outcome_attributions,
     replay_message_tool_stats,
     resolve_hot_pool_persist_path,
+    summarize_point_utility,
 )
 
 _SAMPLE_SKILL = """
@@ -854,3 +859,115 @@ def test_persist_roundtrip_keeps_recorded_turn(tmp_path):
 
     pool_b = HotSkillPool(cfg)
     assert pool_b._entries["bench-skill"].recorded_turn == recorded
+
+
+def test_outcome_feedback_default_on():
+    cfg = load_hot_skills_config({"hot_pool": {}})
+    assert cfg.get("outcome_feedback") is True
+
+
+def test_build_hot_pool_outcome_prefers_env_steps():
+    outcome = build_hot_pool_outcome(
+        evaluation={"task_success": True, "reward": 1.0, "steps": 7},
+        run_result={"api_calls": 40},
+        benchmark="alfworld",
+    )
+    assert outcome["success"] is True
+    assert outcome["iterations"] == 7
+    assert outcome["iterations_kind"] == "env_steps"
+
+
+def test_parse_outcome_attributions():
+    items = [{"id": "0", "skill": "a", "point": "tip"}, {"id": "1", "skill": "b", "point": "x"}]
+    labels = parse_outcome_attributions(
+        '{"labels": {"0": "helpful", "1": "harmful", "9": "irrelevant"}}',
+        items,
+    )
+    assert labels == {"0": "helpful", "1": "harmful"}
+
+
+def test_apply_outcome_feedback_updates_multidim_utility(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(
+        name="nav",
+        content="",
+        key_points=["go to fridge first", "never open locked door"],
+        turn=1,
+    )
+    pool.build_block(user_message="find apple", turn=1)
+    assert pool._exposed_tips
+
+    def fake_complete(msgs):
+        return json.dumps({"labels": {"0": "helpful", "1": "irrelevant"}})
+
+    summary = pool.apply_outcome_feedback(
+        {
+            "success": True,
+            "reward": 1.0,
+            "iterations": 12,
+            "iterations_kind": "env_steps",
+            "benchmark": "alfworld",
+        },
+        complete_fn=fake_complete,
+    )
+    assert summary["applied"] is True
+    assert summary["points_scored"] == 2
+    assert summary["attributions"]["helpful"] == 1
+    assert summary["attributions"]["irrelevant"] == 1
+
+    entry = pool._entries["nav"]
+    util0 = summarize_point_utility(entry.point_utilities[0])
+    assert util0["n_labeled"] == 1
+    assert util0["helpful"] == 1
+    assert util0["avg_iterations_when_success"] == 12.0
+    util1 = summarize_point_utility(entry.point_utilities[1])
+    assert util1["irrelevant"] == 1
+
+    items = pool._point_items()
+    assert items[0]["utility"]["n_labeled"] == 1
+    tel = pool.export_telemetry()
+    assert tel["outcome_feedback"]["applied"] is True
+    assert tel["config"]["outcome_feedback"] is True
+
+
+def test_outcome_feedback_disabled_skips(pool_cfg):
+    pool_cfg = dict(pool_cfg)
+    pool_cfg["outcome_feedback"] = False
+    pool = HotSkillPool(pool_cfg)
+    pool.record(name="x", content="", key_points=["tip"], turn=1)
+    pool.build_block(user_message="hi", turn=1)
+    summary = pool.apply_outcome_feedback(
+        {"success": True, "reward": 1.0, "iterations": 3},
+        complete_fn=lambda _m: '{"labels": {"0": "helpful"}}',
+    )
+    assert summary["applied"] is False
+    assert summary["skipped_reason"] == "disabled"
+
+
+def test_strongly_harmful_tip_filtered_on_re_admit(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(name="bad", content="", key_points=["poison tip"], turn=1)
+    entry = pool._entries["bad"]
+    util = empty_point_utility()
+    util.update(
+        {
+            "n_labeled": 4,
+            "helpful": 0,
+            "harmful": 3,
+            "irrelevant": 1,
+        }
+    )
+    entry.point_utilities = [util]
+    pool.record(name="bad", content="", key_points=["poison tip", "fresh tip"], turn=2)
+    assert pool._entries["bad"].key_points == ["fresh tip"]
+
+
+def test_outcome_attribution_messages_include_outcome():
+    msgs = build_outcome_attribution_messages(
+        [{"id": "0", "skill": "s", "point": "p"}],
+        {"success": True, "iterations": 5},
+    )
+    assert msgs[0]["role"] == "system"
+    assert "multi-dimensional" in msgs[0]["content"]
+    body = json.loads(msgs[1]["content"])
+    assert body["outcome"]["iterations"] == 5

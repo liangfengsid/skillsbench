@@ -389,6 +389,8 @@ Hot pool injects recently learned skill **key points** ephemerally each API turn
 
 Capacity eviction is **admission-time** (`skills.hot_pool.eviction_policy`): `llm` (default — side-channel judge on the running agent's LLM client when the pool overflows; falls back to `oldest`) or `oldest` (FIFO of extract on a persisted `global_turn` clock — one tick per `run_conversation` / SkillsBench task; deprecated as primary). Because retain = inject, the judge keeps a broadcast-worthy subset (transferable abstraction over context-local relevance); see [Hot skills](../README.md#hot-skills-ephemeral-key-point-pool). `max_entries` is both retain and inject size — the prompt dumps the whole pool. JSONL `hot_pool_telemetry.eviction` reports `capacity` drops.
 
+**Outcome feedback** (`skills.hot_pool.outcome_feedback`, default **on**): after host evaluation (SkillsBench `--evaluate-after-run`) or episode end (ALFWorld), a side-channel LLM attributes exposed tips using multi-dimensional metrics (success, reward, **iterations/steps**, tests). Utilities appear on eviction point payloads and in `hot_pool_telemetry.outcome_feedback`. Set `outcome_feedback: false` to A/B without attribution cost.
+
 **Treatment** — pool enabled with persistence across a split or batch:
 
 ```bash

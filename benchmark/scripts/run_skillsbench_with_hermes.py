@@ -330,6 +330,7 @@ def run_one_task(
     batch_review_prompt: bool = True,
     pass_k_turns: Optional[List[int]] = None,
     eval_timeout_sec: float = 600.0,
+    evaluate_after_run: bool = False,
     runtime: Optional[Dict[str, Any]] = None,
     config_hermes_home: Optional[Path] = None,
     benchmark_id: str = "skillsbench",
@@ -367,6 +368,9 @@ def run_one_task(
         save_trajectories=save_trajectories,
         platform=platform,
     )
+    pool = getattr(agent, "_hot_skill_pool", None)
+    if pool is not None and hasattr(pool, "clear_exposed_tips"):
+        pool.clear_exposed_tips()
     try:
         from skillsbench_console_window import get_active_window
 
@@ -425,6 +429,26 @@ def run_one_task(
             result["hot_pool_telemetry"] = refreshed
     elapsed = time.perf_counter() - t0
 
+    evaluation: Optional[Dict[str, Any]] = None
+    if evaluate_after_run:
+        evaluation = evaluate_skillsbench_task(
+            task_id=task_id,
+            skillsbench_root=skillsbench_root,
+            eval_timeout_sec=eval_timeout_sec,
+        )
+        try:
+            agent.apply_hot_pool_outcome_feedback(
+                evaluation=evaluation,
+                run_result=result if isinstance(result, dict) else None,
+                duration_sec=elapsed,
+                benchmark=benchmark_id,
+            )
+            refreshed = agent.export_hot_pool_telemetry()
+            if refreshed is not None and isinstance(result, dict):
+                result["hot_pool_telemetry"] = refreshed
+        except Exception:
+            pass
+
     envelope: Dict[str, Any] = {
         "schema": run_schema,
         "benchmark": benchmark_id,
@@ -448,6 +472,8 @@ def run_one_task(
         "background_review": background_review,
         "run_conversation_result": result,
     }
+    if evaluation is not None:
+        envelope["evaluation"] = evaluation
     if pass_tracker is not None and pass_at_turn:
         envelope["pass_k_turns"] = list(pass_k_turns or [])
         envelope["pass_at_turn"] = pass_at_turn
@@ -1160,6 +1186,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     batch_review_prompt=not args.no_batch_review_prompt,
                     pass_k_turns=pass_k_turns,
                     eval_timeout_sec=args.eval_timeout_sec,
+                    evaluate_after_run=bool(args.evaluate_after_run),
                     runtime=shared_runtime,
                     config_hermes_home=config_hermes_home,
                     benchmark_id="skillsbench",
@@ -1167,12 +1194,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     platform=str(preset["platform"]),
                 )
                 envelope["ts_start_iso"] = ts_start
-                if args.evaluate_after_run:
-                    envelope["evaluation"] = evaluate_skillsbench_task(
-                        task_id=tid,
-                        skillsbench_root=skillsbench_root,
-                        eval_timeout_sec=args.eval_timeout_sec,
-                    )
+                # Evaluation (+ hot-pool outcome feedback) runs inside run_one_task
+                # when evaluate_after_run is set.
 
             if split_file_path is not None:
                 envelope["split_file"] = str(split_file_path)

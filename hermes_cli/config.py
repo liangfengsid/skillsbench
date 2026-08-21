@@ -954,6 +954,9 @@ DEFAULT_CONFIG = {
             "fallback_extract": True,
             "persist_across_conversations": True,
             "persist_path": "",
+            # Default on: LLM-attribute exposed tips after labeled tasks and
+            # update multi-dimensional utilities for admit/evict.
+            "outcome_feedback": True,
         },
     },
 

@@ -224,6 +224,9 @@ def run_one_game(
     if no_tools:
         agent_kwargs["enabled_toolsets"] = []
     agent = AIAgent(**agent_kwargs)
+    pool = getattr(agent, "_hot_skill_pool", None)
+    if pool is not None and hasattr(pool, "clear_exposed_tips"):
+        pool.clear_exposed_tips()
 
     env = make_text_env(game, max_episode_steps=max_steps)
     steps: List[Dict[str, Any]] = []
@@ -301,6 +304,27 @@ def run_one_game(
         "max_steps": max_steps,
         "error": run_error,
     }
+    run_conversation_result = {
+        "api_calls": hermes_stats.get("api_calls"),
+        "input_tokens": hermes_stats.get("input_tokens"),
+        "output_tokens": hermes_stats.get("output_tokens"),
+        "total_tokens": hermes_stats.get("total_tokens"),
+        "cache_read_tokens": hermes_stats.get("cache_read_tokens"),
+        "reasoning_tokens": hermes_stats.get("reasoning_tokens"),
+        "estimated_cost_usd": hermes_stats.get("estimated_cost_usd"),
+        "completed": bool(hermes_stats.get("completed")),
+        "interrupted": bool(hermes_stats.get("interrupted")),
+        "failed": bool(hermes_stats.get("failed")),
+    }
+    try:
+        agent.apply_hot_pool_outcome_feedback(
+            evaluation=evaluation,
+            run_result=run_conversation_result,
+            duration_sec=duration_sec,
+            benchmark="alfworld",
+        )
+    except Exception:
+        pass
     envelope: Dict[str, Any] = {
         "schema": RUN_SCHEMA,
         "benchmark": "alfworld",
@@ -319,20 +343,15 @@ def run_one_game(
         "hot_pool_persist": hot_pool_persist,
         "run_error": run_error,
         "evaluation": evaluation,
-        "run_conversation_result": {
-            "api_calls": hermes_stats.get("api_calls"),
-            "input_tokens": hermes_stats.get("input_tokens"),
-            "output_tokens": hermes_stats.get("output_tokens"),
-            "total_tokens": hermes_stats.get("total_tokens"),
-            "cache_read_tokens": hermes_stats.get("cache_read_tokens"),
-            "reasoning_tokens": hermes_stats.get("reasoning_tokens"),
-            "estimated_cost_usd": hermes_stats.get("estimated_cost_usd"),
-            "completed": bool(hermes_stats.get("completed")),
-            "interrupted": bool(hermes_stats.get("interrupted")),
-            "failed": bool(hermes_stats.get("failed")),
-        },
+        "run_conversation_result": run_conversation_result,
         "ts_end_iso": datetime.now(timezone.utc).isoformat(),
     }
+    try:
+        tel = agent.export_hot_pool_telemetry()
+        if tel is not None:
+            envelope["hot_pool_telemetry"] = tel
+    except Exception:
+        pass
     if log_steps:
         envelope["steps"] = steps
     else:

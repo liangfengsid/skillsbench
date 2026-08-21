@@ -126,6 +126,7 @@ skill_view / skill_manage / recent use
 | Populate | After a skill is viewed/created, key points enter the pool |
 | Inject | Each user turn prepends the **entire** retained pool as `<hot-skills>`. With `skip_if_in_history` (default), skills already in recent `skill_view` history are omitted from the block to avoid duplicating the full skill body — that is channel separation, not “hot off.” Telemetry records `inject.skills_excluded_in_history` / `inject.points_excluded_in_history`. |
 | Evict | Only when a new extract would exceed `max_entries`. Policies: `oldest` (FIFO of extract time on a persisted global clock when the pool is saved across conversations) or `llm` (optional judge at overflow). Model "use" of a point is not observable. |
+| Outcome feedback (default on) | After a labeled task/episode, a side-channel LLM attributes exposed tips (`helpful` / `harmful` / `irrelevant`) using **multi-dimensional** metrics (success, reward, iterations/steps, tests, duration). Utilities feed eviction and a conservative admit filter — not per-turn inject filtering. Disable with `outcome_feedback: false`. |
 | Persist (optional) | Pool JSON can survive across conversations / sequential benchmark tasks |
 
 **Configure** in `~/.hermes/config.yaml`:
@@ -138,6 +139,7 @@ skills:
     # max_chars: ignored          # legacy; do not use — budget is max_entries
     max_chars_per_point: 240      # truncate individual extracted tips
     eviction_policy: llm          # llm (default) | oldest (fallback / opt-in)
+    outcome_feedback: true        # default on; set false to A/B without attribution
     persist_across_conversations: false
     # persist_path: ""            # default ~/.hermes/hot_skill_pool.json when persisting
 ```

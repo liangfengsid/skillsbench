@@ -87,7 +87,7 @@ from tools.browser_tool import cleanup_browser
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import StreamingContextScrubber, build_memory_context_block, sanitize_context
-from agent.hot_skills import HotSkillPool, llm_eviction_keep_ids
+from agent.hot_skills import HotSkillPool, build_hot_pool_outcome, llm_eviction_keep_ids
 from agent.retry_utils import jittered_backoff
 from agent.error_classifier import classify_api_error, FailoverReason
 from agent.prompt_builder import (
@@ -3613,6 +3613,45 @@ class AIAgent:
         except Exception:
             logger.debug("hot skill pool telemetry export failed", exc_info=True)
             return None
+
+    def apply_hot_pool_outcome_feedback(
+        self,
+        outcome: Optional[dict] = None,
+        *,
+        evaluation: Optional[dict] = None,
+        run_result: Optional[dict] = None,
+        duration_sec: Optional[float] = None,
+        benchmark: str = "",
+    ) -> Optional[dict]:
+        """LLM-attribute exposed hot tips after a labeled task (default-on)."""
+        pool = getattr(self, "_hot_skill_pool", None)
+        if pool is None or not pool.enabled:
+            return None
+        if not pool.config.get("outcome_feedback", True):
+            return {"applied": False, "skipped_reason": "disabled"}
+        record = outcome
+        if not isinstance(record, dict) or not record:
+            record = build_hot_pool_outcome(
+                evaluation=evaluation,
+                run_result=run_result if run_result is not None else None,
+                duration_sec=duration_sec,
+                benchmark=benchmark,
+            )
+        if getattr(self, "_hot_pool_llm_judge_inflight", False):
+            return {"applied": False, "skipped_reason": "judge_inflight"}
+        self._hot_pool_llm_judge_inflight = True
+        try:
+            return pool.apply_outcome_feedback(
+                record,
+                complete_fn=lambda msgs: self._complete_sidechannel_text(
+                    msgs, max_tokens=512, reason="hot_pool_outcome_feedback"
+                ),
+            )
+        except Exception:
+            logger.debug("hot pool outcome feedback failed", exc_info=True)
+            return {"applied": False, "skipped_reason": "error"}
+        finally:
+            self._hot_pool_llm_judge_inflight = False
 
     def _hot_pool_eviction_judge(
         self,
