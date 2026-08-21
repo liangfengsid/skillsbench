@@ -106,6 +106,10 @@ skillsbench = ["benchflow>=0.3.0a7,<1"]
 # `pip install -e ".[harbor]"` then optionally `pip install "harbor[modal]"`.
 # click>=8.2.1: Typer 0.24 uses click.Choice[...] and crashes on Click 8.1.x.
 harbor = ["harbor>=0.21,<1", "click>=8.2.1"]
+# ALFWorld TextWorld eval (`benchmark/scripts/run_alfworld_with_hermes.py`).
+# Also: `pip install -e benchmark/alfworld` (or rely on the driver PYTHONPATH).
+# Not included in [all]. Embodied THOR / MaskRCNN extras are not required.
+alfworld = ["textworld[pddl]>=1.6.1,<2", "termcolor>=2.0,<4"]
 all = [
   "hermes-agent[modal]",
   "hermes-agent[daytona]",

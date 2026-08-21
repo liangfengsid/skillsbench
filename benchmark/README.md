@@ -387,7 +387,7 @@ Hot pool injects recently learned skill **key points** ephemerally each API turn
 | `--no-hot-pool` | Force disable for this run (also disables persistence) |
 | `--hot-pool-persist PATH` | Load/save pool JSON across tasks (implies pool must be enabled) |
 
-Capacity eviction is **admission-time** (`skills.hot_pool.eviction_policy`): `oldest` (FIFO of extract on a persisted `global_turn` clock — one tick per `run_conversation` / SkillsBench task) or `llm` (side-channel judge on the running agent's LLM client when the pool overflows; falls back to `oldest`). The judge prompt asks which point ids to **keep** (at most `max_entries`), preferring transferable NEVER/ALWAYS rules over task-specific procedure; see [Hot skills](../README.md#hot-skills-ephemeral-key-point-pool). `max_entries` is both retain and inject size — the prompt dumps the whole pool. JSONL `hot_pool_telemetry.eviction` reports `capacity` drops.
+Capacity eviction is **admission-time** (`skills.hot_pool.eviction_policy`): `llm` (default — side-channel judge on the running agent's LLM client when the pool overflows; falls back to `oldest`) or `oldest` (FIFO of extract on a persisted `global_turn` clock — one tick per `run_conversation` / SkillsBench task; deprecated as primary). Because retain = inject, the judge keeps a broadcast-worthy subset (transferable abstraction over context-local relevance); see [Hot skills](../README.md#hot-skills-ephemeral-key-point-pool). `max_entries` is both retain and inject size — the prompt dumps the whole pool. JSONL `hot_pool_telemetry.eviction` reports `capacity` drops.
 
 **Treatment** — pool enabled with persistence across a split or batch:
 
@@ -424,7 +424,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py \
   --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
 ```
 
-JSONL rows record `hot_pool_enabled` (`true` / `false` / `null`) and `hot_pool_persist`. When the pool is active, `hot_pool_telemetry.inject` shows `point_count`, `skills_injected`, and `points_injected`.
+JSONL rows record `hot_pool_enabled` (`true` / `false` / `null`) and `hot_pool_persist`. When the pool is active, `hot_pool_telemetry.inject` shows `point_count`, `skills_injected`, and `points_injected`. With `skip_if_in_history` (default on), pool skills already opened via `skill_view` are omitted from the inject block to avoid duplicating the full skill body; that is **not** “hot off.” Read `inject.skills_excluded_in_history` and `inject.points_excluded_in_history` for how many retained tips were skipped for that reason (`point_count==0` with nonzero exclusions still means the tips lived in the transcript via `skill_view`).
 
 Env vars (set by the driver): `HERMES_HOT_POOL_ENABLED=0|1`, `HERMES_HOT_POOL_PERSIST=1`, `HERMES_HOT_POOL_PATH=/path/to/pool.json`.
 

@@ -9,9 +9,9 @@ Extracts guardrails from SKILL.md in this order:
 
 The pool cap **is** the inject budget (``max_entries`` points). Eviction runs
 only when a new extract would overflow — not every turn. Model "use" of a
-point is not observable; policies are ``oldest`` (default) or ``llm``
-(admission-time side-channel on the running agent's client). Full procedures
-stay behind ``skill_view``.
+point is not observable; policies are ``llm`` (default: admission-time
+side-channel judge on the running agent's client) or ``oldest`` (FIFO
+fallback / explicit opt-in). Full procedures stay behind ``skill_view``.
 """
 
 from __future__ import annotations
@@ -106,15 +106,18 @@ _DEFAULT_HOT_POOL = {
     # Retain = inject: this many key points are stored and dumped into
     # <hot-skills> (minus skip_if_in_history). No second per-turn subset.
     "max_entries": 12,
-    "max_chars": 4000,
+    # Deprecated / ignored: inject size is governed by max_entries (points),
+    # not a character budget. Kept in normalize for old configs only.
+    "max_chars": 0,
     "max_points_per_skill": 8,
     "max_chars_per_point": 240,
     # Admission-time victim when over max_entries. Model reliance is not
     # observable — do not treat inject as "use".
+    # llm (default): side-channel judge — keep a broadcast-worthy subset
+    #      (one call per overflow). Falls back to oldest if judge missing/fails.
     # oldest: drop points with the earliest recorded_turn (FIFO of extract).
-    # llm: side-channel judge on the running agent's LLM client (one call per
-    #      overflow). Falls back to oldest if the judge is missing or fails.
-    "eviction_policy": "oldest",
+    #      Deprecated as primary policy; keep for fallback / explicit opt-in.
+    "eviction_policy": "llm",
     "inject_on_turn": True,
     "skip_if_in_history": True,
     "history_lookback": 40,
@@ -128,6 +131,7 @@ _DEFAULT_HOT_POOL = {
 }
 
 _VALID_EVICTION_POLICIES = frozenset({"oldest", "llm"})
+_DEFAULT_EVICTION_POLICY = "llm"
 _PERSIST_SCHEMA = "hermes.hot_skill_pool.v1"
 
 # Optional test/agent hook: (items, keep_n, context) -> list[id str] to keep.
@@ -137,11 +141,16 @@ EvictionJudge = Callable[[List[Dict[str, Any]], int, str], Optional[List[str]]]
 def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     cfg["enabled"] = bool(cfg.get("enabled", False))
     cfg["max_entries"] = max(0, int(cfg.get("max_entries", 12) or 0))
-    cfg["max_chars"] = max(0, int(cfg.get("max_chars", 4000) or 0))
+    # Legacy key — no longer truncates the inject block.
+    cfg["max_chars"] = max(0, int(cfg.get("max_chars", 0) or 0))
     cfg["max_points_per_skill"] = max(1, int(cfg.get("max_points_per_skill", 8) or 8))
     cfg["max_chars_per_point"] = max(32, int(cfg.get("max_chars_per_point", 240) or 240))
-    policy = str(cfg.get("eviction_policy", "oldest") or "oldest").strip().lower()
-    cfg["eviction_policy"] = policy if policy in _VALID_EVICTION_POLICIES else "oldest"
+    policy = str(
+        cfg.get("eviction_policy", _DEFAULT_EVICTION_POLICY) or _DEFAULT_EVICTION_POLICY
+    ).strip().lower()
+    cfg["eviction_policy"] = (
+        policy if policy in _VALID_EVICTION_POLICIES else _DEFAULT_EVICTION_POLICY
+    )
     cfg["history_lookback"] = max(1, int(cfg.get("history_lookback", 40) or 40))
     cfg["hydrate_limit"] = max(1, int(cfg.get("hydrate_limit", 30) or 30))
     cfg["use_hermes_hot_markers"] = bool(cfg.get("use_hermes_hot_markers", True))
@@ -238,6 +247,73 @@ class HotSkillEntry:
     recorded_turn: int = 0  # extract clock; persisted global_turn across conversations
     description: str = ""
     tags: List[str] = field(default_factory=list)
+    # Short natural-language applicability hint (shown in inject / eviction).
+    # Not used to filter at inject — retain = inject; soft guidance only.
+    scope: str = ""
+
+
+def derive_hot_scope(
+    name: str,
+    description: str = "",
+    tags: Optional[Iterable[str]] = None,
+    *,
+    max_chars: int = 200,
+) -> str:
+    """Seed a short NL scope string at admit time.
+
+    Prefer skill description, else tags joined as prose, else the skill name.
+    No regex / stopword matching — semantic judgment of scope belongs to the
+    LLM eviction prompt and the agent reading the inject block.
+    """
+    max_chars = max(0, int(max_chars or 0))
+    if max_chars == 0:
+        return ""
+
+    desc = (description or "").strip()
+    if desc:
+        text = desc
+    else:
+        tag_bits = [str(t).strip() for t in (tags or ()) if str(t).strip()]
+        if tag_bits:
+            text = ", ".join(tag_bits)
+        else:
+            text = (name or "").strip()
+
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
+def format_hot_skill_section(name: str, scope: str = "", key_points: Optional[Iterable[str]] = None) -> str:
+    """Render one skill section with optional NL ``Scope:`` line + bullets."""
+    key = (name or "").strip() or "skill"
+    lines = [f"### {key}"]
+    scope_text = (scope or "").strip()
+    if scope_text:
+        lines.append(f"Scope: {scope_text}")
+    for pt in key_points or ():
+        text = str(pt).strip()
+        if text:
+            lines.append(f"- {text}")
+    return "\n".join(lines)
+
+
+def normalize_hot_scope_value(raw: Any) -> str:
+    """Coerce a persisted scope field to a string.
+
+    Scope meaning is authored at admit (``derive_hot_scope``) and judged by the
+    LLM eviction prompt / reading agent. Load-time normalize must not rebuild
+    or reinterpret scope — only accept what the pool already stored.
+    """
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, list):
+        # Legacy token-list persist: flatten, do not re-template.
+        parts = [str(x).strip() for x in raw if str(x).strip()]
+        return ", ".join(parts)
+    return ""
 
 
 _TELEMETRY_SCHEMA = "hermes.hot_pool_telemetry.v1"
@@ -264,6 +340,10 @@ class HotPoolTelemetry:
     point_count: int = 0
     chars: int = 0
     excluded_skills: List[str] = field(default_factory=list)
+    # Pool skills / points omitted from inject because skip_if_in_history
+    # matched a recent skill_view (or similar) — not "hot off".
+    skills_excluded_in_history: List[str] = field(default_factory=list)
+    points_excluded_in_history: int = 0
     injections_attempted: int = 0
     injections_nonempty: int = 0
     first_nonempty_inject_iter: Optional[int] = None
@@ -301,6 +381,8 @@ class HotPoolTelemetry:
                 "point_count": self.point_count,
                 "chars": self.chars,
                 "excluded_skills": list(self.excluded_skills),
+                "skills_excluded_in_history": list(self.skills_excluded_in_history),
+                "points_excluded_in_history": self.points_excluded_in_history,
                 "injections_attempted": self.injections_attempted,
                 "injections_nonempty": self.injections_nonempty,
                 "first_nonempty_inject_iter": self.first_nonempty_inject_iter,
@@ -329,6 +411,8 @@ def parse_hot_pool_inner_meta(inner: str) -> tuple[List[str], List[str]]:
         stripped = line.strip()
         if stripped.startswith("### "):
             skills.append(stripped[4:].strip())
+        elif stripped.lower().startswith("scope:"):
+            continue
         elif stripped.startswith("- "):
             points.append(stripped[2:].strip())
     return skills, points
@@ -668,6 +752,8 @@ class HotSkillPool:
 
         mtime = _skill_md_mtime(skill_dir)
         tag_list = [str(t) for t in (tags or []) if t]
+        desc = (description or "").strip()
+        scope = derive_hot_scope(key, description=desc, tags=tag_list)
         self._entries.pop(key, None)
         now = self._effective_turn(turn)
         entry = HotSkillEntry(
@@ -676,8 +762,9 @@ class HotSkillPool:
             skill_dir=skill_dir,
             skill_md_mtime=mtime,
             recorded_turn=now,
-            description=(description or "").strip(),
+            description=desc,
             tags=tag_list,
+            scope=scope,
         )
         self._entries[key] = entry
         context = user_message if user_message is not None else self._admission_context
@@ -883,20 +970,35 @@ class HotSkillPool:
             return ""
 
         exclude = set(exclude_names or ())
-        if exclude:
-            self._telemetry.excluded_skills = sorted(exclude)
+        # Pool tips omitted because the skill was already opened in recent
+        # history (skip_if_in_history). Empty inject + nonzero here ≠ hot off.
+        skipped = [
+            entry
+            for entry in self._entries.values()
+            if entry.name in exclude and entry.key_points
+        ]
+        self._telemetry.excluded_skills = sorted(exclude)
+        self._telemetry.skills_excluded_in_history = sorted(e.name for e in skipped)
+        self._telemetry.points_excluded_in_history = sum(
+            len(e.key_points) for e in skipped
+        )
+
         candidates = [
             entry for entry in self._entries.values()
             if entry.name not in exclude and entry.key_points
         ]
         if not candidates:
+            self._telemetry.build_block_applied = False
+            self._telemetry.skills_injected = []
+            self._telemetry.points_injected = []
+            self._telemetry.point_count = 0
+            self._telemetry.chars = 0
             return ""
 
-        max_chars = int(self._config.get("max_chars", 4000) or 0)
-        if max_chars <= 0:
-            return ""
-
-        inner = self._format_entries(candidates, max_chars)
+        # Full retain = inject dump. Budget is max_entries (points), not chars —
+        # providers bill tokens; a second char truncate would silently drop tips
+        # the overflow judge already chose to keep.
+        inner = self._format_entries(candidates)
         if not inner:
             return ""
         skills, points = parse_hot_pool_inner_meta(inner)
@@ -908,28 +1010,15 @@ class HotSkillPool:
         self._telemetry.chars = len(block)
         return block
 
-    def _format_entries(self, entries: List[HotSkillEntry], max_chars: int) -> str:
-        parts: List[str] = []
-        used = 0
-        for entry in entries:
-            header = f"### {entry.name}\n"
-            bullets = "\n".join(f"- {pt}" for pt in entry.key_points)
-            chunk = header + bullets
-            remaining = max_chars - used
-            if remaining <= 0:
-                break
-            if len(chunk) > remaining:
-                if remaining < len(header) + 32:
-                    break
-                chunk = chunk[: remaining - 20].rstrip() + "\n\n[... truncated ...]"
-            parts.append(chunk)
-            used += len(chunk)
+    def _format_entries(self, entries: List[HotSkillEntry]) -> str:
+        parts = [
+            format_hot_skill_section(entry.name, entry.scope, entry.key_points)
+            for entry in entries
+            if entry.key_points
+        ]
         if not parts:
             return ""
-        inner = "\n\n---\n\n".join(parts)
-        if max_chars and len(inner) > max_chars:
-            inner = inner[: max_chars - 20].rstrip() + "\n\n[... truncated ...]"
-        return inner
+        return "\n\n---\n\n".join(parts)
 
     def _total_points(self) -> int:
         return sum(len(e.key_points) for e in self._entries.values())
@@ -945,6 +1034,7 @@ class HotSkillPool:
                         "skill": name,
                         "index": idx,
                         "point": text,
+                        "scope": entry.scope or "",
                         "recorded_turn": int(entry.recorded_turn),
                     }
                 )
@@ -970,12 +1060,13 @@ class HotSkillPool:
         if self._total_points() <= cap:
             return
 
-        policy = str(self._config.get("eviction_policy") or "oldest")
+        policy = str(self._config.get("eviction_policy") or _DEFAULT_EVICTION_POLICY)
         evicted = 0
         if policy == "llm":
             dropped = self._apply_llm_keep(cap, context)
             evicted += dropped
 
+        # oldest fallback (also the full path when eviction_policy == "oldest")
         while self._total_points() > cap:
             items = self._point_items()
             if not items:
@@ -1037,6 +1128,7 @@ class HotSkillPool:
             "recorded_turn": entry.recorded_turn,
             "description": entry.description,
             "tags": list(entry.tags),
+            "scope": entry.scope or "",
         }
 
     @staticmethod
@@ -1051,6 +1143,12 @@ class HotSkillPool:
         if not clean_points:
             return None
         tags = data.get("tags")
+        tag_list = [str(t) for t in tags if t] if isinstance(tags, list) else []
+        description = str(data.get("description") or "")
+        # Prefer stored scope; only derive when older persist rows lack it.
+        scope = normalize_hot_scope_value(data.get("scope"))
+        if not scope:
+            scope = derive_hot_scope(name, description=description, tags=tag_list)
         recorded = data.get("recorded_turn")
         if recorded is None:
             recorded = data.get("last_used_turn") or 0
@@ -1060,8 +1158,9 @@ class HotSkillPool:
             skill_dir=data.get("skill_dir"),
             skill_md_mtime=float(data.get("skill_md_mtime") or 0.0),
             recorded_turn=int(recorded or 0),
-            description=str(data.get("description") or ""),
-            tags=[str(t) for t in tags if t] if isinstance(tags, list) else [],
+            description=description,
+            tags=tag_list,
+            scope=scope,
         )
 
     def _load_persisted(self) -> None:
@@ -1291,28 +1390,73 @@ def _reload_skill_content(name: str, *, session_id: Optional[str] = None) -> str
     return str(data.get("content") or "").strip()
 
 
+def build_llm_eviction_system_prompt(keep_n: int) -> str:
+    """System prompt for overflow keep-set judgment (retain = inject)."""
+    return (
+        "You curate a small hot-skill key-point pool used as short guardrail "
+        "reminders.\n"
+        "\n"
+        "Hard constraint — retain equals inject: every tip you KEEP will be "
+        "shown in full on later turns and tasks, not only on the current one. "
+        "Optimize for broadcast-worthiness (transferable across future work), "
+        "not for maximizing usefulness on the present task alone.\n"
+        "\n"
+        f"Return JSON only: {{\"keep\": [\"id\", ...]}} with at most {keep_n} "
+        "ids drawn from the provided points. Do not invent ids. You may return "
+        "fewer than keep_n ids if fewer tips meet the bar.\n"
+        "\n"
+        "KEEP tips that:\n"
+        "- State clear, actionable guardrails that remain meaningful after "
+        "removing instance-specific details\n"
+        "- Capture transferable pitfalls or procedures (often NEVER/ALWAYS/"
+        "MUST-style) likely to help on other similar-class tasks\n"
+        "- Add distinct coverage — prefer diversity across skills/topics when "
+        "candidates are similar\n"
+        "- Use each point's natural-language scope (when present) as a soft hint "
+        "about where it applies; prefer tips whose stated scope is broadly "
+        "transferable over narrow niche scopes when choosing among equals\n"
+        "\n"
+        "DROP or deprioritize tips that:\n"
+        "- Are bound to absolute paths, hostnames, credentials, account names, "
+        "one-off filenames, task IDs, or a single product/CLI workflow\n"
+        "- Encode one task's I/O or setup recipe rather than a general pitfall\n"
+        "- Duplicate a stronger tip already being kept\n"
+        "- Would mislead or waste effort if shown on an unrelated later task\n"
+        "\n"
+        "About context: it describes the overflow / incoming extract only. Use "
+        "it to understand what is being admitted and to break ties. Do NOT "
+        "treat \"most relevant to context\" as the primary keep criterion."
+    )
+
+
 def build_llm_eviction_messages(
     items: List[Dict[str, Any]],
     keep_n: int,
     context: str,
 ) -> List[Dict[str, str]]:
     """Isolated judge prompt — not appended to the conversation."""
+    payload = {
+        "selection_goal": (
+            "Choose a keep-set safe to broadcast on future unrelated tasks "
+            "(retain = inject). Prefer transferable abstraction over "
+            "context-local relevance."
+        ),
+        "context_role": (
+            "Background for the incoming extract / overflow. Tie-breaker only; "
+            "not the primary ranking objective."
+        ),
+        "context": context or "",
+        "keep_n": keep_n,
+        "points": items,
+    }
     return [
         {
             "role": "system",
-            "content": (
-                "You pick which hot-skill guardrail points to KEEP in a small "
-                "prompt budget. Return JSON only: {\"keep\": [\"id\", ...]} "
-                f"with at most {keep_n} ids. Prefer transferable NEVER/ALWAYS "
-                "rules across tasks with potential same guardrail points over task-specific procedure. Do not invent ids."
-            ),
+            "content": build_llm_eviction_system_prompt(keep_n),
         },
         {
             "role": "user",
-            "content": json.dumps(
-                {"context": context, "keep_n": keep_n, "points": items},
-                ensure_ascii=False,
-            ),
+            "content": json.dumps(payload, ensure_ascii=False),
         },
     ]
 
@@ -1390,6 +1534,8 @@ def build_hot_skills_block(raw_context: str) -> str:
         f"{_HOT_SKILLS_OPEN}\n"
         "[System note: The following are hot skill key points (guardrails) "
         "from recently used skills, NOT new user input. "
+        "Each section may include a Scope: line in natural language — apply a "
+        "tip when that scope fits the current task; otherwise ignore it. "
         "Use skill_view(name) for full procedures.]\n\n"
         f"{clean}\n"
         f"{_HOT_SKILLS_CLOSE}"

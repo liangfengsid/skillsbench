@@ -124,7 +124,7 @@ skill_view / skill_manage / recent use
 | Stage | Behavior |
 |-------|----------|
 | Populate | After a skill is viewed/created, key points enter the pool |
-| Inject | Each user turn prepends the **entire** retained pool as `<hot-skills>` (skills already in recent `skill_view` history can be skipped) |
+| Inject | Each user turn prepends the **entire** retained pool as `<hot-skills>`. With `skip_if_in_history` (default), skills already in recent `skill_view` history are omitted from the block to avoid duplicating the full skill body — that is channel separation, not “hot off.” Telemetry records `inject.skills_excluded_in_history` / `inject.points_excluded_in_history`. |
 | Evict | Only when a new extract would exceed `max_entries`. Policies: `oldest` (FIFO of extract time on a persisted global clock when the pool is saved across conversations) or `llm` (optional judge at overflow). Model "use" of a point is not observable. |
 | Persist (optional) | Pool JSON can survive across conversations / sequential benchmark tasks |
 
@@ -135,32 +135,31 @@ skills:
   hot_pool:
     enabled: true
     max_entries: 12               # retain = inject (key-point budget)
-    max_chars: 4000
-    eviction_policy: oldest       # oldest | llm
+    # max_chars: ignored          # legacy; do not use — budget is max_entries
+    max_chars_per_point: 240      # truncate individual extracted tips
+    eviction_policy: llm          # llm (default) | oldest (fallback / opt-in)
     persist_across_conversations: false
     # persist_path: ""            # default ~/.hermes/hot_skill_pool.json when persisting
 ```
 
-`eviction_policy` runs only when a new extract would exceed `max_entries` (model "use" of a point is not observable, so inject never refreshes eviction clocks):
+`eviction_policy` runs only when a new extract would exceed `max_entries` (model "use" of a point is not observable, so inject never refreshes eviction clocks). Retained tips are injected in full on later turns (**retain = inject**), so the judge must optimize for broadcast-worthiness, not current-task relevance alone:
 
 | Policy | Victim | When to use |
 |--------|--------|-------------|
-| `oldest` (default) | Earliest `recorded_turn` (FIFO of extract). Protects the incoming extract. | Cheap, stable, no extra model call |
-| `llm` | Side-channel judge on the **running agent's LLM client** (tools-free, not written to history). Asks which point **ids to keep** (at most `max_entries`). One call per overflow. Falls back to `oldest` if the judge is missing or fails. | When extract-time FIFO is too weak; costs an extra LLM call at overflow only |
+| `llm` (default) | Side-channel judge on the **running agent's LLM client** (tools-free, not written to history). Asks which point **ids to keep** (at most `max_entries`). One call per overflow. Falls back to `oldest` if the judge is missing or fails. | Primary policy — quality / transferability at overflow cost only |
+| `oldest` | Earliest `recorded_turn` (FIFO of extract). Protects the incoming extract. | Explicit opt-in or automatic fallback when the llm judge is unavailable |
 
 **`llm` judge prompt** (built by `build_llm_eviction_messages` in [`agent/hot_skills.py`](agent/hot_skills.py); isolated from the conversation):
 
-System:
-
-```text
-You pick which hot-skill guardrail points to KEEP in a small prompt budget. Return JSON only: {"keep": ["id", ...]} with at most {keep_n} ids. Prefer transferable NEVER/ALWAYS rules over task-specific procedure. Do not invent ids.
-```
+System (summary): curate a keep-set under retain=inject; prefer transferable guardrails; drop instance-bound recipes (paths, credentials, one-off filenames, single-product workflows); use `context` only as overflow/admit background and tie-breaker — not as primary relevance ranking. Return JSON `{"keep": ["id", ...]}` with at most `keep_n` ids (fewer allowed).
 
 User (JSON):
 
 ```json
 {
-  "context": "<current user / task text>",
+  "selection_goal": "Choose a keep-set safe to broadcast on future unrelated tasks (retain = inject). Prefer transferable abstraction over context-local relevance.",
+  "context_role": "Background for the incoming extract / overflow. Tie-breaker only; not the primary ranking objective.",
+  "context": "<overflow / admit background text>",
   "keep_n": 12,
   "points": [
     {
@@ -174,7 +173,9 @@ User (JSON):
 }
 ```
 
-`keep_n` is `max_entries`. `context` is the current user message. Unknown ids are ignored; an empty or unparseable reply falls back to `oldest`.
+`keep_n` is `max_entries`. Unknown ids are ignored; an empty or unparseable reply falls back to `oldest`.
+
+Injected sections may include a soft natural-language **`Scope:`** line (prefer skill description, else tags, else skill name). Scope helps the model — and the LLM eviction judge — decide how to weigh tips; it is **not** used to filter the retain=inject dump.
 
 **Not the same as** step-level variant pools (above): step pools rewrite *which procedure variant* `skill_view` shows; hot skills inject *short reminders* without opening the skill body.
 

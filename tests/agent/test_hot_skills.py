@@ -7,10 +7,15 @@ import pytest
 from agent.hot_skills import (
     HotSkillPool,
     build_hot_skills_block,
+    build_llm_eviction_messages,
     compute_alignment_hits,
+    derive_hot_scope,
     extract_hot_key_points,
+    format_hot_skill_section,
     llm_eviction_keep_ids,
     load_hot_skills_config,
+    normalize_hot_scope_value,
+    parse_hot_pool_inner_meta,
     parse_llm_keep_ids,
     replay_message_tool_stats,
     resolve_hot_pool_persist_path,
@@ -192,14 +197,14 @@ def test_load_hot_skills_config_merges_defaults():
     assert cfg["max_entries"] == 2
     assert cfg["enabled"] is False
     assert cfg["max_points_per_skill"] == 8
-    assert cfg["eviction_policy"] == "oldest"
+    assert cfg["eviction_policy"] == "llm"
 
 
-def test_unknown_eviction_policy_defaults_to_oldest():
+def test_unknown_eviction_policy_defaults_to_llm():
     cfg = load_hot_skills_config({"hot_pool": {"eviction_policy": "not-a-policy"}})
-    assert cfg["eviction_policy"] == "oldest"
+    assert cfg["eviction_policy"] == "llm"
     cfg_rel = load_hot_skills_config({"hot_pool": {"eviction_policy": "relevance"}})
-    assert cfg_rel["eviction_policy"] == "oldest"
+    assert cfg_rel["eviction_policy"] == "llm"
 
 
 def test_load_hot_skills_config_env_enabled_override(monkeypatch):
@@ -275,22 +280,30 @@ def test_build_block_injects_key_points_not_full_body(pool_cfg):
     assert "Use skill_view(name)" in block
 
 
-def test_build_block_respects_max_chars(pool_cfg):
-    pool = HotSkillPool(pool_cfg)
-    many_points = "<!-- hermes-hot -->\n" + "\n".join(
-        f"- Guardrail point number {i} with some extra text"
-        for i in range(40)
-    ) + "\n<!-- /hermes-hot -->"
-    pool.record(name="big", content=many_points, turn=1)
+def test_build_block_injects_full_retained_points(pool_cfg):
+    """Inject dumps the retained point set; no secondary char truncate."""
+    cfg = dict(pool_cfg)
+    cfg["max_entries"] = 5
+    cfg["max_points_per_skill"] = 5
+    pool = HotSkillPool(cfg)
+    points = [f"Guardrail point number {i} with some extra text" for i in range(5)]
+    pool.record(
+        name="big",
+        content="",
+        turn=1,
+        key_points=points,
+    )
     block = pool.build_block(user_message="hello", turn=2)
-    assert len(block) <= 2200
+    for p in points:
+        assert p in block
+    assert pool.export_telemetry()["inject"]["point_count"] == 5
 
 
 def test_skip_if_in_history(pool_cfg):
     pool = HotSkillPool(pool_cfg)
     pool.record(
         name="github",
-        content="<!-- hermes-hot -->\n- Use gh cli\n<!-- /hermes-hot -->",
+        content="<!-- hermes-hot -->\n- Use gh cli\n- Prefer gh over raw git push\n<!-- /hermes-hot -->",
         turn=1,
     )
     history = [
@@ -305,6 +318,11 @@ def test_skip_if_in_history(pool_cfg):
         exclude_names=pool.skills_in_recent_history(history),
     )
     assert block == ""
+    tel = pool.export_telemetry()["inject"]
+    assert tel["point_count"] == 0
+    assert tel["skills_excluded_in_history"] == ["github"]
+    assert tel["points_excluded_in_history"] == 2
+    assert "github" in tel["excluded_skills"]
 
 
 def test_hydrate_from_history(pool_cfg):
@@ -355,7 +373,86 @@ def test_build_hot_skills_block_wraps_content():
     out = build_hot_skills_block("### demo\n- rule one")
     assert "<hot-skills>" in out
     assert "Use skill_view(name)" in out
+    assert "scope" in out.lower()
     assert "rule one" in out
+
+
+def test_derive_hot_scope_natural_language():
+    # Prefer description as-is
+    assert (
+        derive_hot_scope(
+            "ocr-and-documents",
+            description="Extract text from PDFs/scans",
+            tags=["PDF", "OCR"],
+        )
+        == "Extract text from PDFs/scans"
+    )
+    # No description → join tags
+    assert derive_hot_scope("ocr-and-documents", description="", tags=["PDF", "OCR"]) == "PDF, OCR"
+    # Neither → skill name
+    assert derive_hot_scope("ocr-and-documents", description="", tags=[]) == "ocr-and-documents"
+
+
+def test_format_and_parse_scope_section():
+    section = format_hot_skill_section(
+        "demo",
+        "Applies to PDF/OCR tasks.",
+        ["NEVER skip validation"],
+    )
+    assert section.startswith("### demo\n")
+    assert "Scope: Applies to PDF/OCR tasks." in section
+    assert "- NEVER skip validation" in section
+    skills, points = parse_hot_pool_inner_meta(
+        "### demo\nScope: Applies to PDF/OCR tasks.\n- NEVER skip validation\n### other\n- tip"
+    )
+    assert skills == ["demo", "other"]
+    assert points == ["NEVER skip validation", "tip"]
+
+
+def test_normalize_legacy_list_scope():
+    # Coerce only — no "Applies to tasks involving" re-template at load.
+    assert normalize_hot_scope_value(["email", "oauth"]) == "email, oauth"
+    assert normalize_hot_scope_value("  PDF / OCR tasks.  ") == "PDF / OCR tasks."
+    assert normalize_hot_scope_value(None) == ""
+    assert normalize_hot_scope_value(123) == ""
+
+
+def test_record_stores_scope_and_inject_shows_it(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(
+        name="ocr-and-documents",
+        content="<!-- hermes-hot -->\n- Prefer web_extract for URLs\n<!-- /hermes-hot -->",
+        description="Extract text from PDFs",
+        tags=["PDF", "OCR"],
+        turn=1,
+    )
+    entry = pool._entries["ocr-and-documents"]
+    assert isinstance(entry.scope, str)
+    assert entry.scope == "Extract text from PDFs"
+    block = pool.build_block(user_message="hello", turn=2)
+    assert "### ocr-and-documents" in block
+    assert "Scope: Extract text from PDFs" in block
+    assert "Prefer web_extract" in block
+    assert pool.export_telemetry()["inject"]["skills_injected"] == ["ocr-and-documents"]
+
+
+def test_persist_roundtrip_preserves_scope(pool_cfg, tmp_path):
+    path = tmp_path / "hot_pool.json"
+    cfg = dict(pool_cfg)
+    cfg["persist_across_conversations"] = True
+    cfg["persist_path"] = str(path)
+    pool_a = HotSkillPool(cfg)
+    pool_a.on_turn_start(1)
+    pool_a.record(
+        name="gmail-helper",
+        content="<!-- hermes-hot -->\n- Check existing tokens first\n<!-- /hermes-hot -->",
+        tags=["email", "oauth"],
+        turn=1,
+    )
+    saved = pool_a._entries["gmail-helper"].scope
+    pool_b = HotSkillPool(cfg)
+    assert pool_b._entries["gmail-helper"].scope == saved
+    assert isinstance(json.loads(path.read_text())["entries"]["gmail-helper"]["scope"], str)
 
 
 def test_skill_manage_create_syncs_hot_pool(pool_cfg):
@@ -643,6 +740,38 @@ def test_parse_llm_keep_ids_accepts_fenced_json():
     assert parse_llm_keep_ids(text, items, 1) == ["1"]
 
 
+def test_build_llm_eviction_messages_broadcast_not_task_local():
+    items = [
+        {
+            "id": "0",
+            "skill": "host-verif",
+            "index": 0,
+            "point": "ALWAYS write outputs under /tmp/foo",
+            "recorded_turn": 1,
+        },
+        {
+            "id": "1",
+            "skill": "testing",
+            "index": 0,
+            "point": "NEVER run bare pytest — use scripts/run_tests.sh",
+            "recorded_turn": 2,
+        },
+    ]
+    msgs = build_llm_eviction_messages(items, keep_n=1, context="schedule gmail meetings")
+    assert len(msgs) == 2
+    system = msgs[0]["content"]
+    assert "retain equals inject" in system.lower() or "retain = inject" in system.lower()
+    assert "broadcast" in system.lower()
+    assert "Do NOT treat" in system and "primary keep criterion" in system
+    assert "absolute paths" in system.lower() or "instance-specific" in system.lower()
+    payload = json.loads(msgs[1]["content"])
+    assert payload["keep_n"] == 1
+    assert payload["context"] == "schedule gmail meetings"
+    assert "broadcast" in payload["selection_goal"].lower()
+    assert "tie-breaker" in payload["context_role"].lower()
+    assert payload["points"] == items
+
+
 def test_parse_llm_keep_ids_strips_think_and_ignores_unknown():
     items = [{"id": "0", "skill": "a"}, {"id": "1", "skill": "b"}]
     text = '<think>nope</think>{"keep": ["1", "999"]}'
@@ -657,7 +786,10 @@ def test_llm_eviction_keep_ids_uses_complete_fn():
 
     def complete(messages):
         assert messages[0]["role"] == "system"
+        assert "broadcast" in messages[0]["content"].lower()
         assert "github-auth" in messages[1]["content"]
+        payload = json.loads(messages[1]["content"])
+        assert "selection_goal" in payload
         return '{"keep": ["1"]}'
 
     assert llm_eviction_keep_ids(items, 1, "fix oauth", complete) == ["1"]

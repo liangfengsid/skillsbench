@@ -931,16 +931,20 @@ DEFAULT_CONFIG = {
             # <hot-skills> (minus skip_if_in_history). Eviction runs only when a
             # new extract would overflow — not every turn.
             "max_entries": 12,
-            "max_chars": 4000,
+            "max_chars": 0,  # ignored — inject budget is max_entries (points)
             "max_points_per_skill": 8,
             "max_chars_per_point": 240,
+            # llm (default): side-channel judge on the running agent's LLM client
+            #      (one call per overflow). Prefer transferable / broadcast-safe
+            #      tips; falls back to oldest if unavailable or judge fails.
             # oldest: drop earliest recorded_turn (FIFO of extract; persisted
-            # global_turn when persist_across_conversations is on).
-            # llm: side-channel judge on the running agent's LLM client
-            #      (one call per overflow). Falls back to oldest if unavailable.
-            #      Model "use" is not observable.
-            "eviction_policy": "oldest",
+            #      global_turn when persist_across_conversations is on).
+            #      Deprecated as primary policy — keep for fallback / opt-in.
+            "eviction_policy": "llm",
             "inject_on_turn": True,
+            # Omit pool skills already opened via skill_view in recent history
+            # (avoid duplicating full SKILL.md + hot tips). Telemetry:
+            # inject.skills_excluded_in_history / points_excluded_in_history.
             "skip_if_in_history": True,
             "history_lookback": 40,
             "hydrate_from_history": True,
