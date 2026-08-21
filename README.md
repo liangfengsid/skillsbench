@@ -159,7 +159,7 @@ User (JSON):
 
 ```json
 {
-  "selection_goal": "Choose a keep-set safe to broadcast on future unrelated tasks (retain = inject). Prefer transferable abstraction over context-local relevance.",
+  "selection_goal": "Choose a keep-set that transfers to held-out / unseen tasks (retain = inject). Prefer abstract, evaluator-safe pitfalls over cheatsheets for replaying seen tasks. Prefer fewer strong tips over filling keep_n.",
   "context_role": "Background for the incoming extract / overflow. Tie-breaker only; not the primary ranking objective.",
   "context": "<overflow / admit background text>",
   "keep_n": 12,

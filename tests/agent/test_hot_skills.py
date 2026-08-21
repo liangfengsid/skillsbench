@@ -766,13 +766,15 @@ def test_build_llm_eviction_messages_broadcast_not_task_local():
     assert len(msgs) == 2
     system = msgs[0]["content"]
     assert "retain equals inject" in system.lower() or "retain = inject" in system.lower()
-    assert "broadcast" in system.lower()
+    assert "broadcast" in system.lower() or "unseen" in system.lower()
+    assert "cheatsheet" in system.lower() or "replay" in system.lower()
     assert "Do NOT treat" in system and "primary keep criterion" in system
     assert "absolute paths" in system.lower() or "instance-specific" in system.lower()
     payload = json.loads(msgs[1]["content"])
     assert payload["keep_n"] == 1
     assert payload["context"] == "schedule gmail meetings"
-    assert "broadcast" in payload["selection_goal"].lower()
+    goal = payload["selection_goal"].lower()
+    assert "broadcast" in goal or "unseen" in goal or "held-out" in goal
     assert "tie-breaker" in payload["context_role"].lower()
     assert payload["points"] == items
 
@@ -791,7 +793,8 @@ def test_llm_eviction_keep_ids_uses_complete_fn():
 
     def complete(messages):
         assert messages[0]["role"] == "system"
-        assert "broadcast" in messages[0]["content"].lower()
+        sys_l = messages[0]["content"].lower()
+        assert "broadcast" in sys_l or "unseen" in sys_l
         assert "github-auth" in messages[1]["content"]
         payload = json.loads(messages[1]["content"])
         assert "selection_goal" in payload

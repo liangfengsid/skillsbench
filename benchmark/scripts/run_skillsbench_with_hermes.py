@@ -123,40 +123,20 @@ def benchmark_presets() -> Dict[str, Dict[str, Any]]:
     }
 
 SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX = (
-    "\n\n**SkillsBench batch context (platform=skillsbench-batch):**\n"
-    "The conversation above was a benchmark task run, not a casual user chat.\n\n"
-    "CREATE or PATCH a Hermes skill when ANY of these occurred:\n"
-    "- 3+ tool rounds spent on verification (pytest, docker, path symlinks, "
-    "re-reading outputs, or re-running an already-correct answer)\n"
-    "- Host vs container path confusion (/root/... vs "
-    "benchmark/skillsbench/tasks/<id>/environment/...)\n"
-    "- Repeated reads of solution/ or tests/ before solving\n"
-    "- Trial-and-error after the core answer was already computed\n"
-    "- Wrong tool patterns (e.g. importing execute_code from hermes_tools, "
-    "host pytest against /root paths when docker is unavailable)\n\n"
-    "Name skills at CLASS level (examples: skillsbench-host-verification, "
-    "binary-stl-mass-calc, skillsbench-path-mapping). Do NOT name skills after "
-    "a single task id unless the pitfall is truly unique.\n"
-    "Survey skills_list first; patch an existing class skill when possible.\n"
-    "When creating/patching SKILL.md, include a '## Common Pitfalls' or "
-    "'## Best Practices' section with short NEVER/ALWAYS bullets (SkillsBench "
-    "task skills under environment/skills/ use these headings; the hot skill "
-    "pool extracts them for later turns).\n"
-    "No user confirmation is required in batch mode — use skill_manage when "
-    "criteria match.\n"
-    "If verification thrashing or path confusion occurred, saving a workflow "
-    "skill is preferred over 'Nothing to save.'"
+    "\n\n**SkillsBench batch (platform=skillsbench-batch):** "
+    "No user to confirm — call skill_manage yourself when warranted. "
+    "Bar is slightly lower than interactive: after non-trivial trial-and-error, "
+    "prefer saving a class-level skill over 'Nothing to save.' "
+    "Name by task genre (not task id; no catch-all skillsbench-host/verification "
+    "mega-skill). Include short '## Common Pitfalls' or '## Best Practices' "
+    "bullets that stay abstract (no absolute paths, solution/oracle peeking, or "
+    "temp-dir remaps of graded outputs) so hot-pool tips transfer to held-out tasks."
 )
 
 SKILLSBENCH_BATCH_COMBINED_REVIEW_APPENDIX = (
-    "\n\n**SkillsBench batch context (platform=skillsbench-batch):**\n"
-    "For the skills portion, apply the same batch rules: persist class-level "
-    "workflow skills when verification thrashing, host/container path "
-    "confusion, or repeated test/solution peeking consumed 3+ tool rounds. "
-    "Use skill_manage(create|patch) without user confirmation when criteria "
-    "match. Prefer skillsbench-host-verification-style names over task ids. "
-    "Include '## Common Pitfalls' or '## Best Practices' with short bullets "
-    "so the hot skill pool can extract them."
+    "\n\n**SkillsBench batch:** for skills, same rules — no confirmation; "
+    "prefer a class-level save after real trial-and-error; no catch-all "
+    "skillsbench mega-skills; abstract pitfalls only (no oracle/path recipes)."
 )
 
 

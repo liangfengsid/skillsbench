@@ -28,8 +28,14 @@ def test_build_skillsbench_skill_review_prompt_includes_batch_rules():
     prompt = mod.build_skillsbench_skill_review_prompt("BASE")
     assert prompt.startswith("BASE")
     assert "skillsbench-batch" in prompt
-    assert "skillsbench-host-verification" in prompt
-    assert "3+ tool rounds" in prompt
+    assert "skill_manage" in prompt
+    assert "prefer saving" in prompt.lower()
+    assert "skillsbench-host-verification" not in prompt
+    assert "mega-skill" in prompt.lower() or "catch-all" in prompt.lower()
+    assert "held-out" in prompt.lower() or "abstract" in prompt.lower()
+    combined = mod.build_skillsbench_combined_review_prompt("BASE")
+    assert "skillsbench" in combined.lower()
+    assert len(mod.SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX) < 900
 
 
 def test_format_run_summary_includes_background_review_actions():
