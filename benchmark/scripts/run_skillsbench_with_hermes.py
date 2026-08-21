@@ -148,8 +148,19 @@ def build_skillsbench_combined_review_prompt(base_prompt: str) -> str:
     return base_prompt + SKILLSBENCH_BATCH_COMBINED_REVIEW_APPENDIX
 
 
+def host_expand_path(p: str | Path) -> Path:
+    """Expand ``~`` without ``Path.expanduser``.
+
+    AppWorld's SafetyGuard process-wide-patches ``pathlib.Path.expanduser``.
+    ``os.path.expanduser`` is not in that denylist, so host-side path
+    resolution (hot-pool persist, experiment dirs, HERMES_HOME) stays usable
+    even if a guard leaks between tasks.
+    """
+    return Path(os.path.expanduser(str(p))).resolve()
+
+
 def _expand(p: str | Path) -> Path:
-    return Path(p).expanduser().resolve()
+    return host_expand_path(p)
 
 
 def _ensure_hermes_on_path(hermes_root: Path) -> None:
@@ -231,7 +242,7 @@ def resolve_agent_runtime(
 
     prev_home = os.environ.get("HERMES_HOME")
     if config_hermes_home is not None:
-        os.environ["HERMES_HOME"] = str(Path(config_hermes_home).expanduser().resolve())
+        os.environ["HERMES_HOME"] = str(host_expand_path(config_hermes_home))
 
     try:
         requested = None
@@ -284,9 +295,7 @@ def apply_hot_pool_cli_overrides(
         os.environ["HERMES_HOT_POOL_ENABLED"] = "1"
     if hot_pool_persist:
         os.environ["HERMES_HOT_POOL_PERSIST"] = "1"
-        os.environ["HERMES_HOT_POOL_PATH"] = str(
-            Path(hot_pool_persist).expanduser().resolve(),
-        )
+        os.environ["HERMES_HOT_POOL_PATH"] = str(host_expand_path(hot_pool_persist))
 
 
 def run_one_task(

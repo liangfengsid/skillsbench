@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import builtins
 import copy
+import importlib
 import json
 import os
 import re
@@ -49,63 +50,171 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-# AppWorld's SafetyGuard patches host I/O (Path.mkdir, os.putenv, builtins.open,
-# …) process-wide during ``world.execute()`` and may leak. Bind the real
-# functions now, before AppWorld is imported, and reinstall them after each task.
-_HOST_OPEN = builtins.open
-_HOST_PATH_MKDIR = Path.mkdir
+# AppWorld's SafetyGuard patches host I/O process-wide during ``world.execute()``
+# and may leak. Bind the real functions now, *before* AppWorld is imported, and
+# reinstall them after each task. ``guard.disable()`` is not enough: a leaked
+# guard means the *next* ``SafetyGuard()`` snapshots the disabled functions as
+# its "originals".
+#
+# Keep this map in sync with ``DISALLOWED_MODULE_TO_FUNCTION_NAMES`` in
+# ``benchmark/appworld/src/appworld/common/safety_guard.py``.
+_SAFETY_GUARD_PATCH_TARGETS: Dict[str, List[str]] = {
+    "builtins": ["exit", "quit", "open", "breakpoint"],
+    "sys": ["exit"],
+    "os": [
+        "_exit",
+        "open",
+        "read",
+        "write",
+        "close",
+        "walk",
+        "kill",
+        "system",
+        "putenv",
+        "remove",
+        "removedirs",
+        "rmdir",
+        "fchdir",
+        "setuid",
+        "fork",
+        "forkpty",
+        "killpg",
+        "rename",
+        "renames",
+        "truncate",
+        "replace",
+        "unlink",
+        "fchmod",
+        "fchown",
+        "chmod",
+        "chown",
+        "chroot",
+        "lchflags",
+        "lchmod",
+        "lchown",
+        "chdir",
+    ],
+    "io": ["open", "open_code", "FileIO"],
+    "shutil": [
+        "rmtree",
+        "move",
+        "chown",
+        "copy",
+        "copy2",
+        "copyfile",
+        "copytree",
+        "make_archive",
+        "get_archive_formats",
+    ],
+    "subprocess": [
+        "Popen",
+        "call",
+        "check_call",
+        "check_output",
+        "run",
+        "getoutput",
+        "getstatusoutput",
+    ],
+    "pathlib.Path": [
+        "open",
+        "write_text",
+        "read_bytes",
+        "write_bytes",
+        "unlink",
+        "rmdir",
+        "rename",
+        "replace",
+        "chmod",
+        "lchmod",
+        "chown",
+        "lchown",
+        "touch",
+        "symlink_to",
+        "link_to",
+        "mkdir",
+        "expanduser",
+    ],
+    "fileinput": ["input", "filename", "nextfile", "close", "lineno"],
+    "glob": ["glob", "iglob"],
+    "json": ["dump", "load"],
+    "tempfile": [
+        "mktemp",
+        "mkdtemp",
+        "mkstemp",
+        "NamedTemporaryFile",
+        "TemporaryDirectory",
+    ],
+    "zipfile": ["ZipFile"],
+    "shelve": ["open"],
+    "dbm": ["open", "close"],
+    "pickle": ["dump", "load"],
+    "codecs": ["open"],
+    "bz2": ["open"],
+    "gzip": ["open"],
+    "tarfile": ["open"],
+    "csv": ["reader", "writer", "DictReader", "DictWriter"],
+    "time": ["sleep"],
+    "pdb": ["set_trace"],
+    "urllib.request": [
+        "urlretrieve",
+        "urlcleanup",
+        "urlopen",
+        "URLopener",
+        "FancyURLopener",
+    ],
+}
+
 _HOST_ATTRS: List[Tuple[Any, str, Any]] = []
+_HOST_ATTR_KEYS: Set[Tuple[int, str]] = set()
 
 
 def _remember_host_attr(obj: Any, name: str) -> None:
+    key = (id(obj), name)
+    if key in _HOST_ATTR_KEYS:
+        return
     fn = getattr(obj, name, None)
     if fn is not None:
         _HOST_ATTRS.append((obj, name, fn))
+        _HOST_ATTR_KEYS.add(key)
 
 
-for _os_name in (
-    "putenv",
-    "unsetenv",
-    "system",
-    "open",
-    "remove",
-    "removedirs",
-    "rmdir",
-    "rename",
-    "replace",
-    "unlink",
-    "chmod",
-    "chdir",
-    "walk",
-    "kill",
-    "_exit",
-):
-    _remember_host_attr(os, _os_name)
-for _sh_name in ("rmtree", "move", "copy", "copy2", "copyfile", "copytree"):
-    _remember_host_attr(shutil, _sh_name)
-for _p_name in (
-    "open",
-    "write_text",
-    "read_bytes",
-    "write_bytes",
-    "unlink",
-    "rmdir",
-    "rename",
-    "replace",
-    "chmod",
-    "lchmod",
-    "chown",
-    "lchown",
-    "touch",
-    "symlink_to",
-    "link_to",
-    "mkdir",
-    "expanduser",
-):
-    _remember_host_attr(Path, _p_name)
-_remember_host_attr(builtins, "open")
-_remember_host_attr(json, "dump")
-_remember_host_attr(json, "load")
+def _module_by_path(path: str) -> Any:
+    """Resolve ``os`` / ``pathlib.Path`` / ``urllib.request`` the way SafetyGuard does."""
+    parts = path.split(".")
+    obj: Any = None
+    rest: List[str] = []
+    for i in range(len(parts), 0, -1):
+        try:
+            obj = importlib.import_module(".".join(parts[:i]))
+            rest = parts[i:]
+            break
+        except ImportError:
+            continue
+    if obj is None:
+        raise ImportError(path)
+    for part in rest:
+        obj = getattr(obj, part)
+    return obj
+
+
+def _snapshot_host_safety_guard_targets() -> None:
+    """Capture real host functions before AppWorld can patch them."""
+    for module_name, names in _SAFETY_GUARD_PATCH_TARGETS.items():
+        try:
+            module = _module_by_path(module_name)
+        except Exception:
+            continue
+        for name in names:
+            _remember_host_attr(module, name)
+    # Not in the denylist, but ``os.environ.pop`` / assignment still need them.
+    _remember_host_attr(os, "unsetenv")
+    _remember_host_attr(builtins, "SystemExit")
+    _remember_host_attr(builtins, "open")
+
+
+_snapshot_host_safety_guard_targets()
+_HOST_OPEN = builtins.open
+_HOST_PATH_MKDIR = Path.mkdir
 
 # Feishu optional deps (lark_oapi) emit setuptools pkg_resources noise on import.
 warnings.filterwarnings(
@@ -127,6 +236,7 @@ DEFAULT_EXPERIMENT_NAME = "hermes-agent"
 
 from run_skillsbench_with_hermes import (  # noqa: E402
     apply_hot_pool_cli_overrides,
+    host_expand_path,
     resolve_agent_runtime,
     resolve_model_id,
 )
@@ -179,7 +289,7 @@ def resolve_max_hermes_iterations(
 
 
 def _expand(p: str | Path) -> Path:
-    return Path(p).expanduser().resolve()
+    return host_expand_path(p)
 
 
 def _ensure_hermes_on_path(hermes_root: Path) -> None:
@@ -237,6 +347,7 @@ def _ensure_host_dir(path: Path) -> None:
 
 
 def _configure_appworld(appworld_root: Path) -> None:
+    _restore_host_os_io()
     root = str(appworld_root.resolve())
     os.environ["APPWORLD_ROOT"] = root
     try:
@@ -532,44 +643,48 @@ def evaluate_one_task(
     experiment_name: str,
     appworld_root: Path,
 ) -> Dict[str, Any]:
-    _configure_appworld(appworld_root)
-    validate_task_output_for_evaluation(
-        appworld_root=appworld_root,
-        experiment_name=experiment_name,
-        task_id=task_id,
-    )
-    from appworld.evaluator import evaluate_task
+    _restore_host_os_io()
+    try:
+        _configure_appworld(appworld_root)
+        validate_task_output_for_evaluation(
+            appworld_root=appworld_root,
+            experiment_name=experiment_name,
+            task_id=task_id,
+        )
+        from appworld.evaluator import evaluate_task
 
-    tracker = evaluate_task(
-        task_id=task_id,
-        experiment_name=experiment_name,
-        suppress_errors=True,
-        save_report=True,
-    )
-    report_path = (
-        appworld_root
-        / "experiments"
-        / "outputs"
-        / experiment_name
-        / "tasks"
-        / task_id
-        / "evaluation"
-        / "report.md"
-    )
-    return {
-        "success": bool(tracker.success),
-        "task_success": bool(tracker.success),
-        "reward": 1.0 if tracker.success else 0.0,
-        "pass_count": tracker.pass_count,
-        "fail_count": tracker.fail_count,
-        "num_tests": tracker.num_tests,
-        "tests_passed": tracker.pass_count,
-        "tests_total": tracker.num_tests,
-        "pass_percentage": tracker.pass_percentage,
-        "difficulty": tracker.difficulty,
-        "report_path": str(report_path) if report_path.is_file() else None,
-        "evaluation": tracker.to_dict(stats_only=True),
-    }
+        tracker = evaluate_task(
+            task_id=task_id,
+            experiment_name=experiment_name,
+            suppress_errors=True,
+            save_report=True,
+        )
+        report_path = (
+            appworld_root
+            / "experiments"
+            / "outputs"
+            / experiment_name
+            / "tasks"
+            / task_id
+            / "evaluation"
+            / "report.md"
+        )
+        return {
+            "success": bool(tracker.success),
+            "task_success": bool(tracker.success),
+            "reward": 1.0 if tracker.success else 0.0,
+            "pass_count": tracker.pass_count,
+            "fail_count": tracker.fail_count,
+            "num_tests": tracker.num_tests,
+            "tests_passed": tracker.pass_count,
+            "tests_total": tracker.num_tests,
+            "pass_percentage": tracker.pass_percentage,
+            "difficulty": tracker.difficulty,
+            "report_path": str(report_path) if report_path.is_file() else None,
+            "evaluation": tracker.to_dict(stats_only=True),
+        }
+    finally:
+        _restore_host_os_io()
 
 
 def _finished_task_ids(log_path: Path, *, successes_only: bool = False) -> Set[str]:
@@ -577,7 +692,7 @@ def _finished_task_ids(log_path: Path, *, successes_only: bool = False) -> Set[s
     if not log_path.is_file():
         return set()
     last: Dict[str, Dict[str, Any]] = {}
-    with log_path.open(encoding="utf-8") as f:
+    with _HOST_OPEN(log_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -1129,11 +1244,11 @@ def main() -> int:
 
     experiment_dir: Optional[Path] = None
     config_hermes_home: Optional[Path] = None
-    log_path = Path(args.log_jsonl).expanduser() if args.log_jsonl else None
+    log_path = host_expand_path(args.log_jsonl) if args.log_jsonl else None
     hot_pool = args.hot_pool
     hot_pool_persist = args.hot_pool_persist
     if args.experiment_dir:
-        experiment_dir = Path(args.experiment_dir).expanduser().resolve()
+        experiment_dir = host_expand_path(args.experiment_dir)
         _ensure_host_dir(experiment_dir)
         if log_path is None:
             log_path = experiment_dir / "runs.jsonl"
@@ -1158,6 +1273,11 @@ def main() -> int:
             config_hermes_home = source_home if source_home.is_dir() else None
         if hot_pool and not hot_pool_persist:
             hot_pool_persist = str(experiment_hot_pool_path(experiment_dir))
+
+    if hot_pool_persist:
+        # Resolve once with host-safe expanduser so per-task re-apply never
+        # needs pathlib.Path.expanduser after a leaked SafetyGuard.
+        hot_pool_persist = str(host_expand_path(hot_pool_persist))
 
     if log_path is not None:
         _ensure_host_dir(log_path.parent)
@@ -1202,7 +1322,7 @@ def main() -> int:
         run_log = args.run_log_jsonl or args.log_jsonl
         if run_log:
             run_stats_by_task = load_run_hermes_stats_by_task(
-                Path(run_log).expanduser(),
+                host_expand_path(run_log),
                 experiment_name=args.experiment_name,
             )
 
@@ -1220,6 +1340,7 @@ def main() -> int:
         )
 
     for tid in run_ids:
+        _restore_host_os_io()
         ts_start = datetime.now(timezone.utc).isoformat()
         if args.print_summary:
             mode_label = "evaluate" if args.evaluate_only else "run"

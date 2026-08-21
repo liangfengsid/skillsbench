@@ -339,8 +339,48 @@ def test_restore_host_os_io_allows_environ_after_putenv_guard(monkeypatch):
     assert os.environ.get("HERMES_HOT_POOL_ENABLED") == "0"
 
 
+def test_restore_host_os_io_allows_hot_pool_enable_environ(tmp_path, monkeypatch):
+    """--hot-pool also assigns os.environ (putenv) after a leaked SafetyGuard."""
+    mod = _load_module()
+    persist = tmp_path / "hot_pool.json"
+
+    def blocked_putenv(*args, **kwargs):
+        raise PermissionError(
+            "Usage of the following function is not allowed: os.putenv."
+        )
+
+    monkeypatch.setattr(os, "putenv", blocked_putenv)
+    with pytest.raises(PermissionError, match="os.putenv"):
+        os.environ["HERMES_HOT_POOL_ENABLED"] = "1"
+
+    mod._restore_host_os_io()
+    mod.apply_hot_pool_cli_overrides(hot_pool=True, hot_pool_persist=str(persist))
+    assert os.environ.get("HERMES_HOT_POOL_ENABLED") == "1"
+    assert os.environ.get("HERMES_HOT_POOL_PATH") == str(persist.resolve())
+
+
+def test_apply_hot_pool_persist_avoids_path_expanduser(tmp_path, monkeypatch):
+    """--hot-pool persist must not call Path.expanduser (SafetyGuard denylist)."""
+    mod = _load_module()
+    persist = tmp_path / "hot_pool.json"
+
+    def blocked_expanduser(self):
+        raise PermissionError(
+            "Usage of the following function is not allowed: pathlib.Path.expanduser."
+        )
+
+    monkeypatch.setattr(Path, "expanduser", blocked_expanduser)
+    with pytest.raises(PermissionError, match="expanduser"):
+        Path(persist).expanduser()
+
+    # No restore — helper uses os.path.expanduser.
+    mod.apply_hot_pool_cli_overrides(hot_pool=True, hot_pool_persist=str(persist))
+    assert os.environ.get("HERMES_HOT_POOL_ENABLED") == "1"
+    assert os.environ.get("HERMES_HOT_POOL_PATH") == str(persist.resolve())
+
+
 def test_restore_host_os_io_allows_expanduser_after_path_guard(tmp_path, monkeypatch):
-    """Hot-pool persist resolves Path.expanduser after a leaked SafetyGuard."""
+    """hot_skills.resolve_hot_pool_persist_path still uses Path.expanduser."""
     mod = _load_module()
     persist = tmp_path / "hot_pool.json"
 
@@ -354,6 +394,87 @@ def test_restore_host_os_io_allows_expanduser_after_path_guard(tmp_path, monkeyp
         Path(persist).expanduser()
 
     mod._restore_host_os_io()
-    mod.apply_hot_pool_cli_overrides(hot_pool=True, hot_pool_persist=str(persist))
-    assert os.environ.get("HERMES_HOT_POOL_ENABLED") == "1"
-    assert os.environ.get("HERMES_HOT_POOL_PATH") == str(persist.resolve())
+    resolved = Path(persist).expanduser()
+    assert resolved == persist or resolved == persist.resolve()
+
+
+def test_restore_host_os_io_allows_hot_pool_persist_writes(tmp_path, monkeypatch):
+    """Hot-pool persist uses Path.mkdir / write_text / replace after execute()."""
+    mod = _load_module()
+
+    def blocked(name):
+        def _blocked(self, *args, **kwargs):
+            raise PermissionError(
+                f"Usage of the following function is not allowed: pathlib.Path.{name}."
+            )
+
+        return _blocked
+
+    monkeypatch.setattr(Path, "mkdir", blocked("mkdir"))
+    monkeypatch.setattr(Path, "write_text", blocked("write_text"))
+    monkeypatch.setattr(Path, "replace", blocked("replace"))
+    with pytest.raises(PermissionError, match="mkdir"):
+        (tmp_path / "blocked").mkdir()
+
+    mod._restore_host_os_io()
+    path = tmp_path / "pool" / "hot_pool.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("{}", encoding="utf-8")
+    tmp.replace(path)
+    assert path.read_text(encoding="utf-8") == "{}"
+
+
+def test_restore_host_os_io_allows_shutil_rmtree_and_json_dump(tmp_path, monkeypatch):
+    """--clear-experiment and eval reports use shutil.rmtree / json.dump."""
+    import json as json_mod
+    import shutil as shutil_mod
+
+    mod = _load_module()
+    target = tmp_path / "outputs"
+    target.mkdir()
+    report = tmp_path / "report.json"
+
+    def blocked_rmtree(*args, **kwargs):
+        raise PermissionError(
+            "Usage of the following function is not allowed: shutil.rmtree."
+        )
+
+    def blocked_dump(*args, **kwargs):
+        raise PermissionError(
+            "Usage of the following function is not allowed: json.dump."
+        )
+
+    monkeypatch.setattr(shutil_mod, "rmtree", blocked_rmtree)
+    monkeypatch.setattr(json_mod, "dump", blocked_dump)
+    with pytest.raises(PermissionError, match="rmtree"):
+        shutil_mod.rmtree(target)
+    with pytest.raises(PermissionError, match="json.dump"):
+        with report.open("w", encoding="utf-8") as f:
+            json_mod.dump({"ok": True}, f)
+
+    mod._restore_host_os_io()
+    shutil_mod.rmtree(target)
+    assert not target.exists()
+    with report.open("w", encoding="utf-8") as f:
+        json_mod.dump({"ok": True}, f)
+    assert json.loads(report.read_text(encoding="utf-8")) == {"ok": True}
+
+
+def test_host_snapshot_covers_appworld_safety_guard_targets():
+    """Driver restore list must be a superset of AppWorld's process-wide patches."""
+    safety_guard = pytest.importorskip("appworld.common.safety_guard")
+    mod = _load_module()
+    snapped = {(id(obj), name) for obj, name, _ in mod._HOST_ATTRS}
+    missing = []
+    for module_name, names in safety_guard.DISALLOWED_MODULE_TO_FUNCTION_NAMES.items():
+        try:
+            module = safety_guard.SafetyGuard.module_by_path(module_name)
+        except Exception:
+            continue
+        for name in names:
+            if getattr(module, name, None) is None:
+                continue
+            if (id(module), name) not in snapped:
+                missing.append(f"{module_name}.{name}")
+    assert missing == []
