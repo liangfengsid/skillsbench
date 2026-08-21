@@ -550,9 +550,13 @@ def test_dry_run_isolate_and_no_hot_pool(tmp_path, capsys):
 def test_prepare_harbor_isolate_seeds_hermes_home(tmp_path, monkeypatch):
     driver = _load(_DRIVER, "run_terminalbench_with_harbor", extra_paths=(_BENCH, _REPO))
     real = tmp_path / "real_hermes"
-    (real / "skills" / "demo").mkdir(parents=True)
-    (real / "skills" / "demo" / "SKILL.md").write_text("# demo\n", encoding="utf-8")
+    polluted = real / "skills" / "polluted"
+    polluted.mkdir(parents=True)
+    (polluted / "SKILL.md").write_text("# polluted\n", encoding="utf-8")
     (real / "config.yaml").write_text("model:\n  default: x\n", encoding="utf-8")
+    bundled = tmp_path / "bundled_skills"
+    (bundled / "demo").mkdir(parents=True)
+    (bundled / "demo" / "SKILL.md").write_text("# demo\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(real))
     exp = tmp_path / "exp"
     dataset = tmp_path / "terminal-bench" / "tasks"
@@ -560,11 +564,14 @@ def test_prepare_harbor_isolate_seeds_hermes_home(tmp_path, monkeypatch):
     manifest = driver.prepare_harbor_isolate(
         experiment_dir=exp,
         dataset_path=dataset,
+        source_skills=bundled,
     )
     home = Path(manifest["hermes_home"])
     assert (home / "skills" / "demo" / "SKILL.md").is_file()
+    assert not (home / "skills" / "polluted").exists()
     assert (home / "config.yaml").is_symlink()
     assert manifest["isolate_hermes_home"] is True
+    assert manifest["bundled_skills_dir"] == str(bundled.resolve())
 
 
 

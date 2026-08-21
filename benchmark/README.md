@@ -1,6 +1,6 @@
 # Hermes benchmark drivers
 
-Hermes ships evaluation harnesses under `benchmark/` for running **`AIAgent`** against public benchmarks and comparing runs. All **Hermes-specific drivers** live in [`scripts/`](scripts/). Vendored benchmark trees (`skillsbench/`, `terminal-bench/`, `appworld/`) keep their upstream docs.
+Hermes ships evaluation harnesses under `benchmark/` for running **`AIAgent`** against public benchmarks and comparing runs. All **Hermes-specific drivers** live in [`scripts/`](scripts/). Vendored benchmark trees (`skillsbench/`, `terminal-bench/`, `alfworld/`, `appworld/`) keep their upstream docs.
 
 **Run commands from the Hermes repo root** unless noted otherwise.
 
@@ -14,6 +14,7 @@ source .venv/bin/activate   # or: source venv/bin/activate
 - **Import path:** drivers prepend `--hermes-root` (default: this repo) to `sys.path` and import `run_agent.AIAgent`.
 - **SkillsBench / BenchFlow (optional):** `pip install -e ".[skillsbench]"` from repo root — see [`skillsbench/README.md`](skillsbench/README.md).
 - **Harbor / official Terminal-Bench (optional):** `pip install -e ".[harbor]"` plus Docker (or `pip install "harbor[modal]"` + Modal). Not included in `[all]`.
+- **ALFWorld (optional):** `pip install -e ".[alfworld]"` plus PDDL/game files in `ALFWORLD_DATA`. Not included in `[all]`.
 - **AppWorld:** `pip install -e benchmark/appworld` — see [`appworld/README.md`](appworld/README.md).
 
 ## Layout
@@ -22,9 +23,11 @@ source .venv/bin/activate   # or: source venv/bin/activate
 |------|------|
 | [`scripts/`](scripts/) | Hermes batch drivers and analysis tools |
 | [`harbor_adapter/`](harbor_adapter/) | Hermes `BaseAgent` for official Harbor / Terminal-Bench eval |
+| [`alfworld_adapter/`](alfworld_adapter/) | ALFWorld TextWorld discovery + env wrapper for Hermes |
 | [`baselines/`](baselines/) | Isolated third-party / paper baselines (e.g. CoEvoSkills) |
 | [`skillsbench/`](skillsbench/) | SkillsBench tasks + BenchFlow (nested project) |
 | [`terminal-bench/`](terminal-bench/) | Terminal-Bench tasks (Harbor dataset tree) |
+| [`alfworld/`](alfworld/) | Vendored ALFWorld (TextWorld / ALFRED) |
 | [`appworld/`](appworld/) | AppWorld environment (vendored) |
 
 ### CoEvoSkills baseline (SkillsBench)
@@ -101,6 +104,7 @@ python benchmark/scripts/analyze_hot_pool_runs.py RUN.jsonl \
 |--------|---------|
 | [`run_skillsbench_with_hermes.py`](scripts/run_skillsbench_with_hermes.py) | Run Hermes on SkillsBench tasks; JSONL logs + host eval |
 | [`run_terminalbench_with_harbor.py`](scripts/run_terminalbench_with_harbor.py) | Terminal-Bench: Hermes agent + official Harbor verifier |
+| [`run_alfworld_with_hermes.py`](scripts/run_alfworld_with_hermes.py) | ALFWorld TextWorld: Hermes picks admissible commands |
 | [`run_terminalbench_protocol.py`](baselines/coevoskills/run_terminalbench_protocol.py) | CoEvoSkills on Terminal-Bench (Harbor evolve oracle + frozen eval) |
 | [`evaluate_skillsbench_task.py`](scripts/evaluate_skillsbench_task.py) | Host pytest / `test.sh` verifier for SkillsBench |
 | [`skillsbench_metrics.py`](scripts/skillsbench_metrics.py) | Build compact `metrics` blocks for JSONL rows |
@@ -166,8 +170,9 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 # Isolated experiment workspace (recommended for multi-run / A/B):
 # copies selected tasks under DIR/skillsbench/tasks/ so agent outputs do not
 # pollute the shared SkillsBench tree; defaults hot-pool JSON to DIR/hot_pool.json.
-# Hermes keeps using ~/.hermes (default skills) unless you pass --isolate-hermes-home
-# (then skills are copied into DIR/hermes_home/skills; config/.env/SOUL symlink to ~/.hermes).
+# Hermes keeps using ~/.hermes unless you pass --isolate-hermes-home
+# (then repo skills/ is copied into DIR/hermes_home/skills — not ~/.hermes/skills;
+# config/.env/SOUL symlink to ~/.hermes).
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --experiment-dir benchmark/runs/exp_hot_train \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
@@ -199,8 +204,8 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 | `--hot-pool` / `--no-hot-pool` | follow config | Force hot skill pool on or off for this run (see below) |
 | `--hot-pool-persist PATH` | off | Load/save hot pool across tasks; requires pool enabled; incompatible with `--no-hot-pool` |
 | `--experiment-dir DIR` | off | Per-experiment **task** workspace (`DIR/skillsbench/tasks/`); does not isolate Hermes by default |
-| `--reset-task-workspaces` | off | With `--experiment-dir`: refresh task copies / wipe prior agent outputs (also re-seeds isolated Hermes skills) |
-| `--isolate-hermes-home` | off | Sandbox `HERMES_HOME=DIR/hermes_home`: **copy** skills; **symlink** `config.yaml` / `.env` / `SOUL.md` to real `~/.hermes` |
+| `--reset-task-workspaces` | off | With `--experiment-dir`: refresh task copies / wipe prior agent outputs (also re-seeds isolated skills from repo `skills/`) |
+| `--isolate-hermes-home` | off | Sandbox `HERMES_HOME=DIR/hermes_home`: **copy** repo `skills/` (not `~/.hermes/skills`); **symlink** `config.yaml` / `.env` / `SOUL.md` to real `~/.hermes` |
 | `--no-batch-review-prompt` | off | Use default Hermes review prompt instead of SkillsBench batch appendix |
 | `--no-wait-background-review` | off | Exit without waiting for end-of-turn skill/memory review |
 | `--background-review-timeout SEC` | 180 | Max wait for background review per task |
@@ -427,7 +432,7 @@ Env vars (set by the driver): `HERMES_HOT_POOL_ENABLED=0|1`, `HERMES_HOT_POOL_PE
 
 Hermes runs **write into** `benchmark/skillsbench/tasks/<task-id>/` (solution files, `mass_report.json`, local verify scripts, etc.). Leftover artifacts make iteration counts unreliable — a later run may “verify existing output” in fewer steps while a dirty tree inflates or deflates comparisons.
 
-**Preferred:** use `--experiment-dir DIR` so each experiment gets its own copy under `DIR/skillsbench/tasks/` (shared SkillsBench tree stays clean). Hermes still uses `~/.hermes` unless you pass `--isolate-hermes-home` (writable **copy** of skills under `DIR/hermes_home/skills/`; `config.yaml` / `.env` / `SOUL.md` stay linked to the real home).
+**Preferred:** use `--experiment-dir DIR` so each experiment gets its own copy under `DIR/skillsbench/tasks/` (shared SkillsBench tree stays clean). Hermes still uses `~/.hermes` unless you pass `--isolate-hermes-home` (writable **copy** of repo `skills/` under `DIR/hermes_home/skills/` — not the live `~/.hermes/skills` tree; `config.yaml` / `.env` / `SOUL.md` stay linked to the real home).
 
 ```bash
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
@@ -546,7 +551,7 @@ python3 benchmark/scripts/run_terminalbench_with_harbor.py --all \
 
 `--resume` skips tasks that already have a finished (non-error) JSONL row **or** a Harbor trial `result.json` under `--jobs-dir` (defaults to `DIR/jobs`). Re-run the same command after an interrupt: finished Harbor trials are not re-queued even if JSONL was never flushed, and those artifacts are backfilled into `--log-jsonl`. In-progress trials (no `result.json` yet) start over. Ctrl-C on the driver also salvages finished trials into JSONL before exit.
 
-`--isolate-hermes-home` requires `--experiment-dir` (same as SkillsBench): `HERMES_HOME` becomes `DIR/hermes_home` (writable skills copy; `config.yaml` / `.env` / `SOUL.md` symlink to `~/.hermes`). `--no-hot-pool` / `--hot-pool` override `config.yaml` for the Harbor child. `--jobs-dir` defaults to `DIR/jobs` when `--experiment-dir` is set. Skip-context and skip-memory stay on.
+`--isolate-hermes-home` requires `--experiment-dir` (same as SkillsBench): `HERMES_HOME` becomes `DIR/hermes_home` (writable copy of repo `skills/`, not `~/.hermes/skills`; `config.yaml` / `.env` / `SOUL.md` symlink to `~/.hermes`). `--no-hot-pool` / `--hot-pool` override `config.yaml` for the Harbor child. `--jobs-dir` defaults to `DIR/jobs` when `--experiment-dir` is set. Skip-context and skip-memory stay on.
 
 Harbor CLI equivalent (PYTHONPATH must include the Hermes repo root):
 
@@ -580,6 +585,42 @@ python3 benchmark/scripts/make_terminalbench_splits.py \
   --protocol category_stratified --seed 42 \
   -o benchmark/terminalbench_splits/stratified_v1.json
 ```
+
+---
+
+## ALFWorld
+
+ALFWorld is an **interactive text household** (TextWorld), not a SkillsBench-style file workspace. Hermes does **not** get a terminal sandbox; the driver owns the env loop and asks Hermes for one admissible command per step (same pattern as AppWorld). Success is TextWorld `won`.
+
+**You do need a small adapter** (now in [`alfworld_adapter/`](alfworld_adapter/) + [`scripts/run_alfworld_with_hermes.py`](scripts/run_alfworld_with_hermes.py)). You do **not** need MaskRCNN, seq2seq checkpoints, or AI2-THOR for this driver — those are for embodied `AlfredThorEnv`. PDDL / `game.tw-pddl` files are enough.
+
+```bash
+pip install -e ".[alfworld]"
+# optional, if you want `import alfworld` without the driver path hack:
+pip install -e benchmark/alfworld
+
+export ALFWORLD_DATA=/data/liangfeng/alfwordData   # this machine's download path
+
+python3 benchmark/scripts/run_alfworld_with_hermes.py --list-tasks --split valid_unseen
+
+# Smoke: one unseen game
+python3 benchmark/scripts/run_alfworld_with_hermes.py \
+  --split valid_unseen --limit 1 \
+  --model Qwen/Qwen3.6-27B \
+  --log-jsonl benchmark/runs/alfworld_smoke/runs.jsonl \
+  --print-summary
+
+# Official-style eval split (valid_unseen, 50 env steps)
+python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen \
+  --model Qwen/Qwen3.6-27B --max-steps 50 \
+  --experiment-dir benchmark/runs/alfworld_unseen \
+  --log-jsonl benchmark/runs/alfworld_unseen/runs.jsonl \
+  --resume --print-summary
+```
+
+`--task` ids look like `pick_and_place_simple-Mug-None-Desk-1/trial_T…`. Default is **no Hermes tools** (pure text policy). Pass `--tools` / `--hot-pool` if you want skills in the loop. With `--isolate-hermes-home`, skills are seeded from repo `skills/` (not `~/.hermes/skills`). JSONL uses `evaluation.task_success` so `aggregate_skillsbench_runs.py` still works.
+
+If `ALFWORLD_DATA` is unset, the driver also looks at `/data/liangfeng/alfwordData` and `/data/liangfeng/alfworldData`.
 
 ---
 

@@ -116,7 +116,8 @@ python -m benchmark.baselines.coevoskills.run_split_protocol \
 `--experiment-dir` holds evolve workspaces under `DIR/coevoskills/`, copies
 frozen-eval tasks under `DIR/skillsbench/tasks/`, and defaults the frozen
 library to `DIR/coevoskills/_frozen_library`. Hermes continues to use
-`~/.hermes` unless you pass `--isolate-hermes-home`.
+`~/.hermes` unless you pass `--isolate-hermes-home` (seeded from repo
+`skills/`, not `~/.hermes/skills`).
 
 Same-task quality (evolve and score the same task’s skills, no pooled library):
 

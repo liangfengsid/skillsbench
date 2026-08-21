@@ -39,6 +39,19 @@ def _make_source_task(root: Path, task_id: str) -> Path:
     return task
 
 
+def _make_bundled_skills(
+    root: Path,
+    *,
+    name: str = "demo-skill",
+    body: str = "---\nname: demo-skill\n---\n# Demo\n",
+) -> Path:
+    bundled = root / "bundled_skills"
+    skill = bundled / name
+    skill.mkdir(parents=True, exist_ok=True)
+    (skill / "SKILL.md").write_text(body, encoding="utf-8")
+    return bundled
+
+
 def test_prepare_dataset_dirname_copies_under_custom_name(tmp_path, monkeypatch):
     mod = _load_module()
     source = tmp_path / "otherbench"
@@ -105,11 +118,11 @@ def test_prepare_copies_tasks_and_sets_hermes_home(tmp_path, monkeypatch):
     source = tmp_path / "skillsbench"
     _make_source_task(source, "task-a")
     _make_source_task(source, "task-b")
+    bundled = _make_bundled_skills(tmp_path)
     real_home = tmp_path / "real_hermes"
-    (real_home / "skills" / "demo-skill").mkdir(parents=True)
-    (real_home / "skills" / "demo-skill" / "SKILL.md").write_text(
-        "---\nname: demo-skill\n---\n# Demo\n", encoding="utf-8"
-    )
+    polluted = real_home / "skills" / "polluted-skill"
+    polluted.mkdir(parents=True)
+    (polluted / "SKILL.md").write_text("# polluted\n", encoding="utf-8")
     (real_home / "config.yaml").write_text("model:\n  default: demo\n", encoding="utf-8")
     (real_home / ".env").write_text("DEMO_KEY=1\n", encoding="utf-8")
     (real_home / "SOUL.md").write_text("# Soul\n", encoding="utf-8")
@@ -124,6 +137,7 @@ def test_prepare_copies_tasks_and_sets_hermes_home(tmp_path, monkeypatch):
         isolate_hermes_home=True,
         apply_hermes_home_env=True,
         source_hermes_home=real_home,
+        source_skills=bundled,
     )
 
     assert (exp / "skillsbench" / "tasks" / "task-a" / "instruction.md").is_file()
@@ -131,10 +145,12 @@ def test_prepare_copies_tasks_and_sets_hermes_home(tmp_path, monkeypatch):
     seeded = exp / "hermes_home" / "skills" / "demo-skill" / "SKILL.md"
     assert seeded.is_file()
     assert "Demo" in seeded.read_text(encoding="utf-8")
+    assert not (exp / "hermes_home" / "skills" / "polluted-skill").exists()
     assert os.environ["HERMES_HOME"] == str(exp / "hermes_home")
     assert manifest["actions"]["task-a"] == "copied"
     assert manifest["skills_seed"]["action"] == "seeded"
     assert manifest["skills_seed"]["n_skills"] == 1
+    assert manifest["skills_seed"]["source_skills"] == str(bundled.resolve())
     assert manifest["skillsbench_root"] == str(exp / "skillsbench")
     for name in ("config.yaml", ".env", "SOUL.md"):
         link = exp / "hermes_home" / name
@@ -154,6 +170,7 @@ def test_shared_files_do_not_sandbox_config_writes_via_symlink(tmp_path, monkeyp
     real_home = tmp_path / "real_hermes"
     (real_home / "skills").mkdir(parents=True)
     (real_home / "config.yaml").write_text("a: 1\n", encoding="utf-8")
+    bundled = _make_bundled_skills(tmp_path)
     exp = tmp_path / "exp_shared"
     monkeypatch.delenv("HERMES_HOME", raising=False)
 
@@ -163,6 +180,7 @@ def test_shared_files_do_not_sandbox_config_writes_via_symlink(tmp_path, monkeyp
         task_ids=["task-a"],
         isolate_hermes_home=True,
         source_hermes_home=real_home,
+        source_skills=bundled,
     )
     (exp / "hermes_home" / "config.yaml").write_text("a: 2\n", encoding="utf-8")
     assert (real_home / "config.yaml").read_text(encoding="utf-8") == "a: 2\n"
@@ -177,8 +195,8 @@ def test_isolate_preserves_seeded_skills_across_reruns(tmp_path, monkeypatch):
     source = tmp_path / "skillsbench"
     _make_source_task(source, "task-a")
     real_home = tmp_path / "real_hermes"
-    (real_home / "skills" / "base").mkdir(parents=True)
-    (real_home / "skills" / "base" / "SKILL.md").write_text("# base\n")
+    (real_home / "skills").mkdir(parents=True)
+    bundled = _make_bundled_skills(tmp_path, name="base", body="# base\n")
     exp = tmp_path / "exp_resume"
     monkeypatch.delenv("HERMES_HOME", raising=False)
 
@@ -188,6 +206,7 @@ def test_isolate_preserves_seeded_skills_across_reruns(tmp_path, monkeypatch):
         task_ids=["task-a"],
         isolate_hermes_home=True,
         source_hermes_home=real_home,
+        source_skills=bundled,
     )
     # Experiment mutates skills (hot-pool / skill_manage).
     new_skill = exp / "hermes_home" / "skills" / "learned"
@@ -200,6 +219,7 @@ def test_isolate_preserves_seeded_skills_across_reruns(tmp_path, monkeypatch):
         task_ids=["task-a"],
         isolate_hermes_home=True,
         source_hermes_home=real_home,
+        source_skills=bundled,
     )
     assert manifest["skills_seed"]["action"] == "exists"
     assert (new_skill / "SKILL.md").is_file()
@@ -210,8 +230,8 @@ def test_reset_reseeds_hermes_skills(tmp_path, monkeypatch):
     source = tmp_path / "skillsbench"
     _make_source_task(source, "task-a")
     real_home = tmp_path / "real_hermes"
-    (real_home / "skills" / "base").mkdir(parents=True)
-    (real_home / "skills" / "base" / "SKILL.md").write_text("# base\n")
+    (real_home / "skills").mkdir(parents=True)
+    bundled = _make_bundled_skills(tmp_path, name="base", body="# base\n")
     exp = tmp_path / "exp_reset"
     monkeypatch.delenv("HERMES_HOME", raising=False)
 
@@ -221,11 +241,14 @@ def test_reset_reseeds_hermes_skills(tmp_path, monkeypatch):
         task_ids=["task-a"],
         isolate_hermes_home=True,
         source_hermes_home=real_home,
+        source_skills=bundled,
     )
     learned = exp / "hermes_home" / "skills" / "learned"
     learned.mkdir()
     (learned / "SKILL.md").write_text("# learned\n")
-    (real_home / "skills" / "base" / "SKILL.md").write_text("# base-v2\n")
+    (bundled / "base" / "SKILL.md").write_text("# base-v2\n")
+    (real_home / "skills" / "polluted").mkdir()
+    (real_home / "skills" / "polluted" / "SKILL.md").write_text("# should-not-copy\n")
 
     manifest = mod.prepare_experiment_workspace(
         experiment_dir=exp,
@@ -234,10 +257,12 @@ def test_reset_reseeds_hermes_skills(tmp_path, monkeypatch):
         reset_outputs=True,
         isolate_hermes_home=True,
         source_hermes_home=real_home,
+        source_skills=bundled,
     )
     assert manifest["skills_seed"]["action"] == "reseeded"
     assert not learned.exists()
     assert (exp / "hermes_home" / "skills" / "base" / "SKILL.md").read_text() == "# base-v2\n"
+    assert not (exp / "hermes_home" / "skills" / "polluted").exists()
 
 
 def test_prepare_does_not_pollute_source_on_agent_write(tmp_path, monkeypatch):
@@ -271,6 +296,7 @@ def test_reset_outputs_wipes_agent_files_and_refreshes_defs(tmp_path, monkeypatc
     src_task = _make_source_task(source, "task-a")
     real_home = tmp_path / "real_hermes"
     (real_home / "skills").mkdir(parents=True)
+    bundled = _make_bundled_skills(tmp_path)
     exp = tmp_path / "exp3"
     monkeypatch.delenv("HERMES_HOME", raising=False)
 
@@ -281,6 +307,7 @@ def test_reset_outputs_wipes_agent_files_and_refreshes_defs(tmp_path, monkeypatc
         isolate_hermes_home=True,
         apply_hermes_home_env=False,
         source_hermes_home=real_home,
+        source_skills=bundled,
     )
     dest = exp / "skillsbench" / "tasks" / "task-a"
     (dest / "junk.json").write_text("{}", encoding="utf-8")
@@ -294,6 +321,7 @@ def test_reset_outputs_wipes_agent_files_and_refreshes_defs(tmp_path, monkeypatc
         isolate_hermes_home=True,
         apply_hermes_home_env=False,
         source_hermes_home=real_home,
+        source_skills=bundled,
     )
     assert manifest["actions"]["task-a"] == "refreshed_outputs"
     assert not (dest / "junk.json").exists()
@@ -323,6 +351,7 @@ def test_apply_hermes_home_refreshes_preimported_skills_dir(tmp_path, monkeypatc
     real_home = tmp_path / "real_hermes"
     (real_home / "skills").mkdir(parents=True)
     (real_home / "config.yaml").write_text("model:\n  default: demo\n", encoding="utf-8")
+    bundled = _make_bundled_skills(tmp_path)
     stale = tmp_path / "stale_skills"
     stale.mkdir()
     monkeypatch.setattr(sm, "SKILLS_DIR", stale)
@@ -337,9 +366,48 @@ def test_apply_hermes_home_refreshes_preimported_skills_dir(tmp_path, monkeypatc
         isolate_hermes_home=True,
         apply_hermes_home_env=True,
         source_hermes_home=real_home,
+        source_skills=bundled,
     )
 
     expected = (exp / "hermes_home" / "skills").resolve()
     assert sm.SKILLS_DIR == expected
     assert sm._SKILLS_DIR_AT_IMPORT == expected
     assert Path(os.environ["HERMES_HOME"]).resolve() == (exp / "hermes_home").resolve()
+
+
+def test_resolve_bundled_skills_dir_defaults_to_repo_skills(monkeypatch):
+    mod = _load_module()
+    monkeypatch.delenv("HERMES_BUNDLED_SKILLS", raising=False)
+    repo_skills = Path(__file__).resolve().parents[2] / "skills"
+    assert mod.resolve_bundled_skills_dir() == repo_skills.resolve()
+    assert repo_skills.is_dir()
+
+
+def test_isolate_seeds_bundled_skills_not_live_hermes_home(tmp_path, monkeypatch):
+    """Live ~/.hermes/skills must not be the isolate seed source."""
+    mod = _load_module()
+    source = tmp_path / "skillsbench"
+    _make_source_task(source, "task-a")
+    bundled = _make_bundled_skills(tmp_path, name="clean-skill", body="# clean\n")
+    real_home = tmp_path / "real_hermes"
+    polluted = real_home / "skills" / "polluted-skill"
+    polluted.mkdir(parents=True)
+    (polluted / "SKILL.md").write_text("# polluted\n", encoding="utf-8")
+    (real_home / "config.yaml").write_text("a: 1\n", encoding="utf-8")
+    exp = tmp_path / "exp_clean"
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("HERMES_BUNDLED_SKILLS", raising=False)
+
+    manifest = mod.prepare_experiment_workspace(
+        experiment_dir=exp,
+        source_skillsbench_root=source,
+        task_ids=["task-a"],
+        isolate_hermes_home=True,
+        source_hermes_home=real_home,
+        source_skills=bundled,
+    )
+    dest = exp / "hermes_home" / "skills"
+    assert (dest / "clean-skill" / "SKILL.md").read_text(encoding="utf-8") == "# clean\n"
+    assert not (dest / "polluted-skill").exists()
+    assert manifest["skills_seed"]["source_skills"] == str(bundled.resolve())
+    assert manifest["bundled_skills_dir"] == str(bundled.resolve())

@@ -846,11 +846,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=False,
         help=(
             "With --experiment-dir: also set HERMES_HOME=DIR/hermes_home "
-            "(default: off — keep ~/.hermes so default Hermes skills remain "
-            "available). When enabled, DIR/hermes_home/skills is a writable "
-            "copy of the current Hermes skills tree, while config.yaml / .env "
-            "/ SOUL.md are symlinked to the real ~/.hermes files. "
-            "Re-seed skills with --reset-task-workspaces."
+            "(default: off — keep ~/.hermes). When enabled, DIR/hermes_home/skills "
+            "is a writable copy of the repo skills/ tree (not ~/.hermes/skills), "
+            "while config.yaml / .env / SOUL.md are symlinked to the real "
+            "~/.hermes files. Re-seed skills with --reset-task-workspaces."
         ),
     )
     parser.add_argument(
@@ -860,7 +859,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "With --experiment-dir: re-copy task definition files and wipe prior "
             "agent outputs in the experiment task dirs before running. With "
             "--isolate-hermes-home, also re-seed DIR/hermes_home/skills from "
-            "the source Hermes skills tree."
+            "the repo skills/ tree (not ~/.hermes/skills)."
         ),
     )
 
@@ -1001,6 +1000,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             isolate_hermes_home=bool(args.isolate_hermes_home),
             apply_hermes_home_env=bool(args.isolate_hermes_home),
             source_hermes_home=config_hermes_home,
+            hermes_root=hermes_root,
             dataset_dirname=str(preset["dataset_dirname"]),
         )
         skillsbench_root = Path(manifest["skillsbench_root"])
@@ -1034,7 +1034,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(
                 "[experiment] HERMES_HOME unchanged (default Hermes skills from ~/.hermes); "
                 "pass --isolate-hermes-home to sandbox skills/memory "
-                "(seeded copy of current Hermes skills)",
+                "(seeded copy of repo skills/, not ~/.hermes/skills)",
                 flush=True,
             )
         print(

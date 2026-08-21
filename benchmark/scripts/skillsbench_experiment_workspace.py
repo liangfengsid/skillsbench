@@ -11,7 +11,7 @@ Layout (default)::
         tasks/<task_id>/…     # writable copies used by agent + host eval
       hot_pool.json           # recommended --hot-pool-persist target
       hermes_home/            # only when --isolate-hermes-home (opt-in)
-        skills/               # writable copy of source Hermes skills
+        skills/               # writable copy of repo skills/ (not ~/.hermes/skills)
         config.yaml →         # symlink (or copy) to real ~/.hermes/config.yaml
         .env →                # symlink (or copy) to real ~/.hermes/.env
         SOUL.md →             # symlink (or copy) to real ~/.hermes/SOUL.md
@@ -101,13 +101,34 @@ def refresh_skills_dir_caches(skills_dir: Optional[Path] = None) -> None:
 
 
 def resolve_source_hermes_home(explicit: Optional[Path] = None) -> Path:
-    """Hermes home to seed from (call before rewriting ``HERMES_HOME``)."""
+    """Real Hermes home for config/.env/SOUL (call before rewriting ``HERMES_HOME``)."""
     if explicit is not None:
         return Path(explicit).expanduser().resolve()
     raw = (os.environ.get("HERMES_HOME") or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()
     return (Path.home() / ".hermes").resolve()
+
+
+def resolve_bundled_skills_dir(
+    *,
+    explicit: Optional[Path] = None,
+    hermes_root: Optional[Path] = None,
+) -> Path:
+    """Clean bundled skills tree: repo ``skills/``, not ``~/.hermes/skills``.
+
+    ``HERMES_BUNDLED_SKILLS`` (same env as ``tools.skills_sync``) wins when
+    ``explicit`` is omitted.
+    """
+    if explicit is not None:
+        return Path(explicit).expanduser().resolve()
+    env_override = (os.getenv("HERMES_BUNDLED_SKILLS") or "").strip()
+    if env_override:
+        return Path(env_override).expanduser().resolve()
+    if hermes_root is not None:
+        return Path(hermes_root).expanduser().resolve() / "skills"
+    # benchmark/scripts/this_file.py → repo root
+    return Path(__file__).resolve().parents[2] / "skills"
 
 
 def _count_skill_mds(skills_dir: Path) -> int:
@@ -124,23 +145,29 @@ def _skills_copy_ignore(directory: str, names: List[str]) -> List[str]:
 def seed_hermes_skills(
     dest_hermes_home: Path,
     *,
-    source_hermes_home: Optional[Path] = None,
+    source_skills: Optional[Path] = None,
     reset_skills: bool = False,
+    hermes_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
-    Copy ``source/skills`` into ``dest_hermes_home/skills``.
+    Copy the **bundled** repo ``skills/`` tree into ``dest_hermes_home/skills``.
 
-    On first create (or ``reset_skills=True``), replicate the live Hermes skill
-    set so the experiment starts with the same skills without sharing writes.
-    If dest skills already exist and ``reset_skills`` is false, leave them
-    alone (resume / mid-experiment mutations stay intact).
+    Does not copy ``~/.hermes/skills`` (or any other live profile skills dir) —
+    those trees may contain hot-pool / skill_manage mutations. Pass
+    ``source_skills`` only in tests.
+
+    On first create (or ``reset_skills=True``), replicate the clean bundled
+    set so the experiment starts without sharing writes. If dest skills
+    already exist and ``reset_skills`` is false, leave them alone (resume /
+    mid-experiment mutations stay intact).
     """
-    source_home = resolve_source_hermes_home(source_hermes_home)
-    src_skills = source_home / "skills"
+    src_skills = resolve_bundled_skills_dir(
+        explicit=source_skills, hermes_root=hermes_root
+    )
     dest_home = dest_hermes_home.expanduser().resolve()
     dest_skills = dest_home / "skills"
 
-    if dest_home == source_home:
+    if dest_skills == src_skills:
         return {
             "action": "skipped_same_home",
             "source_skills": str(src_skills),
@@ -325,6 +352,8 @@ def prepare_experiment_workspace(
     isolate_hermes_home: bool = False,
     apply_hermes_home_env: bool = False,
     source_hermes_home: Optional[Path] = None,
+    source_skills: Optional[Path] = None,
+    hermes_root: Optional[Path] = None,
     seed_hermes_skills_from_source: bool = True,
     reset_hermes_skills: Optional[bool] = None,
     dataset_dirname: str = "skillsbench",
@@ -339,8 +368,9 @@ def prepare_experiment_workspace(
     memory, config). Pass ``isolate_hermes_home=True`` for a sandboxed
     ``DIR/hermes_home``. When isolating:
 
-    - ``skills/`` is a writable **copy** of the source Hermes skills tree
-      (unless ``seed_hermes_skills_from_source=False``).
+    - ``skills/`` is a writable **copy** of the repo bundled ``skills/``
+      tree (not ``~/.hermes/skills``), unless
+      ``seed_hermes_skills_from_source=False``.
     - ``config.yaml``, ``.env``, and ``SOUL.md`` are **symlinked** (or copied)
       to the real Hermes home so provider/config/identity stay shared.
     """
@@ -351,6 +381,9 @@ def prepare_experiment_workspace(
     experiment_dir.mkdir(parents=True, exist_ok=True)
     # Capture source home *before* we rewrite HERMES_HOME below.
     resolved_source_home = resolve_source_hermes_home(source_hermes_home)
+    bundled_skills = resolve_bundled_skills_dir(
+        explicit=source_skills, hermes_root=hermes_root
+    )
     src_tasks = source_skillsbench_root / "tasks"
     if task_ids and not src_tasks.is_dir():
         raise FileNotFoundError(f"Source tasks dir not found: {src_tasks}")
@@ -385,14 +418,15 @@ def prepare_experiment_workspace(
             )
             skills_seed = seed_hermes_skills(
                 hermes_home,
-                source_hermes_home=resolved_source_home,
+                source_skills=bundled_skills,
                 reset_skills=do_reset,
+                hermes_root=hermes_root,
             )
         else:
             (hermes_home / "skills").mkdir(parents=True, exist_ok=True)
             skills_seed = {
                 "action": "skipped_no_seed",
-                "source_skills": str(resolved_source_home / "skills"),
+                "source_skills": str(bundled_skills),
                 "dest_skills": str(hermes_home / "skills"),
                 "n_skills": _count_skill_mds(hermes_home / "skills"),
             }
@@ -421,6 +455,7 @@ def prepare_experiment_workspace(
         "hot_pool_path": str(hot_pool),
         "hermes_home": str(hermes_home) if isolate_hermes_home else None,
         "source_hermes_home": str(resolved_source_home) if isolate_hermes_home else None,
+        "bundled_skills_dir": str(bundled_skills) if isolate_hermes_home else None,
         "isolate_hermes_home": isolate_hermes_home,
         "skills_seed": skills_seed,
         "shared_hermes_files": shared_files,

@@ -390,8 +390,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=(
             "With --experiment-dir: also set HERMES_HOME=DIR/hermes_home "
             "(default: off — keep ~/.hermes). When enabled, skills are a "
-            "writable copy; config.yaml / .env / SOUL.md symlink to the real "
-            "Hermes home. Re-seed skills with --reset-task-workspaces."
+            "writable copy of repo skills/ (not ~/.hermes/skills); "
+            "config.yaml / .env / SOUL.md symlink to the real Hermes home. "
+            "Re-seed skills with --reset-task-workspaces."
         ),
     )
     p.add_argument(
@@ -399,7 +400,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help=(
             "With --experiment-dir: refresh task copies and wipe prior agent "
-            "outputs. With --isolate-hermes-home, also re-seed hermes_home/skills."
+            "outputs. With --isolate-hermes-home, also re-seed hermes_home/skills "
+            "from the repo skills/ tree (not ~/.hermes/skills)."
         ),
     )
     p.add_argument("--evolve", action="store_true", help="Run Alg. 1 on --split-part tasks.")
@@ -528,6 +530,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             isolate_hermes_home=bool(args.isolate_hermes_home),
             apply_hermes_home_env=bool(args.isolate_hermes_home),
             source_hermes_home=source_hermes_home,
+            hermes_root=hermes_root,
             # Even when not copying tasks, --reset-task-workspaces should
             # re-seed isolated Hermes skills for a clean evolve/eval start.
             reset_hermes_skills=(
@@ -559,7 +562,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(
                 "[experiment] HERMES_HOME unchanged (default Hermes skills from ~/.hermes); "
                 "pass --isolate-hermes-home to sandbox skills/memory "
-                "(seeded copy of current Hermes skills)",
+                "(seeded copy of repo skills/, not ~/.hermes/skills)",
                 flush=True,
             )
     else:

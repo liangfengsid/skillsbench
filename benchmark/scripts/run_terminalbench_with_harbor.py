@@ -241,6 +241,7 @@ def prepare_harbor_isolate(
     experiment_dir: Path,
     dataset_path: Path,
     reset_skills: bool = False,
+    source_skills: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Seed ``DIR/hermes_home`` like SkillsBench ``--isolate-hermes-home`` (no task copies)."""
     from skillsbench_experiment_workspace import prepare_experiment_workspace
@@ -252,6 +253,8 @@ def prepare_harbor_isolate(
         isolate_hermes_home=True,
         apply_hermes_home_env=False,
         reset_outputs=reset_skills,
+        source_skills=source_skills,
+        hermes_root=_REPO,
         dataset_dirname="terminal-bench",
     )
 
@@ -525,14 +528,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=False,
         help=(
             "With --experiment-dir: set HERMES_HOME=DIR/hermes_home for the Harbor "
-            "child (writable copy of current Hermes skills; config.yaml / .env / "
-            "SOUL.md symlinked to the real ~/.hermes). Matches SkillsBench isolate."
+            "child (writable copy of repo skills/, not ~/.hermes/skills; "
+            "config.yaml / .env / SOUL.md symlinked to the real ~/.hermes). "
+            "Matches SkillsBench isolate."
         ),
     )
     p.add_argument(
         "--reset-task-workspaces",
         action="store_true",
-        help="With --isolate-hermes-home: re-seed DIR/hermes_home/skills from ~/.hermes.",
+        help=(
+            "With --isolate-hermes-home: re-seed DIR/hermes_home/skills from "
+            "the repo skills/ tree (not ~/.hermes/skills)."
+        ),
     )
     hot_pool_group = p.add_mutually_exclusive_group()
     hot_pool_group.add_argument(
