@@ -478,3 +478,72 @@ def test_host_snapshot_covers_appworld_safety_guard_targets():
             if (id(module), name) not in snapped:
                 missing.append(f"{module_name}.{name}")
     assert missing == []
+
+
+def test_execute_world_code_turns_timeout_into_step_output():
+    mod = _load_module()
+
+    class _World:
+        def execute(self, code):
+            raise TimeoutError("Function run_cell execution timed out after 100 seconds.")
+
+    out = mod._execute_world_code(_World(), "print(1)")
+    assert "TimeoutError" in out
+    assert "timed out" in out
+
+
+def test_wait_background_review_joins_agent():
+    mod = _load_module()
+    calls = []
+
+    class _Agent:
+        def wait_for_background_review(self, timeout=60.0):
+            calls.append(timeout)
+
+    mod._wait_background_review(_Agent(), timeout=12.0)
+    assert calls == [12.0]
+    mod._wait_background_review(None)
+
+
+def test_task_worker_crash_envelope_mentions_segfault():
+    mod = _load_module()
+    env = mod._task_worker_crash_envelope(
+        task_id="2a163ab_3",
+        dataset="train",
+        experiment_name="exp",
+        returncode=139,
+    )
+    assert env["schema"] == "appworld.hermes_run_error.v1"
+    assert env["appworld_task_id"] == "2a163ab_3"
+    assert "SIGSEGV" in env["error"]
+
+
+def test_run_one_task_in_subprocess_survives_child_crash(tmp_path, monkeypatch):
+    mod = _load_module()
+
+    class _Proc:
+        returncode = 139
+
+    class _FakeSubprocess:
+        @staticmethod
+        def run(*args, **kwargs):
+            return _Proc()
+
+    monkeypatch.setattr(mod, "subprocess", _FakeSubprocess)
+    envelope = mod.run_one_task_in_subprocess(
+        task_id="2a163ab_3",
+        dataset="train",
+        experiment_name="exp",
+        hermes_root=tmp_path,
+        appworld_root=tmp_path,
+        prompt_file=tmp_path / "p.txt",
+        model="m",
+        max_steps=1,
+        quiet_mode=True,
+        skip_context_files=True,
+        skip_memory=True,
+        save_trajectories=False,
+        evaluate_after_run=False,
+    )
+    assert envelope["schema"] == "appworld.hermes_run_error.v1"
+    assert envelope["worker_returncode"] == 139

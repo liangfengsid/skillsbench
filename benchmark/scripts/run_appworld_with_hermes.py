@@ -42,7 +42,9 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import traceback
 import warnings
@@ -724,6 +726,127 @@ def _accumulate_hermes_stats(total: Dict[str, Any], step_result: Dict[str, Any])
         )
 
 
+def _wait_background_review(agent: Any, timeout: float = 60.0) -> None:
+    """Join Hermes end-of-turn review before AppWorld SafetyGuard is enabled."""
+    if agent is None:
+        return
+    waiter = getattr(agent, "wait_for_background_review", None)
+    if not callable(waiter):
+        return
+    try:
+        waiter(timeout=timeout)
+    except Exception:
+        pass
+
+
+def _execute_world_code(world: Any, code: str) -> str:
+    """Run AppWorld ``execute()`` and turn Python failures into step output.
+
+    A cell that hits AppWorld's 100s ``SIGALRM`` timeout should not abort the
+    batch. ``TimeoutError`` is converted to a string observation. A SIGSEGV
+    inside IPython still kills the process — that is why ``--all`` isolates
+    each task in a subprocess by default.
+    """
+    try:
+        return world.execute(code)
+    except Exception as exc:
+        return f"Execution failed. Traceback:\n{type(exc).__name__}: {exc}"
+    finally:
+        _disable_appworld_safety_guard(world)
+
+
+def _jsonable_task_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, value in kwargs.items():
+        out[key] = str(value) if isinstance(value, Path) else value
+    return out
+
+
+def _task_kwargs_from_json(data: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(data)
+    for key in ("hermes_root", "appworld_root", "prompt_file", "config_hermes_home"):
+        if out.get(key):
+            out[key] = Path(out[key])
+    return out
+
+
+def _task_worker_crash_envelope(
+    *,
+    task_id: str,
+    dataset: str,
+    experiment_name: str,
+    returncode: Optional[int],
+) -> Dict[str, Any]:
+    hint = ""
+    if returncode == 139 or returncode == -11:
+        hint = (
+            " (SIGSEGV — often AppWorld's SIGALRM cell timeout interrupting "
+            "IPython/SQLite)"
+        )
+    return {
+        "schema": "appworld.hermes_run_error.v1",
+        "benchmark": "appworld",
+        "appworld_task_id": task_id,
+        "task_id": task_id,
+        "skillsbench_task_id": task_id,
+        "dataset": dataset,
+        "experiment_name": experiment_name,
+        "error": (
+            f"task worker exited with code {returncode}{hint}. "
+            "The batch continues; re-run with --resume to retry this task."
+        ),
+        "worker_returncode": returncode,
+        "run_error": f"worker_exit_{returncode}",
+        "task_completed": False,
+    }
+
+
+def run_one_task_in_subprocess(**kwargs: Any) -> Dict[str, Any]:
+    """Run one task in a child process so a crash cannot kill ``--all``."""
+    _restore_host_os_io()
+    work = Path(tempfile.mkdtemp(prefix="appworld-hermes-task-"))
+    request_path = work / "request.json"
+    result_path = work / "result.json"
+    request = {
+        "result_path": str(result_path),
+        "kwargs": _jsonable_task_kwargs(kwargs),
+    }
+    with _HOST_OPEN(request_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(request, ensure_ascii=False, default=str))
+    proc = subprocess.run(
+        [sys.executable, "-u", str(_SCRIPT), "--_worker-request", str(request_path)],
+        cwd=str(Path.cwd()),
+        env=os.environ.copy(),
+        check=False,
+    )
+    if result_path.is_file():
+        with _HOST_OPEN(result_path, encoding="utf-8") as fh:
+            try:
+                payload = json.loads(fh.read())
+            except json.JSONDecodeError:
+                payload = None
+        if isinstance(payload, dict):
+            return payload
+    return _task_worker_crash_envelope(
+        task_id=str(kwargs.get("task_id") or ""),
+        dataset=str(kwargs.get("dataset") or ""),
+        experiment_name=str(kwargs.get("experiment_name") or ""),
+        returncode=proc.returncode,
+    )
+
+
+def _worker_main(request_path: Path) -> int:
+    with _HOST_OPEN(request_path, encoding="utf-8") as fh:
+        request = json.loads(fh.read())
+    kwargs = _task_kwargs_from_json(request["kwargs"])
+    envelope = run_one_task(**kwargs)
+    result_path = Path(request["result_path"])
+    _ensure_host_dir(result_path.parent)
+    with _HOST_OPEN(result_path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(json_safe(envelope), ensure_ascii=False, default=str))
+    return 0
+
+
 def run_one_task(
     *,
     task_id: str,
@@ -859,10 +982,10 @@ def run_one_task(
                     steps.append(step_record)
                     break
 
-                try:
-                    execution_output = world.execute(code)
-                finally:
-                    _disable_appworld_safety_guard(world)
+                # Review threads use Path.mkdir; AppWorld's SafetyGuard is
+                # enabled for the duration of execute() and will kill them.
+                _wait_background_review(agent)
+                execution_output = _execute_world_code(world, code)
                 step_record["execution_output_preview"] = (execution_output or "")[:2000]
                 steps.append(step_record)
 
@@ -891,6 +1014,7 @@ def run_one_task(
     finally:
         _disable_appworld_safety_guard(world_guard_host)
         _restore_stdio_for_appworld()
+        _wait_background_review(agent)
     duration_sec = round(time.perf_counter() - t0, 6)
 
     evaluation: Optional[Dict[str, Any]] = None
@@ -1119,6 +1243,29 @@ def main() -> int:
         action="store_true",
         help="With --all, exit on the first task exception.",
     )
+    isolate = parser.add_mutually_exclusive_group()
+    isolate.add_argument(
+        "--isolate-tasks",
+        dest="isolate_tasks",
+        action="store_true",
+        default=None,
+        help=(
+            "Run each task in a subprocess (default with --all). A crash or "
+            "AppWorld SIGALRM/segfault then fails only that task."
+        ),
+    )
+    isolate.add_argument(
+        "--no-isolate-tasks",
+        dest="isolate_tasks",
+        action="store_false",
+        help="Run tasks in-process (a segfault still kills the whole batch).",
+    )
+    parser.add_argument(
+        "--_worker-request",
+        dest="worker_request",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--start-task-index",
         type=int,
@@ -1189,6 +1336,9 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    if args.worker_request:
+        return _worker_main(Path(args.worker_request))
+
     hermes_root = _expand(args.hermes_root)
     appworld_root = _expand(args.appworld_root)
     prompt_file = _expand(args.prompt_file)
@@ -1278,6 +1428,15 @@ def main() -> int:
         # Resolve once with host-safe expanduser so per-task re-apply never
         # needs pathlib.Path.expanduser after a leaked SafetyGuard.
         hot_pool_persist = str(host_expand_path(hot_pool_persist))
+
+    isolate_tasks = args.isolate_tasks
+    if isolate_tasks is None:
+        isolate_tasks = bool(args.all) and not bool(args.evaluate_only)
+    if isolate_tasks and args.print_summary:
+        print(
+            "[appworld] each task runs in a subprocess so a crash cannot stop --all",
+            flush=True,
+        )
 
     if log_path is not None:
         _ensure_host_dir(log_path.parent)
@@ -1402,31 +1561,45 @@ def main() -> int:
                 eval_batch["pass_count"] += int(evaluation.get("pass_count") or 0)
                 eval_batch["num_tests"] += int(evaluation.get("num_tests") or 0)
             else:
-                envelope = run_one_task(
-                    task_id=tid,
-                    dataset=args.dataset,
-                    hermes_root=hermes_root,
-                    appworld_root=appworld_root,
-                    experiment_name=args.experiment_name,
-                    prompt_file=prompt_file,
-                    model=args.model,
-                    max_steps=args.max_steps,
-                    max_hermes_iterations=args.max_hermes_iterations,
-                    quiet_mode=not args.no_quiet,
-                    skip_context_files=args.skip_context_files,
-                    skip_memory=args.skip_memory,
-                    save_trajectories=args.save_trajectories,
-                    evaluate_after_run=not args.no_evaluate,
-                    no_tools=args.no_tools,
-                    hot_pool=hot_pool,
-                    hot_pool_persist=hot_pool_persist,
-                    runtime=shared_runtime,
-                    config_hermes_home=config_hermes_home,
-                )
+                task_kwargs = {
+                    "task_id": tid,
+                    "dataset": args.dataset,
+                    "hermes_root": hermes_root,
+                    "appworld_root": appworld_root,
+                    "experiment_name": args.experiment_name,
+                    "prompt_file": prompt_file,
+                    "model": args.model,
+                    "max_steps": args.max_steps,
+                    "max_hermes_iterations": args.max_hermes_iterations,
+                    "quiet_mode": not args.no_quiet,
+                    "skip_context_files": args.skip_context_files,
+                    "skip_memory": args.skip_memory,
+                    "save_trajectories": args.save_trajectories,
+                    "evaluate_after_run": not args.no_evaluate,
+                    "no_tools": args.no_tools,
+                    "hot_pool": hot_pool,
+                    "hot_pool_persist": hot_pool_persist,
+                    "runtime": shared_runtime,
+                    "config_hermes_home": config_hermes_home,
+                }
+                if isolate_tasks:
+                    envelope = run_one_task_in_subprocess(**task_kwargs)
+                else:
+                    envelope = run_one_task(**task_kwargs)
                 envelope["ts_start_iso"] = ts_start
                 envelope["ts_end_iso"] = datetime.now(timezone.utc).isoformat()
                 if experiment_dir is not None:
                     envelope["experiment_dir"] = str(experiment_dir)
+                if envelope.get("schema") == "appworld.hermes_run_error.v1":
+                    any_failed = True
+                    if args.stop_on_error:
+                        if log_path:
+                            append_jsonl(log_path, json_safe(envelope))
+                        print(
+                            f"ERROR task={tid}: {envelope.get('error')}",
+                            file=sys.stderr,
+                        )
+                        return 1
 
             serializable = json_safe(envelope)
             if log_path:
