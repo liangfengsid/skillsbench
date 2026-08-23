@@ -1,4 +1,4 @@
-"""Hot skill pool — admission-capped key points, injected in full.
+"""Hot skill pool — admission-capped key points, injected as a utility-aware subset.
 
 Extracts guardrails from SKILL.md in this order:
 
@@ -7,11 +7,17 @@ Extracts guardrails from SKILL.md in this order:
 2. Optional ``<!-- hermes-hot -->`` markers (rare hand override)
 3. Heuristic NEVER/ALWAYS-style bullets elsewhere
 
-The pool cap **is** the inject budget (``max_entries`` points). Eviction runs
-only when a new extract would overflow — not every turn. Model "use" of a
-point is not observable; policies are ``llm`` (default: admission-time
-side-channel judge on the running agent's client) or ``oldest`` (FIFO
-fallback / explicit opt-in). Full procedures stay behind ``skill_view``.
+Extract rewrites structural identifiers (paths, emails, UUIDs, hex IDs).
+Transferability is a side-channel LLM judgment (evict / outcome), not a
+semantic regex filter.
+
+The pool cap is the store budget (``max_entries`` points). Eviction runs
+only when a new extract would overflow — not every turn. Inject dumps
+retained tips minus strongly harmful ones when outcome utilities exist.
+Irrelevant scores only rank; they do not omit. Model "use" of a point
+is not observable; eviction policies are ``llm`` (default: admission-time
+side-channel judge) or ``oldest`` (FIFO fallback / explicit opt-in).
+Full procedures stay behind ``skill_view``.
 """
 
 from __future__ import annotations
@@ -101,6 +107,24 @@ _GUARDRAIL_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Structural identifier shapes only — not English semantics.
+_PATH_RE = re.compile(
+    r"(?:"
+    r"~(?:/[\w.+\-]+)+/?"
+    r"|/(?:tmp|home|var|opt|usr|etc|Users)(?:/[\w.+\-]*)*/?"
+    r"|[A-Za-z]:\\[\w.\\+\-]+"
+    r")"
+)
+_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+_HEX_ID_RE = re.compile(r"\b[0-9a-f]{16,}\b", re.IGNORECASE)
+_PLACEHOLDER_ONLY_RE = re.compile(
+    r"(?i)^[\s,.;:]*((?:<(?:path|id|email)>|and|or|the|a|an|to|on|in|at|of)[\s,.;:]*)+$"
+)
+
 _DEFAULT_HOT_POOL = {
     "enabled": True,
     # Retain = inject: this many key points are stored and dumped into
@@ -128,9 +152,19 @@ _DEFAULT_HOT_POOL = {
     "fallback_extract": True,
     "persist_across_conversations": False,
     "persist_path": "",
-    # After a labeled task/episode, LLM-attribute exposed tips and update
-    # multi-dimensional utilities (default on). Used at admit/evict, not inject.
+    # After a labeled task/episode, attribute exposed tips and update
+    # multi-dimensional utilities (default on). Used at admit/evict and inject.
     "outcome_feedback": True,
+    # If the side-channel LLM returns nothing, label from outcome only
+    # (success + low steps). Tip wording is not a signal.
+    "outcome_feedback_heuristic": True,
+    # Success with env/API steps at or below this counts as "low-step" helpful.
+    "outcome_helpful_max_iterations": 12,
+    # Rewrite structural identifiers (paths, emails, UUIDs, hex IDs).
+    "abstract_extract": True,
+    # Omit strongly harmful tips at inject (store still retains them).
+    # Irrelevant is ranked, not omitted — lock-in would hide transferable tips.
+    "inject_filter_utilities": True,
 }
 
 _VALID_EVICTION_POLICIES = frozenset({"oldest", "llm"})
@@ -165,6 +199,12 @@ def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     cfg["skip_if_in_history"] = bool(cfg.get("skip_if_in_history", True))
     cfg["hydrate_from_history"] = bool(cfg.get("hydrate_from_history", True))
     cfg["outcome_feedback"] = bool(cfg.get("outcome_feedback", True))
+    cfg["outcome_feedback_heuristic"] = bool(cfg.get("outcome_feedback_heuristic", True))
+    cfg["outcome_helpful_max_iterations"] = max(
+        1, int(cfg.get("outcome_helpful_max_iterations", 12) or 12)
+    )
+    cfg["abstract_extract"] = bool(cfg.get("abstract_extract", True))
+    cfg["inject_filter_utilities"] = bool(cfg.get("inject_filter_utilities", True))
     return cfg
 
 
@@ -231,6 +271,8 @@ def extract_hot_key_points(content: str, config: Optional[dict] = None) -> List[
     if cfg.get("fallback_extract", True):
         points.extend(_extract_heuristic_points(text))
 
+    if cfg.get("abstract_extract", True):
+        points = abstract_hot_key_points(points, cfg)
     return _normalize_key_points(points, cfg)
 
 
@@ -252,7 +294,7 @@ class HotSkillEntry:
     description: str = ""
     tags: List[str] = field(default_factory=list)
     # Short natural-language applicability hint (shown in inject / eviction).
-    # Not used to filter at inject — retain = inject; soft guidance only.
+    # Soft guidance; inject also ranks/filters by point_utilities when enabled.
     scope: str = ""
     # Parallel to key_points: multi-dimensional utility stats per tip.
     point_utilities: List[Dict[str, Any]] = field(default_factory=list)
@@ -304,6 +346,95 @@ def _utility_strongly_harmful(util: dict, *, min_n: int = 3) -> bool:
     harmful = int(util.get("harmful") or 0)
     helpful = int(util.get("helpful") or 0)
     return harmful >= 2 and harmful >= helpful + 2
+
+
+def _utility_inject_score(util: dict) -> float:
+    """Higher is better. Unlabeled tips stay neutral so they still inject."""
+    n = int(util.get("n_labeled") or 0)
+    if n <= 0:
+        return 0.0
+    helpful = int(util.get("helpful") or 0)
+    harmful = int(util.get("harmful") or 0)
+    irrelevant = int(util.get("irrelevant") or 0)
+    return helpful - 1.5 * harmful - 0.75 * irrelevant
+
+
+def _redact_structural_ids(text: str) -> str:
+    out = _PATH_RE.sub("<path>", text)
+    out = _EMAIL_RE.sub("<email>", out)
+    out = _UUID_RE.sub("<id>", out)
+    out = _HEX_ID_RE.sub("<id>", out)
+    return out
+
+
+def _cleanup_abstracted(text: str) -> str:
+    out = re.sub(r"\s+", " ", text or "").strip()
+    out = re.sub(r"(?:\s*[,;:]){2,}", ",", out)
+    out = re.sub(r"^[\s,;:.]+|[\s,;:]+$", "", out)
+    out = re.sub(r"\s+([.,;:])", r"\1", out)
+    return out.strip()
+
+
+def abstract_hot_key_point(raw: str) -> Optional[str]:
+    """Redact structural identifiers. Does not judge English meaning."""
+    original = re.sub(r"\s+", " ", (raw or "").strip())
+    if not original:
+        return None
+    text = _cleanup_abstracted(_redact_structural_ids(original))
+    if not text or _PLACEHOLDER_ONLY_RE.match(text):
+        return None
+    return text
+
+
+def abstract_hot_key_points(points: List[str], config: Optional[dict] = None) -> List[str]:
+    """Redact structural identifiers and drop empty leftovers."""
+    del config  # reserved; redaction is deterministic
+    out: List[str] = []
+    seen: Set[str] = set()
+    for raw in points or []:
+        pt = abstract_hot_key_point(raw)
+        if not pt:
+            continue
+        key = pt.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(pt)
+    return out
+
+
+def heuristic_outcome_attributions(
+    items: List[Dict[str, Any]],
+    outcome: dict,
+    *,
+    low_step_threshold: int = 12,
+) -> Dict[str, str]:
+    """Label exposed tips when the attribution LLM is missing or empty.
+
+    Outcome-only: success + low steps → helpful; otherwise irrelevant.
+    Tip wording is not a signal — meaning stays with the side-channel judge.
+    Never invents ``harmful``.
+    """
+    success = bool(outcome.get("success"))
+    iterations = None
+    if outcome.get("iterations") is not None:
+        try:
+            iterations = float(outcome["iterations"])
+        except (TypeError, ValueError):
+            iterations = None
+    low_steps = (
+        success and iterations is not None and iterations <= float(low_step_threshold)
+    )
+    labels: Dict[str, str] = {}
+    for item in items:
+        iid = str(item.get("id") if isinstance(item, dict) else "")
+        if not iid:
+            continue
+        if success and low_steps:
+            labels[iid] = "helpful"
+        else:
+            labels[iid] = "irrelevant"
+    return labels
 
 
 def align_point_utilities(
@@ -489,6 +620,7 @@ class HotPoolTelemetry:
     # matched a recent skill_view (or similar) — not "hot off".
     skills_excluded_in_history: List[str] = field(default_factory=list)
     points_excluded_in_history: int = 0
+    points_omitted_utility: int = 0
     injections_attempted: int = 0
     injections_nonempty: int = 0
     first_nonempty_inject_iter: Optional[int] = None
@@ -501,6 +633,8 @@ class HotPoolTelemetry:
     outcome_feedback_applied: bool = False
     outcome_feedback_points: int = 0
     outcome_attributions: Dict[str, int] = field(default_factory=dict)
+    outcome_feedback_skipped_reason: str = ""
+    outcome_feedback_attribution_source: str = ""
     _skill_view_seen: Set[str] = field(default_factory=set, repr=False)
 
     @property
@@ -531,6 +665,7 @@ class HotPoolTelemetry:
                 "excluded_skills": list(self.excluded_skills),
                 "skills_excluded_in_history": list(self.skills_excluded_in_history),
                 "points_excluded_in_history": self.points_excluded_in_history,
+                "points_omitted_utility": self.points_omitted_utility,
                 "injections_attempted": self.injections_attempted,
                 "injections_nonempty": self.injections_nonempty,
                 "first_nonempty_inject_iter": self.first_nonempty_inject_iter,
@@ -552,6 +687,8 @@ class HotPoolTelemetry:
                 "applied": self.outcome_feedback_applied,
                 "points_scored": self.outcome_feedback_points,
                 "attributions": dict(self.outcome_attributions),
+                "skipped_reason": self.outcome_feedback_skipped_reason,
+                "attribution_source": self.outcome_feedback_attribution_source,
             },
         }
 
@@ -725,9 +862,10 @@ def check_guardrail_violations(messages: List[dict]) -> dict:
 class HotSkillPool:
     """Admission-capped pool of skill key points (session or persisted).
 
-    ``max_entries`` is both retain and inject size. Eviction happens when a
-    new extract overflows that cap. Inject dumps the whole pool (optional
-    skip of skills already in recent ``skill_view`` history).
+    ``max_entries`` is the store cap. Eviction happens when a new extract
+    overflows that cap. Inject dumps retained tips, optionally omitting
+    strongly harmful ones (``inject_filter_utilities``) and skipping
+    skills already in recent ``skill_view`` history.
     """
 
     def __init__(
@@ -866,6 +1004,13 @@ class HotSkillPool:
             "persist_across_conversations": self._persist_enabled(),
             "skip_if_in_history": bool(self._config.get("skip_if_in_history", True)),
             "outcome_feedback": bool(self._config.get("outcome_feedback", True)),
+            "outcome_feedback_heuristic": bool(
+                self._config.get("outcome_feedback_heuristic", True)
+            ),
+            "abstract_extract": bool(self._config.get("abstract_extract", True)),
+            "inject_filter_utilities": bool(
+                self._config.get("inject_filter_utilities", True)
+            ),
         }
         return out
 
@@ -901,6 +1046,8 @@ class HotSkillPool:
             return
 
         points = list(key_points) if key_points is not None else extract_hot_key_points(content, self._config)
+        if key_points is not None and self._config.get("abstract_extract", True):
+            points = abstract_hot_key_points(points, self._config)
         if not points:
             logger.debug("hot skill pool: no key points extracted for %r — skipping", key)
             self._telemetry.records_skipped_no_points += 1
@@ -1140,7 +1287,7 @@ class HotSkillPool:
         turn: int = 0,
         exclude_names: Optional[Set[str]] = None,
     ) -> str:
-        """Serialize the full retained pool. No per-turn subset ranking."""
+        """Serialize retained tips, omitting strongly harmful ones."""
         if user_message:
             self._admission_context = user_message
         if not self.enabled or not self._config.get("inject_on_turn", True):
@@ -1161,6 +1308,7 @@ class HotSkillPool:
         self._telemetry.points_excluded_in_history = sum(
             len(e.key_points) for e in skipped
         )
+        self._telemetry.points_omitted_utility = 0
         # Track exposure for outcome feedback (injected + history-skipped).
         for entry in skipped:
             for text in entry.key_points:
@@ -1184,10 +1332,11 @@ class HotSkillPool:
             self._telemetry.chars = 0
             return ""
 
-        # Full retain = inject dump. Budget is max_entries (points), not chars —
-        # providers bill tokens; a second char truncate would silently drop tips
-        # the overflow judge already chose to keep.
-        inner = self._format_entries(candidates)
+        views = self._inject_point_views(candidates)
+        # Budget is max_entries (store points), not chars — providers bill
+        # tokens; a second char truncate would silently drop tips the overflow
+        # judge already chose to keep.
+        inner = self._format_entry_views(views)
         if not inner:
             return ""
         skills, points = parse_hot_pool_inner_meta(inner)
@@ -1197,8 +1346,8 @@ class HotSkillPool:
         self._telemetry.points_injected = points
         self._telemetry.point_count = len(points)
         self._telemetry.chars = len(block)
-        for entry in candidates:
-            for text in entry.key_points:
+        for entry, selected in views:
+            for text in selected:
                 key = (entry.name, text)
                 self._exposed_tips[key] = {
                     "skill": entry.name,
@@ -1208,11 +1357,72 @@ class HotSkillPool:
                 }
         return block
 
+    def _aligned_utils(self, entry: HotSkillEntry) -> List[Dict[str, Any]]:
+        utils = list(entry.point_utilities or [])
+        while len(utils) < len(entry.key_points):
+            utils.append(empty_point_utility())
+        return utils
+
+    def _filter_inject_points(self, entry: HotSkillEntry) -> Tuple[List[str], int]:
+        utils = self._aligned_utils(entry)
+        scored: List[Tuple[str, float]] = []
+        omitted = 0
+        for text, util in zip(entry.key_points, utils):
+            if _utility_strongly_harmful(util):
+                omitted += 1
+                continue
+            scored.append((text, _utility_inject_score(util)))
+        scored.sort(key=lambda item: -item[1])
+        return [text for text, _ in scored], omitted
+
+    def _inject_point_views(
+        self, entries: List[HotSkillEntry]
+    ) -> List[Tuple[HotSkillEntry, List[str]]]:
+        if not self._config.get("inject_filter_utilities", True):
+            return [(entry, list(entry.key_points)) for entry in entries if entry.key_points]
+
+        views: List[Tuple[HotSkillEntry, List[str]]] = []
+        omitted = 0
+        for entry in entries:
+            selected, n_omit = self._filter_inject_points(entry)
+            omitted += n_omit
+            if selected:
+                views.append((entry, selected))
+
+        if not views:
+            # All filtered — prefer unlabeled, else dump the store so the
+            # inject block is not empty.
+            unlabeled: List[Tuple[HotSkillEntry, List[str]]] = []
+            for entry in entries:
+                utils = self._aligned_utils(entry)
+                kept = [
+                    text
+                    for text, util in zip(entry.key_points, utils)
+                    if int(util.get("n_labeled") or 0) <= 0
+                ]
+                if kept:
+                    unlabeled.append((entry, kept))
+            views = unlabeled or [
+                (entry, list(entry.key_points))
+                for entry in entries
+                if entry.key_points
+            ]
+
+        self._telemetry.points_omitted_utility = omitted
+        return views
+
     def _format_entries(self, entries: List[HotSkillEntry]) -> str:
+        return self._format_entry_views(
+            [(entry, list(entry.key_points)) for entry in entries if entry.key_points]
+        )
+
+    def _format_entry_views(
+        self, views: List[Tuple[HotSkillEntry, List[str]]]
+    ) -> str:
         parts = [
-            format_hot_skill_section(entry.name, entry.scope, entry.key_points)
-            for entry in entries
-            if entry.key_points
+            format_hot_skill_section(entry.name, entry.scope, points)
+            for entry, points in views
+            if points
         ]
         if not parts:
             return ""
@@ -1335,29 +1545,29 @@ class HotSkillPool:
         *,
         complete_fn: Optional[Callable[[List[Dict[str, str]]], str]] = None,
     ) -> Dict[str, Any]:
-        """LLM-attribute exposed tips after a labeled task; update utilities.
+        """Attribute exposed tips after a labeled task; persist utilities.
 
-        Uses multi-dimensional outcome fields (success, reward, iterations, …).
-        Does not change inject behavior (retain = inject).
+        Prefers a side-channel LLM (transfer vs episode-local is a prompt
+        judgment). When that is missing or unparseable, a conservative
+        heuristic labels low-step successes as helpful and everything else
+        as irrelevant so scores actually land on the store and can rank inject.
         """
         summary = {
             "applied": False,
             "points_scored": 0,
             "attributions": {},
             "skipped_reason": "",
+            "attribution_source": "",
         }
         if not self.enabled or not self._config.get("outcome_feedback", True):
             summary["skipped_reason"] = "disabled"
-            return summary
+            return self._record_outcome_summary(summary)
         if not isinstance(outcome, dict) or not outcome:
             summary["skipped_reason"] = "missing_outcome"
-            return summary
+            return self._record_outcome_summary(summary)
         if not self._exposed_tips:
             summary["skipped_reason"] = "no_exposed_tips"
-            return summary
-        if not callable(complete_fn):
-            summary["skipped_reason"] = "no_complete_fn"
-            return summary
+            return self._record_outcome_summary(summary)
 
         items = []
         for i, ((_sk, _pt), tip) in enumerate(self._exposed_tips.items()):
@@ -1370,19 +1580,39 @@ class HotSkillPool:
                     "via": tip.get("via") or "",
                 }
             )
-        try:
-            text = complete_fn(
-                build_outcome_attribution_messages(items, outcome)
-            ) or ""
-        except Exception:
-            logger.debug("hot pool outcome attribution complete_fn failed", exc_info=True)
-            summary["skipped_reason"] = "complete_fn_failed"
-            return summary
 
-        labels = parse_outcome_attributions(text, items)
+        labels: Dict[str, str] = {}
+        if callable(complete_fn):
+            try:
+                text = complete_fn(
+                    build_outcome_attribution_messages(items, outcome)
+                ) or ""
+            except Exception:
+                logger.debug("hot pool outcome attribution complete_fn failed", exc_info=True)
+                summary["skipped_reason"] = "complete_fn_failed"
+            else:
+                labels = parse_outcome_attributions(text, items)
+                if not labels:
+                    summary["skipped_reason"] = "unparseable_or_empty"
+        else:
+            summary["skipped_reason"] = "no_complete_fn"
+
+        if not labels and self._config.get("outcome_feedback_heuristic", True):
+            labels = heuristic_outcome_attributions(
+                items,
+                outcome,
+                low_step_threshold=int(
+                    self._config.get("outcome_helpful_max_iterations", 12) or 12
+                ),
+            )
+            if labels:
+                summary["attribution_source"] = "heuristic"
+        elif labels:
+            summary["skipped_reason"] = ""
+            summary["attribution_source"] = "llm"
+
         if not labels:
-            summary["skipped_reason"] = "unparseable_or_empty"
-            return summary
+            return self._record_outcome_summary(summary)
 
         success = bool(outcome.get("success"))
         try:
@@ -1426,9 +1656,6 @@ class HotSkillPool:
             attr_counts[label] = attr_counts.get(label, 0) + 1
             scored += 1
 
-        self._telemetry.outcome_feedback_applied = scored > 0
-        self._telemetry.outcome_feedback_points = scored
-        self._telemetry.outcome_attributions = dict(attr_counts)
         if scored:
             self._maybe_persist()
         summary.update(
@@ -1437,6 +1664,20 @@ class HotSkillPool:
                 "points_scored": scored,
                 "attributions": attr_counts,
             }
+        )
+        if scored and not summary.get("attribution_source"):
+            summary["attribution_source"] = "llm"
+        return self._record_outcome_summary(summary)
+
+    def _record_outcome_summary(self, summary: Dict[str, Any]) -> Dict[str, Any]:
+        self._telemetry.outcome_feedback_applied = bool(summary.get("applied"))
+        self._telemetry.outcome_feedback_points = int(summary.get("points_scored") or 0)
+        self._telemetry.outcome_attributions = dict(summary.get("attributions") or {})
+        self._telemetry.outcome_feedback_skipped_reason = str(
+            summary.get("skipped_reason") or ""
+        )
+        self._telemetry.outcome_feedback_attribution_source = str(
+            summary.get("attribution_source") or ""
         )
         return summary
 
@@ -1759,6 +2000,11 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "phone numbers, one-off filenames, task IDs, or a single product/CLI/"
         "app workflow (unless the same sentence also states a general rule "
         "that survives removing those tokens)\n"
+        "- Recap one episode's entities or layout (which object was where, "
+        "which inbox/account/file the last task used, numbered instance slots, "
+        "exact names that will not recur). Identifier placeholders such as "
+        "<path> or <id> do not make a recap transferable — if the remaining "
+        "claim is still a memory of one episode, drop it\n"
         "- Teach oracle/leakage or harness-cheating shortcuts (reading hidden "
         "solvers/oracles, claiming pass without producing graded outputs, "
         "rewriting verifier paths to temporary locations as a default)\n"
@@ -1803,9 +2049,17 @@ def build_outcome_attribution_messages(
         "\n"
         "Return JSON only: {\"labels\": {\"<id>\": \"helpful\"|\"harmful\"|"
         "\"irrelevant\", ...}} for the given point ids. Do not invent ids.\n"
-        "- helpful: tip plausibly improved outcome or efficiency\n"
-        "- harmful: tip plausibly caused waste, wrong paths, or failure modes\n"
-        "- irrelevant: tip did not meaningfully affect this episode\n"
+        "- helpful: tip is a transferable process or constraint that plausibly "
+        "improved this episode and would still apply to a new task instance\n"
+        "- harmful: tip plausibly caused waste, wrong paths, or failure modes, "
+        "or would mislead on a different instance (wrong object, path, account)\n"
+        "- irrelevant: tip did not meaningfully affect this episode, OR it is "
+        "an episode-local recap (specific objects/locations/accounts/filenames) "
+        "even if the episode succeeded — those do not transfer\n"
+        "\n"
+        "Judge the abstract claim, not wording. NEVER/ALWAYS/MUST is not "
+        "evidence of helpfulness. Prefer irrelevant over helpful when a tip "
+        "only restates one episode's entities.\n"
     )
     payload = {
         "outcome": outcome,

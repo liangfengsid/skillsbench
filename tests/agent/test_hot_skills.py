@@ -6,6 +6,8 @@ import pytest
 
 from agent.hot_skills import (
     HotSkillPool,
+    abstract_hot_key_point,
+    abstract_hot_key_points,
     build_hot_pool_outcome,
     build_hot_skills_block,
     build_llm_eviction_messages,
@@ -15,6 +17,7 @@ from agent.hot_skills import (
     empty_point_utility,
     extract_hot_key_points,
     format_hot_skill_section,
+    heuristic_outcome_attributions,
     llm_eviction_keep_ids,
     load_hot_skills_config,
     normalize_hot_scope_value,
@@ -480,7 +483,7 @@ def test_skill_manage_delete_evicts(pool_cfg):
     pool = HotSkillPool(pool_cfg)
     pool.record(
         name="editable",
-        content="<!-- hermes-hot -->\n- v1\n<!-- /hermes-hot -->",
+        content="<!-- hermes-hot -->\n- ALWAYS keep the skill body editable\n<!-- /hermes-hot -->",
         turn=1,
     )
     pool.record_from_skill_manage(
@@ -770,6 +773,7 @@ def test_build_llm_eviction_messages_broadcast_not_task_local():
     assert "cheatsheet" in system.lower() or "replay" in system.lower()
     assert "Do NOT treat" in system and "primary keep criterion" in system
     assert "absolute paths" in system.lower() or "instance-specific" in system.lower()
+    assert "recap" in system.lower() or "episode" in system.lower()
     payload = json.loads(msgs[1]["content"])
     assert payload["keep_n"] == 1
     assert payload["context"] == "schedule gmail meetings"
@@ -867,6 +871,9 @@ def test_persist_roundtrip_keeps_recorded_turn(tmp_path):
 def test_outcome_feedback_default_on():
     cfg = load_hot_skills_config({"hot_pool": {}})
     assert cfg.get("outcome_feedback") is True
+    assert cfg.get("outcome_feedback_heuristic") is True
+    assert cfg.get("abstract_extract") is True
+    assert cfg.get("inject_filter_utilities") is True
 
 
 def test_build_hot_pool_outcome_prefers_env_steps():
@@ -930,6 +937,8 @@ def test_apply_outcome_feedback_updates_multidim_utility(pool_cfg):
     assert items[0]["utility"]["n_labeled"] == 1
     tel = pool.export_telemetry()
     assert tel["outcome_feedback"]["applied"] is True
+    assert tel["outcome_feedback"]["skipped_reason"] == ""
+    assert tel["outcome_feedback"]["attribution_source"] == "llm"
     assert tel["config"]["outcome_feedback"] is True
 
 
@@ -945,6 +954,9 @@ def test_outcome_feedback_disabled_skips(pool_cfg):
     )
     assert summary["applied"] is False
     assert summary["skipped_reason"] == "disabled"
+    tel = pool.export_telemetry()
+    assert tel["outcome_feedback"]["skipped_reason"] == "disabled"
+    assert tel["outcome_feedback"]["applied"] is False
 
 
 def test_strongly_harmful_tip_filtered_on_re_admit(pool_cfg):
@@ -972,5 +984,193 @@ def test_outcome_attribution_messages_include_outcome():
     )
     assert msgs[0]["role"] == "system"
     assert "multi-dimensional" in msgs[0]["content"]
+    system = msgs[0]["content"].lower()
+    assert "transfer" in system
+    assert "recap" in system or "episode-local" in system
     body = json.loads(msgs[1]["content"])
     assert body["outcome"]["iterations"] == 5
+
+
+def test_abstract_extract_redacts_structural_ids_only():
+    content = """## Key Points
+- The alarmclock was on desk 1, the desklamp on dresser 1
+- NEVER toggle a lamp before the target object is in hand
+- ALWAYS write frames under /tmp/out/
+- Email admin@example.com citing 550e8400-e29b-41d4-a716-446655440000
+"""
+    points = extract_hot_key_points(content)
+    # English recaps are not regex-dropped; numbered slots stay as text.
+    assert any("alarmclock" in p.lower() and "desk 1" in p for p in points)
+    assert any("NEVER" in p and "lamp" in p.lower() for p in points)
+    assert any("ALWAYS" in p and "<path>" in p for p in points)
+    assert not any("/tmp/" in p for p in points)
+    assert any("<email>" in p and "<id>" in p for p in points)
+    assert not any("admin@example.com" in p for p in points)
+
+
+def test_abstract_extract_can_disable():
+    content = "## Key Points\n- ALWAYS write frames under /tmp/out/"
+    points = extract_hot_key_points(
+        content,
+        config={
+            "use_hermes_hot_markers": False,
+            "extract_sections": True,
+            "fallback_extract": False,
+            "abstract_extract": False,
+            "max_points_per_skill": 8,
+            "max_chars_per_point": 240,
+        },
+    )
+    assert any("/tmp/out/" in p for p in points)
+
+
+def test_abstract_hot_key_point_keeps_english_and_redacts_paths():
+    assert abstract_hot_key_point("poison tip") == "poison tip"
+    assert (
+        abstract_hot_key_point("The mug was on countertop 1")
+        == "The mug was on countertop 1"
+    )
+    rewritten = abstract_hot_key_point(
+        "ALWAYS use get_hermes_home() instead of ~/.hermes"
+    )
+    assert rewritten is not None
+    assert "get_hermes_home" in rewritten
+    assert "~/.hermes" not in rewritten
+
+
+def test_abstract_hot_key_points_dedupes_after_path_redaction():
+    points = abstract_hot_key_points(
+        [
+            "ALWAYS write frames under /tmp/out/",
+            "ALWAYS write frames under /home/user/out/",
+            "ALWAYS write frames under /tmp/out/",
+        ]
+    )
+    assert points == ["ALWAYS write frames under <path>"]
+
+
+def test_outcome_feedback_skipped_reason_without_heuristic(pool_cfg):
+    cfg = dict(pool_cfg)
+    cfg["outcome_feedback_heuristic"] = False
+    pool = HotSkillPool(cfg)
+    pool.record(name="nav", content="", key_points=["go to fridge first"], turn=1)
+    pool.build_block(user_message="find apple", turn=1)
+    summary = pool.apply_outcome_feedback(
+        {"success": True, "reward": 1.0, "iterations": 8},
+        complete_fn=None,
+    )
+    assert summary["applied"] is False
+    assert summary["skipped_reason"] == "no_complete_fn"
+    tel = pool.export_telemetry()
+    assert tel["outcome_feedback"]["skipped_reason"] == "no_complete_fn"
+    assert tel["outcome_feedback"]["applied"] is False
+    assert pool._entries["nav"].point_utilities[0]["n_labeled"] == 0
+
+
+def test_outcome_feedback_heuristic_persists_when_llm_empty(pool_cfg, tmp_path):
+    cfg = dict(pool_cfg)
+    cfg["persist_across_conversations"] = True
+    cfg["persist_path"] = str(tmp_path / "hot_pool.json")
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="nav",
+        content="",
+        key_points=["NEVER open a locked door", "check nearby furniture first"],
+        turn=1,
+    )
+    pool.build_block(user_message="find apple", turn=1)
+    summary = pool.apply_outcome_feedback(
+        {"success": True, "reward": 1.0, "iterations": 8},
+        complete_fn=lambda _m: "",
+    )
+    assert summary["applied"] is True
+    assert summary["attribution_source"] == "heuristic"
+    assert summary["skipped_reason"] == "unparseable_or_empty"
+    assert summary["attributions"]["helpful"] == 2
+    entry = pool._entries["nav"]
+    assert entry.point_utilities[0]["n_labeled"] == 1
+    assert entry.point_utilities[0]["helpful"] == 1
+    tel = pool.export_telemetry()
+    assert tel["outcome_feedback"]["attribution_source"] == "heuristic"
+    assert tel["outcome_feedback"]["skipped_reason"] == "unparseable_or_empty"
+
+    reloaded = HotSkillPool(cfg)
+    util = reloaded._entries["nav"].point_utilities[0]
+    assert util["n_labeled"] == 1
+    assert util["helpful"] == 1
+
+
+def test_outcome_feedback_heuristic_failure_is_irrelevant(pool_cfg):
+    items = [
+        {"id": "0", "skill": "a", "point": "NEVER skip examine"},
+        {"id": "1", "skill": "a", "point": "random leftover note"},
+    ]
+    labels = heuristic_outcome_attributions(
+        items, {"success": False, "iterations": 40}, low_step_threshold=12
+    )
+    assert labels == {"0": "irrelevant", "1": "irrelevant"}
+
+
+def test_outcome_feedback_heuristic_ignores_wording():
+    items = [{"id": "0", "skill": "a", "point": "NEVER skip examine"}]
+    labels = heuristic_outcome_attributions(
+        items, {"success": True, "iterations": 40}, low_step_threshold=12
+    )
+    assert labels == {"0": "irrelevant"}
+
+
+def test_inject_keeps_strongly_irrelevant_and_sorts(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(
+        name="nav",
+        content="",
+        key_points=["ALWAYS examine before toggle", "noisy leftover recap text"],
+        turn=1,
+    )
+    entry = pool._entries["nav"]
+    good = empty_point_utility()
+    good.update({"n_labeled": 2, "helpful": 2, "harmful": 0, "irrelevant": 0})
+    noisy = empty_point_utility()
+    noisy.update({"n_labeled": 3, "helpful": 0, "harmful": 0, "irrelevant": 3})
+    entry.point_utilities = [good, noisy]
+    block = pool.build_block(user_message="find apple", turn=2)
+    assert "ALWAYS examine before toggle" in block
+    assert "noisy leftover recap text" in block
+    assert block.index("ALWAYS examine before toggle") < block.index(
+        "noisy leftover recap text"
+    )
+    tel = pool.export_telemetry()
+    assert tel["inject"]["points_omitted_utility"] == 0
+    assert tel["inject"]["point_count"] == 2
+
+
+def test_inject_falls_back_when_all_filtered(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(name="nav", content="", key_points=["poison leftover tip text"], turn=1)
+    entry = pool._entries["nav"]
+    util = empty_point_utility()
+    util.update({"n_labeled": 4, "helpful": 0, "harmful": 3, "irrelevant": 1})
+    entry.point_utilities = [util]
+    block = pool.build_block(user_message="find apple", turn=2)
+    assert "poison leftover tip text" in block
+    assert pool.export_telemetry()["inject"]["points_omitted_utility"] == 1
+
+
+def test_inject_filter_utilities_can_disable(pool_cfg):
+    cfg = dict(pool_cfg)
+    cfg["inject_filter_utilities"] = False
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="nav",
+        content="",
+        key_points=["ALWAYS examine before toggle", "noisy leftover recap text"],
+        turn=1,
+    )
+    entry = pool._entries["nav"]
+    noisy = empty_point_utility()
+    noisy.update({"n_labeled": 3, "helpful": 0, "harmful": 0, "irrelevant": 3})
+    entry.point_utilities = [empty_point_utility(), noisy]
+    block = pool.build_block(user_message="find apple", turn=2)
+    assert "noisy leftover recap text" in block
+    assert pool.export_telemetry()["inject"]["points_omitted_utility"] == 0
+

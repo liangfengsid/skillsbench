@@ -954,9 +954,18 @@ DEFAULT_CONFIG = {
             "fallback_extract": True,
             "persist_across_conversations": True,
             "persist_path": "",
-            # Default on: LLM-attribute exposed tips after labeled tasks and
-            # update multi-dimensional utilities for admit/evict.
+            # Default on: attribute exposed tips after labeled tasks and
+            # update multi-dimensional utilities for admit/evict/inject.
             "outcome_feedback": True,
+            # If the side-channel LLM is missing or empty, label from outcome
+            # (success + low steps). Wording is not a signal.
+            "outcome_feedback_heuristic": True,
+            "outcome_helpful_max_iterations": 12,
+            # Rewrite structural identifiers (paths, emails, UUIDs, hex IDs).
+            "abstract_extract": True,
+            # Omit strongly harmful tips at inject (store retains).
+            # Irrelevant is ranked, not omitted.
+            "inject_filter_utilities": True,
         },
     },
 
