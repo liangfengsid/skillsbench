@@ -166,7 +166,18 @@ class _SafeWriter:
             pass
 
     def fileno(self):
-        return self._inner.fileno()
+        try:
+            return self._inner.fileno()
+        except (OSError, ValueError):
+            pass
+        for name in ("__stdout__", "__stderr__"):
+            stream = getattr(sys, name, None)
+            if stream is not None and stream is not self._inner:
+                try:
+                    return stream.fileno()
+                except (OSError, ValueError):
+                    continue
+        return 2
 
     def isatty(self):
         try:

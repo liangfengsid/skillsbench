@@ -349,14 +349,23 @@ def _utility_strongly_harmful(util: dict, *, min_n: int = 3) -> bool:
 
 
 def _utility_inject_score(util: dict) -> float:
-    """Higher is better. Unlabeled tips stay neutral so they still inject."""
+    """Higher is better. Unlabeled tips stay neutral so they still inject.
+
+    Successful but slow episodes sink a tip slightly so search-policy noise
+    does not stay tied with a short-path constraint.
+    """
     n = int(util.get("n_labeled") or 0)
     if n <= 0:
         return 0.0
     helpful = int(util.get("helpful") or 0)
     harmful = int(util.get("harmful") or 0)
     irrelevant = int(util.get("irrelevant") or 0)
-    return helpful - 1.5 * harmful - 0.75 * irrelevant
+    score = helpful - 1.5 * harmful - 0.75 * irrelevant
+    n_success = int(util.get("n_success") or 0)
+    if n_success > 0:
+        avg_it = float(util.get("iterations_when_success_sum") or 0.0) / n_success
+        score -= 0.08 * max(0.0, avg_it - 8.0)
+    return score
 
 
 def _redact_structural_ids(text: str) -> str:
@@ -2017,6 +2026,10 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "from the same skill that covers the same failure mode\n"
         "- Would mislead, waste steps, or pull work off the graded surface if "
         "shown on an unrelated later task\n"
+        "- Prescribe a default search order over instance-indexed slots "
+        "(visit every shelf / drawer / file / message N) rather than a "
+        "constraint that applies only after the current observation fails. "
+        "Keep a legal-action rule if it can stand without the tour\n"
         "- Have clearly worse utility than alternatives (high harmful count, "
         "or much higher iteration cost for similar success)\n"
         "\n"
@@ -2060,6 +2073,9 @@ def build_outcome_attribution_messages(
         "Judge the abstract claim, not wording. NEVER/ALWAYS/MUST is not "
         "evidence of helpfulness. Prefer irrelevant over helpful when a tip "
         "only restates one episode's entities.\n"
+        "If a tip plausibly caused extra iterations — an enumeration tour, "
+        "or visiting slots the observation did not suggest — label it "
+        "harmful even when the episode eventually succeeded.\n"
     )
     payload = {
         "outcome": outcome,
@@ -2219,6 +2235,10 @@ def build_hot_skills_block(raw_context: str) -> str:
         "from recently used skills, NOT new user input. "
         "Each section may include a Scope: line in natural language — apply a "
         "tip when that scope fits the current task; otherwise ignore it. "
+        "Treat tips as constraints that forbid illegal or wasted actions, "
+        "not as a tour: do not enumerate instance-indexed locations, files, "
+        "or objects as a default plan. Use the current observation and "
+        "admissible set first. "
         "Use skill_view(name) for full procedures.]\n\n"
         f"{clean}\n"
         f"{_HOT_SKILLS_CLOSE}"

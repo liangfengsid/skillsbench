@@ -304,11 +304,13 @@ def _ensure_hermes_on_path(hermes_root: Path) -> None:
 
 
 def _restore_stdio_for_appworld() -> None:
-    """Reset stdio before AppWorld/IPython init.
+    """Reset stdio before AppWorld/IPython init and before each ``execute()``.
 
     Hermes wraps stdout/stderr with ``_SafeWriter`` during ``AIAgent`` runs.
     IPython's shell setup assigns to ``sys.stdout.write``, which raises on the
-    wrapper. Batch drivers must restore real stdio before each task.
+    wrapper. Background review threads may also leave global stdio pointing at
+    closed handles. Batch drivers must restore real stdio before each task and
+    each AppWorld code cell.
     """
     if sys.__stdout__ is not None:
         sys.stdout = sys.__stdout__
@@ -338,6 +340,7 @@ def _disable_appworld_safety_guard(world: Any = None) -> None:
         except Exception:
             pass
     _restore_host_os_io()
+    _restore_stdio_for_appworld()
 
 
 def _ensure_host_dir(path: Path) -> None:
@@ -737,6 +740,8 @@ def _wait_background_review(agent: Any, timeout: float = 60.0) -> None:
         waiter(timeout=timeout)
     except Exception:
         pass
+    finally:
+        _restore_stdio_for_appworld()
 
 
 def _execute_world_code(world: Any, code: str) -> str:
@@ -747,12 +752,14 @@ def _execute_world_code(world: Any, code: str) -> str:
     inside IPython still kills the process — that is why ``--all`` isolates
     each task in a subprocess by default.
     """
+    _restore_stdio_for_appworld()
     try:
         return world.execute(code)
     except Exception as exc:
         return f"Execution failed. Traceback:\n{type(exc).__name__}: {exc}"
     finally:
         _disable_appworld_safety_guard(world)
+        _restore_stdio_for_appworld()
 
 
 def _jsonable_task_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:

@@ -492,6 +492,45 @@ def test_execute_world_code_turns_timeout_into_step_output():
     assert "timed out" in out
 
 
+def test_execute_world_code_restores_stdio_before_and_after():
+    mod = _load_module()
+
+    class _FakeWrapper:
+        """Minimal stand-in for _SafeWriter (avoids importing run_agent)."""
+
+        __slots__ = ("_inner",)
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def write(self, data):
+            return self._inner.write(data)
+
+    calls: list[str] = []
+    real_stdout = sys.__stdout__ or sys.stdout
+    real_stderr = sys.__stderr__ or sys.stderr
+
+    class _World:
+        def execute(self, code):
+            calls.append("execute")
+            assert sys.stdout is real_stdout
+            assert sys.stderr is real_stderr
+            return "ok"
+
+    saved_stdout, saved_stderr = sys.stdout, sys.stderr
+    try:
+        sys.stdout = _FakeWrapper(real_stdout)
+        sys.stderr = _FakeWrapper(real_stderr)
+        out = mod._execute_world_code(_World(), "print(1)")
+        assert out == "ok"
+        assert calls == ["execute"]
+        assert sys.stdout is real_stdout
+        assert sys.stderr is real_stderr
+    finally:
+        sys.stdout = saved_stdout
+        sys.stderr = saved_stderr
+
+
 def test_wait_background_review_joins_agent():
     mod = _load_module()
     calls = []

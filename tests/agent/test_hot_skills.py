@@ -6,6 +6,7 @@ import pytest
 
 from agent.hot_skills import (
     HotSkillPool,
+    _utility_inject_score,
     abstract_hot_key_point,
     abstract_hot_key_points,
     build_hot_pool_outcome,
@@ -382,6 +383,8 @@ def test_build_hot_skills_block_wraps_content():
     assert "<hot-skills>" in out
     assert "Use skill_view(name)" in out
     assert "scope" in out.lower()
+    assert "constraint" in out.lower()
+    assert "enumerat" in out.lower()
     assert "rule one" in out
 
 
@@ -774,6 +777,7 @@ def test_build_llm_eviction_messages_broadcast_not_task_local():
     assert "Do NOT treat" in system and "primary keep criterion" in system
     assert "absolute paths" in system.lower() or "instance-specific" in system.lower()
     assert "recap" in system.lower() or "episode" in system.lower()
+    assert "search order" in system.lower() or "enumerat" in system.lower()
     payload = json.loads(msgs[1]["content"])
     assert payload["keep_n"] == 1
     assert payload["context"] == "schedule gmail meetings"
@@ -987,6 +991,7 @@ def test_outcome_attribution_messages_include_outcome():
     system = msgs[0]["content"].lower()
     assert "transfer" in system
     assert "recap" in system or "episode-local" in system
+    assert "enumerat" in system or "extra iterations" in system
     body = json.loads(msgs[1]["content"])
     assert body["outcome"]["iterations"] == 5
 
@@ -1117,6 +1122,28 @@ def test_outcome_feedback_heuristic_ignores_wording():
         items, {"success": True, "iterations": 40}, low_step_threshold=12
     )
     assert labels == {"0": "irrelevant"}
+
+
+def test_inject_score_penalizes_slow_successes():
+    fast = empty_point_utility()
+    fast.update(
+        {
+            "n_labeled": 2,
+            "helpful": 2,
+            "n_success": 2,
+            "iterations_when_success_sum": 16.0,
+        }
+    )
+    slow = empty_point_utility()
+    slow.update(
+        {
+            "n_labeled": 2,
+            "helpful": 2,
+            "n_success": 2,
+            "iterations_when_success_sum": 60.0,
+        }
+    )
+    assert _utility_inject_score(fast) > _utility_inject_score(slow)
 
 
 def test_inject_keeps_strongly_irrelevant_and_sorts(pool_cfg):

@@ -3655,6 +3655,19 @@ class TestSafeWriter:
         writer = _SafeWriter(inner)
         writer.flush()  # should not raise
 
+    def test_fileno_falls_back_when_inner_closed(self):
+        """Closed inner stream must not crash fileno (AppWorld faulthandler path)."""
+        import sys
+        from run_agent import _SafeWriter
+        from unittest.mock import MagicMock
+
+        inner = MagicMock()
+        inner.fileno.side_effect = ValueError("I/O operation on closed file")
+        writer = _SafeWriter(inner)
+        # Should fall back to real stdio, not raise.
+        fd = writer.fileno()
+        assert isinstance(fd, int)
+
     def test_print_survives_broken_stdout(self, monkeypatch):
         """print() through _SafeWriter doesn't crash on broken pipe."""
         import sys
