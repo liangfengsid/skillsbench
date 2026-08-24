@@ -29,6 +29,12 @@ Examples (from Hermes repo root):
       --model Qwen/Qwen3.6-27B --max-steps 50 \\
       --experiment-dir benchmark/runs/alfworld_unseen \\
       --log-jsonl benchmark/runs/alfworld_unseen/runs.jsonl --resume --print-summary
+
+  # A-Mem baseline (skill tools on, hot-skill pool off):
+  python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen \\
+      --model Qwen/Qwen3.6-27B --amem --tools \\
+      --experiment-dir benchmark/runs/alfworld_amem_unseen \\
+      --isolate-hermes-home --resume --print-summary
 """
 
 from __future__ import annotations
@@ -58,6 +64,13 @@ if str(_HERMES_ROOT) not in sys.path:
     sys.path.insert(0, str(_HERMES_ROOT))
 
 from aggregate_skillsbench_runs import aggregate_records, format_summary_text  # noqa: E402
+from amem_baseline import (  # noqa: E402
+    add_amem_cli_flags,
+    amem_telemetry_from_agent,
+    apply_amem_argparse_policy,
+    apply_amem_cli_overrides,
+    resolve_amem_persist,
+)
 from run_skillsbench_with_hermes import (  # noqa: E402
     apply_hot_pool_cli_overrides,
     resolve_agent_runtime,
@@ -187,6 +200,9 @@ def run_one_game(
     log_steps: bool,
     hot_pool: Optional[bool],
     hot_pool_persist: Optional[str],
+    amem: bool = False,
+    amem_persist: Optional[str] = None,
+    amem_k: int = 5,
     runtime: Optional[Dict[str, Any]] = None,
     config_hermes_home: Optional[Path] = None,
 ) -> Dict[str, Any]:
@@ -205,6 +221,14 @@ def run_one_game(
         model=resolved_model,
         config_hermes_home=config_hermes_home,
     )
+    apply_amem_cli_overrides(
+        enabled=bool(amem),
+        persist_dir=amem_persist,
+        k=amem_k,
+        llm_model=resolved_model,
+        api_key=agent_runtime.get("api_key"),
+        base_url=agent_runtime.get("base_url"),
+    )
     agent_kwargs: Dict[str, Any] = {
         "model": resolved_model,
         "api_key": agent_runtime.get("api_key"),
@@ -214,7 +238,7 @@ def run_one_game(
         "quiet_mode": quiet_mode,
         "max_iterations": max_hermes_iterations,
         "skip_context_files": skip_context_files,
-        "skip_memory": skip_memory,
+        "skip_memory": True if amem else skip_memory,
         "save_trajectories": save_trajectories,
         "platform": "alfworld-batch",
         "ephemeral_system_prompt": (
@@ -341,6 +365,8 @@ def run_one_game(
         "hermes_tools_enabled": not no_tools,
         "hot_pool_enabled": False if hot_pool is False else (True if hot_pool else None),
         "hot_pool_persist": hot_pool_persist,
+        "amem_enabled": bool(amem),
+        "amem_persist": amem_persist,
         "run_error": run_error,
         "evaluation": evaluation,
         "run_conversation_result": run_conversation_result,
@@ -352,6 +378,8 @@ def run_one_game(
             envelope["hot_pool_telemetry"] = tel
     except Exception:
         pass
+    if amem:
+        envelope["amem_telemetry"] = amem_telemetry_from_agent(agent)
     if log_steps:
         envelope["steps"] = steps
     else:
@@ -448,6 +476,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.set_defaults(hot_pool=None)
     parser.add_argument("--hot-pool-persist", default=None)
+    add_amem_cli_flags(parser)
     parser.add_argument(
         "--experiment-dir",
         default=None,
@@ -486,6 +515,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--no-skip-memory", action="store_false", dest="skip_memory")
     parser.add_argument("--save-trajectories", action="store_true")
     args = parser.parse_args(argv)
+    apply_amem_argparse_policy(parser, args)
+    if args.amem and not args.tools:
+        # Fair vs hot-skill: keep Hermes skill tools; A-Mem is the memory path.
+        args.tools = True
+        print("[amem] enabling --tools so skill_view / skill_manage stay available", flush=True)
 
     if args.isolate_hermes_home and not args.experiment_dir:
         parser.error("--isolate-hermes-home requires --experiment-dir")
@@ -556,8 +590,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 flush=True,
             )
             config_hermes_home = source_home if source_home.is_dir() else None
-        if hot_pool and not hot_pool_persist:
+        if hot_pool and not hot_pool_persist and not args.amem:
             hot_pool_persist = str(experiment_hot_pool_path(experiment_dir))
+
+    amem_persist = resolve_amem_persist(
+        enabled=bool(args.amem),
+        persist=args.amem_persist,
+        experiment_dir=experiment_dir,
+    )
+    if args.amem:
+        print(f"[amem] persist → {amem_persist} k={args.amem_k}", flush=True)
 
     skip_ids: Set[str] = set()
     if args.resume:
@@ -603,6 +645,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 log_steps=bool(args.log_steps),
                 hot_pool=hot_pool,
                 hot_pool_persist=hot_pool_persist,
+                amem=bool(args.amem),
+                amem_persist=amem_persist,
+                amem_k=int(args.amem_k),
                 runtime=runtime,
                 config_hermes_home=config_hermes_home,
             )

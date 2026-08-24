@@ -15,6 +15,7 @@ source .venv/bin/activate   # or: source venv/bin/activate
 - **SkillsBench / BenchFlow (optional):** `pip install -e ".[skillsbench]"` from repo root — see [`skillsbench/README.md`](skillsbench/README.md).
 - **Harbor / official Terminal-Bench (optional):** `pip install -e ".[harbor]"` plus Docker (or `pip install "harbor[modal]"` + Modal). Not included in `[all]`.
 - **ALFWorld (optional):** `pip install -e ".[alfworld]"` plus PDDL/game files in `ALFWORLD_DATA`. Not included in `[all]`.
+- **A-Mem baseline (optional):** `pip install -e ".[amem]"` — [A-Mem](https://github.com/WujiangXu/A-mem-sys) vs hot-skill on the Hermes drivers. See [`baselines/amem/README.md`](baselines/amem/README.md).
 - **AppWorld:** `pip install -e benchmark/appworld` — see [`appworld/README.md`](appworld/README.md).
 
 ## Layout
@@ -24,7 +25,7 @@ source .venv/bin/activate   # or: source venv/bin/activate
 | [`scripts/`](scripts/) | Hermes batch drivers and analysis tools |
 | [`harbor_adapter/`](harbor_adapter/) | Hermes `BaseAgent` for official Harbor / Terminal-Bench eval |
 | [`alfworld_adapter/`](alfworld_adapter/) | ALFWorld TextWorld discovery + env wrapper for Hermes |
-| [`baselines/`](baselines/) | Isolated third-party / paper baselines (e.g. CoEvoSkills) |
+| [`baselines/`](baselines/) | Isolated third-party / paper baselines (CoEvoSkills, A-Mem) |
 | [`skillsbench/`](skillsbench/) | SkillsBench tasks + BenchFlow (nested project) |
 | [`terminal-bench/`](terminal-bench/) | Terminal-Bench tasks (Harbor dataset tree) |
 | [`alfworld/`](alfworld/) | Vendored ALFWorld (TextWorld / ALFRED) |
@@ -55,6 +56,24 @@ python -m benchmark.baselines.coevoskills.run_split_protocol \
 ```
 
 Full details: [`baselines/coevoskills/README.md`](baselines/coevoskills/README.md).
+
+### A-Mem baseline (SkillsBench, ALFWorld, AppWorld)
+
+A-Mem is **not** a skill factory. It is a long-term episode-memory baseline vs the hot-skill pool: same Hermes agent, skill tools on, hot-skill off, notes injected via `<memory-context>`. Implementation: memory plugin [`plugins/memory/amem/`](../plugins/memory/amem/) + `--amem` on the three Hermes drivers.
+
+```bash
+pip install -e ".[amem]"
+# Prefetch MiniLM first (export HF_ENDPOINT=https://hf-mirror.com if huggingface.co is blocked).
+# Steps: baselines/amem/README.md  →  Prefetch MiniLM
+
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --amem --experiment-dir benchmark/runs/exp_amem_train \
+  --isolate-hermes-home \
+  --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \
+  --log-jsonl benchmark/runs/exp_amem_train/runs.jsonl --resume --print-summary
+```
+
+Copy-paste train/eval for all three benchmarks: [`baselines/amem/README.md`](baselines/amem/README.md).
 
 CoEvoSkills on **Terminal-Bench** uses Harbor for both the evolve oracle and frozen eval (same verifier as Hermes). See [`baselines/coevoskills/README.md`](baselines/coevoskills/README.md#terminal-bench).
 
@@ -115,7 +134,8 @@ python benchmark/scripts/analyze_hot_pool_runs.py RUN.jsonl \
 | [`compare_skillsbench_runs.py`](scripts/compare_skillsbench_runs.py) | Compare two SkillsBench JSONL runs (tokens, cost, API calls) |
 | [`analyze_hot_pool_runs.py`](scripts/analyze_hot_pool_runs.py) | Hot skill pool telemetry + procedure proxies + core metrics |
 | [`read_skillsbench_jsonl.py`](scripts/read_skillsbench_jsonl.py) | Load SkillsBench JSONL into Python |
-| [`run_appworld_with_hermes.py`](scripts/run_appworld_with_hermes.py) | AppWorld ReAct loop with Hermes code generation; hot-pool / experiment-dir / resume parity with SkillsBench & ALFWorld |
+| [`run_appworld_with_hermes.py`](scripts/run_appworld_with_hermes.py) | AppWorld ReAct loop with Hermes code generation; hot-pool / A-Mem / experiment-dir / resume parity with SkillsBench & ALFWorld |
+| [`amem_baseline.py`](scripts/amem_baseline.py) | `--amem` CLI helpers shared by SkillsBench, ALFWorld, AppWorld |
 
 Each script supports `--help`.
 
@@ -203,6 +223,9 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 | `--skill-nudge-interval` / `--memory-nudge-interval` | from config | Override nudge counters after agent init |
 | `--hot-pool` / `--no-hot-pool` | follow config | Force hot skill pool on or off for this run (see below) |
 | `--hot-pool-persist PATH` | off | Load/save hot pool across tasks; requires pool enabled; incompatible with `--no-hot-pool` |
+| `--amem` | off | A-Mem paper baseline: skill tools on, hot-skill off, notes via `<memory-context>` (incompatible with `--hot-pool`) |
+| `--amem-persist DIR` | `DIR/amem` with `--experiment-dir` | A-Mem Chroma + `amem_notes.json` store |
+| `--amem-k K` | 5 | Notes injected per turn |
 | `--experiment-dir DIR` | off | Per-experiment **task** workspace (`DIR/skillsbench/tasks/`); does not isolate Hermes by default |
 | `--reset-task-workspaces` | off | With `--experiment-dir`: refresh task copies / wipe prior agent outputs (also re-seeds isolated skills from repo `skills/`) |
 | `--isolate-hermes-home` | off | Sandbox `HERMES_HOME=DIR/hermes_home`: **copy** repo `skills/` (not `~/.hermes/skills`); **symlink** `config.yaml` / `.env` / `SOUL.md` to real `~/.hermes` |
@@ -386,6 +409,7 @@ Hot pool injects recently learned skill **key points** ephemerally each API turn
 | `--hot-pool` | Force enable for this run |
 | `--no-hot-pool` | Force disable for this run (also disables persistence) |
 | `--hot-pool-persist PATH` | Load/save pool JSON across tasks (implies pool must be enabled) |
+| `--amem` / `--amem-persist` / `--amem-k` | A-Mem baseline (see [baselines/amem](baselines/amem/README.md)); cannot combine with `--hot-pool` |
 
 Pool curation is **admit-time** (`skills.hot_pool.eviction_policy`): `llm` (default — side-channel reconcile judge on each material admit/sync and when over `max_entries`; falls back to `oldest`) or `oldest` (FIFO only when over cap). Mechanical extract is followed by junk filters (`junk_filter`, `exclude_skills_from_pool`). Extract redacts structural identifiers; transfer vs episode-local is a side-channel prompt judgment. Inject omits strongly harmful utilities and ranks by the rest. See [Hot skills](../README.md#hot-skills-ephemeral-key-point-pool). `max_entries` is the store cap. JSONL `hot_pool_telemetry.eviction` reports `capacity` drops and `reconcile_ran`.
 
@@ -620,7 +644,7 @@ python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen
   --resume --print-summary
 ```
 
-`--task` ids look like `pick_and_place_simple-Mug-None-Desk-1/trial_T…`. Default is **no Hermes tools** (pure text policy). Pass `--tools` / `--hot-pool` if you want skills in the loop. With `--isolate-hermes-home`, skills are seeded from repo `skills/` (not `~/.hermes/skills`). JSONL uses `evaluation.task_success` so `aggregate_skillsbench_runs.py` still works.
+`--task` ids look like `pick_and_place_simple-Mug-None-Desk-1/trial_T…`. Default is **no Hermes tools** (pure text policy). Pass `--tools` / `--hot-pool` if you want skills in the loop. `--amem` is the A-Mem baseline (forces `--no-hot-pool` and enables `--tools` so skill tools stay on); see [`baselines/amem/README.md`](baselines/amem/README.md). With `--isolate-hermes-home`, skills are seeded from repo `skills/` (not `~/.hermes/skills`). JSONL uses `evaluation.task_success` so `aggregate_skillsbench_runs.py` still works.
 
 If `ALFWORLD_DATA` is unset, the driver also looks at `/data/liangfeng/alfwordData` and `/data/liangfeng/alfworldData`.
 
@@ -630,7 +654,7 @@ If `ALFWORLD_DATA` is unset, the driver also looks at `/data/liangfeng/alfwordDa
 
 Install AppWorld from the vendored tree, then run the Hermes driver. Pass **`--model`** explicitly (OpenRouter-style id); omitting it only works when `~/.hermes/config.yaml` already resolves a default model.
 
-Hot-pool / experiment isolation mirrors ALFWorld and SkillsBench: `--hot-pool` / `--no-hot-pool` / `--hot-pool-persist`, `--experiment-dir`, `--isolate-hermes-home`, `--resume`. `--experiment-name` remains AppWorld’s output namespace under `experiments/outputs/` (orthogonal to `--experiment-dir`).
+Hot-pool / experiment isolation mirrors ALFWorld and SkillsBench: `--hot-pool` / `--no-hot-pool` / `--hot-pool-persist`, `--amem` / `--amem-persist`, `--experiment-dir`, `--isolate-hermes-home`, `--resume`. `--experiment-name` remains AppWorld’s output namespace under `experiments/outputs/` (orthogonal to `--experiment-dir`).
 
 **Hot-skill experiment paradigm** (official AppWorld splits): build the pool on **`train`** (89), evaluate transfer on **`test_normal`** (167); optionally replay **`train`** with the frozen pool for train-repeat. Use **`dev`** only for smoke tests. Optional harder transfer: **`test_challenge`**.
 
@@ -688,6 +712,8 @@ python3 benchmark/scripts/run_appworld_with_hermes.py \
 **Hermes tools:** the driver exposes all configured Hermes toolsets by default (terminal, files, web search, skills, etc.). AppWorld API actions still run via ` ```python ` blocks executed in the AppWorld REPL. Use `--no-tools` to restore the original code-only ReAct mode. With tools enabled, each AppWorld step allows up to 90 Hermes tool-calling iterations by default (`--max-hermes-iterations` overrides).
 
 **Hot pool:** same CLI as SkillsBench/ALFWorld. With `--experiment-dir` + `--hot-pool` and no `--hot-pool-persist`, the pool defaults to `DIR/hot_pool.json`. After evaluation, outcome feedback updates tip utilities (iterations = AppWorld steps when present). JSONL includes `hot_pool_enabled`, `hot_pool_persist`, optional `hot_pool_telemetry`, and `evaluation.task_success` (alias of AppWorld `success`) for shared aggregators.
+
+**A-Mem:** `--amem` on the same driver (skill tools stay on; incompatible with `--hot-pool`). Persist dir defaults to `DIR/amem`. See [`baselines/amem/README.md`](baselines/amem/README.md).
 
 ### Evaluate task results
 
@@ -783,9 +809,10 @@ JSONL logs are usually written under `benchmark/`:
 
 | Driver | Schema | Notes |
 |--------|--------|--------|
-| SkillsBench | `skillsbench.hermes_run.v1` | `run_conversation_result`, `hot_pool_enabled`, `hot_pool_persist`, optional `hot_pool_telemetry`, `background_review` (`actions`, `telemetry`) |
+| SkillsBench | `skillsbench.hermes_run.v1` | `run_conversation_result`, `hot_pool_enabled`, `hot_pool_persist`, optional `hot_pool_telemetry` / `amem_telemetry`, `background_review` (`actions`, `telemetry`) |
 | Terminal-Bench | `terminalbench.hermes_run.v1` | `eval_mode: harbor`; verifier reward from Harbor `result.json` |
-| AppWorld (run) | `appworld.hermes_run.v1` | `steps`, `hermes_stats`, `run_conversation_result`, `evaluation` (unless `--no-evaluate`), `hot_pool_enabled` / `hot_pool_persist`, optional `hot_pool_telemetry` |
+| ALFWorld | `alfworld.hermes_run.v1` | `evaluation.task_success` (`won`), `hot_pool_*`, optional `amem_telemetry` |
+| AppWorld (run) | `appworld.hermes_run.v1` | `steps`, `hermes_stats`, `run_conversation_result`, `evaluation` (unless `--no-evaluate`), `hot_pool_*`, optional `amem_telemetry` |
 | AppWorld (eval only) | `appworld.hermes_eval.v1` | `evaluation` (`success` + `task_success`); optional `run_hermes_stats` when `--run-log-jsonl` matches |
 | AppWorld (eval skip) | `appworld.hermes_eval_skip.v1` | `skip_reason` when task was not run (`--evaluate-only`) |
 

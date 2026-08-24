@@ -1,0 +1,10 @@
+name: amem
+version: 1.0.0
+description: >-
+  A-Mem (Xu et al., 2025) agentic note memory — paper baseline vs hot-skill.
+  Automatic prefetch inject; no extra tools. Enable with HERMES_AMEM_ENABLED=1.
+pip_dependencies:
+  - agentic-memory
+hooks:
+  - prefetch
+  - sync_turn

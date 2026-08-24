@@ -286,6 +286,7 @@ def test_script_documents_hot_pool_cli_flags():
     assert "--hot-pool" in text
     assert "--isolate-hermes-home" in text
     assert "--experiment-dir" in text
+    assert "--amem" in text
     assert "apply_hot_pool_outcome_feedback" in text
     assert "task_success" in text
 

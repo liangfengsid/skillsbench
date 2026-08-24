@@ -22,6 +22,13 @@ Examples (from Hermes repo root):
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --no-hot-pool \\
       --log-jsonl ./runs.jsonl
 
+  # A-Mem baseline (same Hermes + skill tools, no hot-skill pool):
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \\
+      --amem --experiment-dir benchmark/runs/exp_amem_train \\
+      --isolate-hermes-home \\
+      --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \\
+      --log-jsonl benchmark/runs/exp_amem_train/runs.jsonl --print-summary
+
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --start-task-index 10 \\
       --log-jsonl ./runs.jsonl  # skip first 10 tasks (sorted order), run the rest
 
@@ -84,6 +91,13 @@ if str(_SCRIPT.parent) not in sys.path:
     sys.path.insert(0, str(_SCRIPT.parent))
 
 from aggregate_skillsbench_runs import aggregate_records, format_summary_text  # noqa: E402
+from amem_baseline import (  # noqa: E402
+    add_amem_cli_flags,
+    amem_telemetry_from_agent,
+    apply_amem_argparse_policy,
+    apply_amem_cli_overrides,
+    resolve_amem_persist,
+)
 from skillsbench_metrics import build_envelope_metrics  # noqa: E402
 
 
@@ -314,6 +328,9 @@ def run_one_task(
     save_trajectories: bool,
     hot_pool: Optional[bool] = None,
     hot_pool_persist: Optional[str] = None,
+    amem: bool = False,
+    amem_persist: Optional[str] = None,
+    amem_k: int = 5,
     wait_background_review: bool = True,
     background_review_timeout: Optional[float] = 180.0,
     batch_review_prompt: bool = True,
@@ -344,6 +361,14 @@ def run_one_task(
         model=resolved_model,
         config_hermes_home=config_hermes_home,
     )
+    apply_amem_cli_overrides(
+        enabled=bool(amem),
+        persist_dir=amem_persist,
+        k=amem_k,
+        llm_model=resolved_model,
+        api_key=agent_runtime.get("api_key"),
+        base_url=agent_runtime.get("base_url"),
+    )
     agent = AIAgent(
         model=resolved_model,
         api_key=agent_runtime.get("api_key"),
@@ -353,7 +378,7 @@ def run_one_task(
         quiet_mode=quiet_mode,
         max_iterations=max_iterations,
         skip_context_files=skip_context_files,
-        skip_memory=skip_memory,
+        skip_memory=True if amem else skip_memory,
         save_trajectories=save_trajectories,
         platform=platform,
     )
@@ -457,6 +482,8 @@ def run_one_task(
         "batch_review_prompt": batch_review_prompt,
         "hot_pool_enabled": hot_pool,
         "hot_pool_persist": hot_pool_persist,
+        "amem_enabled": bool(amem),
+        "amem_persist": amem_persist,
         "model": resolved_model,
         "background_review": background_review,
         "run_conversation_result": result,
@@ -468,6 +495,8 @@ def run_one_task(
         envelope["pass_at_turn"] = pass_at_turn
     if isinstance(result, dict) and result.get("hot_pool_telemetry"):
         envelope["hot_pool_telemetry"] = result["hot_pool_telemetry"]
+    if amem:
+        envelope["amem_telemetry"] = amem_telemetry_from_agent(agent)
     return envelope
 
 
@@ -702,6 +731,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Disable hot skill pool for this run (overrides config.yaml).",
     )
     parser.set_defaults(hot_pool=None)
+    add_amem_cli_flags(parser)
     parser.add_argument(
         "--no-wait-background-review",
         action="store_true",
@@ -879,6 +909,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    apply_amem_argparse_policy(parser, args)
     preset = benchmark_presets()["skillsbench"]
     if args.reset_task_workspaces and not args.experiment_dir:
         parser.error("--reset-task-workspaces requires --experiment-dir")
@@ -1020,7 +1051,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         skillsbench_root = Path(manifest["skillsbench_root"])
         prompt_tasks_base = str(manifest["prompt_tasks_base"])
-        if not args.hot_pool_persist and args.hot_pool is not False:
+        if args.amem:
+            args.hot_pool = False
+        elif not args.hot_pool_persist and args.hot_pool is not False:
             args.hot_pool_persist = str(experiment_hot_pool_path(experiment_dir))
             if args.hot_pool is None:
                 # Auto-persist implies enabling the pool for this experiment.
@@ -1059,6 +1092,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.hot_pool is False and args.hot_pool_persist:
         parser.error("--hot-pool-persist cannot be used with --no-hot-pool.")
+    args.amem_persist = resolve_amem_persist(
+        enabled=bool(args.amem),
+        persist=args.amem_persist,
+        experiment_dir=experiment_dir,
+    )
+    if args.amem:
+        print(f"[amem] persist → {args.amem_persist} k={args.amem_k}", flush=True)
 
     if args.resume_success_only:
         args.resume = True
@@ -1170,6 +1210,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     save_trajectories=args.save_trajectories,
                     hot_pool=args.hot_pool,
                     hot_pool_persist=args.hot_pool_persist,
+                    amem=bool(args.amem),
+                    amem_persist=args.amem_persist,
+                    amem_k=int(args.amem_k),
                     wait_background_review=not args.no_wait_background_review,
                     background_review_timeout=args.background_review_timeout,
                     batch_review_prompt=not args.no_batch_review_prompt,

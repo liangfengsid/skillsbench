@@ -110,6 +110,11 @@ harbor = ["harbor>=0.21,<1", "click>=8.2.1"]
 # Also: `pip install -e benchmark/alfworld` (or rely on the driver PYTHONPATH).
 # Not included in [all]. Embodied THOR / MaskRCNN extras are not required.
 alfworld = ["textworld[pddl]>=1.6.1,<2", "termcolor>=2.0,<4"]
+# A-Mem paper baseline (Xu et al. 2025) vs hot-skill on Hermes drivers.
+# Not included in [all]. Installs the upstream agentic-memory package.
+amem = [
+  "agentic-memory @ git+https://github.com/WujiangXu/A-mem-sys.git",
+]
 all = [
   "hermes-agent[modal]",
   "hermes-agent[daytona]",
@@ -183,3 +188,8 @@ exclude = ["*"]
 
 [tool.uv]
 exclude-newer = "7 days"
+
+[tool.uv.workspace]
+members = [
+    "benchmark/runs/exp_hot_train0821/skillsbench/tasks/fix-build-agentops",
+]
