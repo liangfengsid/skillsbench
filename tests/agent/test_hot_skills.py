@@ -17,8 +17,11 @@ from agent.hot_skills import (
     derive_hot_scope,
     empty_point_utility,
     extract_hot_key_points,
+    filter_junk_key_points,
     format_hot_skill_section,
     heuristic_outcome_attributions,
+    is_excluded_hot_skill,
+    is_junk_key_point,
     llm_eviction_keep_ids,
     load_hot_skills_config,
     normalize_hot_scope_value,
@@ -1200,4 +1203,110 @@ def test_inject_filter_utilities_can_disable(pool_cfg):
     block = pool.build_block(user_message="find apple", turn=2)
     assert "noisy leftover recap text" in block
     assert pool.export_telemetry()["inject"]["points_omitted_utility"] == 0
+
+
+def test_is_junk_key_point_filters_template_bullets():
+    assert is_junk_key_point("Important details")
+    assert is_junk_key_point("```")
+    assert is_junk_key_point(
+        "Trigger conditions — State clearly when the agent should load the skill"
+    )
+    assert not is_junk_key_point("NEVER use os or sys in the AppWorld REPL")
+
+
+def test_filter_junk_key_points_preserves_guardrails():
+    points = filter_junk_key_points(
+        [
+            "Important details",
+            "NEVER paginate with page_limit=5 defaults",
+            "```",
+            "ALWAYS check show_api_doc before calling",
+        ]
+    )
+    assert points == [
+        "NEVER paginate with page_limit=5 defaults",
+        "ALWAYS check show_api_doc before calling",
+    ]
+
+
+def test_extract_hot_key_points_strips_skill_authoring_template():
+    content = """
+## Key Points
+
+- Important details
+- ALWAYS paginate API results
+"""
+    points = extract_hot_key_points(content)
+    assert "Important details" not in points
+    assert any("paginate" in p.lower() for p in points)
+
+
+def test_excluded_meta_skill_not_admitted(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(
+        name="hermes-agent-skill-authoring",
+        content="<!-- hermes-hot -->\n- ALWAYS write numbered steps\n<!-- /hermes-hot -->",
+        turn=1,
+    )
+    assert "hermes-agent-skill-authoring" not in pool._entries
+    assert pool._telemetry.records_skipped_excluded_skill == 1
+
+
+def test_reconcile_on_update_runs_llm_under_cap():
+    cfg = {
+        "enabled": True,
+        "max_entries": 12,
+        "max_points_per_skill": 8,
+        "max_chars_per_point": 240,
+        "eviction_policy": "llm",
+        "reconcile_on_update": True,
+        "inject_on_turn": True,
+    }
+    calls = []
+
+    def keep_transferable(items, keep_n, context):
+        del keep_n, context
+        calls.append(list(items))
+        return [it["id"] for it in items if "transferable" in it["point"].lower()]
+
+    pool = HotSkillPool(cfg, eviction_judge=keep_transferable)
+    pool.record(
+        name="demo",
+        content="",
+        key_points=[
+            "transferable pitfall: paginate all API pages",
+            "episode-local recap of shelf three layout only",
+        ],
+        turn=1,
+    )
+    assert calls, "reconcile should run even when pool is under cap"
+    assert pool._entries["demo"].key_points == [
+        "transferable pitfall: paginate all API pages"
+    ]
+    assert pool.export_telemetry()["eviction"]["reconcile_ran"] is True
+
+
+def test_reconcile_on_update_can_be_disabled():
+    cfg = {
+        "enabled": True,
+        "max_entries": 12,
+        "max_points_per_skill": 8,
+        "max_chars_per_point": 240,
+        "eviction_policy": "llm",
+        "reconcile_on_update": False,
+        "inject_on_turn": True,
+    }
+
+    def judge(items, keep_n, context):
+        del items, keep_n, context
+        raise AssertionError("judge should not run under cap when reconcile_on_update is off")
+
+    pool = HotSkillPool(cfg, eviction_judge=judge)
+    pool.record(
+        name="demo",
+        content="<!-- hermes-hot -->\n- ALWAYS keep me\n<!-- /hermes-hot -->",
+        turn=1,
+    )
+    assert "demo" in pool._entries
+    assert pool.export_telemetry()["eviction"]["reconcile_ran"] is False
 

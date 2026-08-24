@@ -8,16 +8,19 @@ Extracts guardrails from SKILL.md in this order:
 3. Heuristic NEVER/ALWAYS-style bullets elsewhere
 
 Extract rewrites structural identifiers (paths, emails, UUIDs, hex IDs).
-Transferability is a side-channel LLM judgment (evict / outcome), not a
-semantic regex filter.
+Transferability is a side-channel LLM judgment (reconcile / outcome), not a
+semantic regex filter. Mechanical extract is followed by deterministic junk
+filters, then ``reconcile_pool`` (LLM keep-set when configured, else oldest
+only on overflow).
 
-The pool cap is the store budget (``max_entries`` points). Eviction runs
-only when a new extract would overflow — not every turn. Inject dumps
-retained tips minus strongly harmful ones when outcome utilities exist.
-Irrelevant scores only rank; they do not omit. Model "use" of a point
-is not observable; eviction policies are ``llm`` (default: admission-time
-side-channel judge) or ``oldest`` (FIFO fallback / explicit opt-in).
-Full procedures stay behind ``skill_view``.
+The pool cap is the store budget (``max_entries`` points). Under policy
+``llm``, reconcile runs on every material pool update (admit / skill sync /
+stale refresh), not only when over cap — so a full pool can still drop weak
+tips. Inject dumps retained tips minus strongly harmful ones when outcome
+utilities exist. Irrelevant scores only rank; they do not omit. Model "use"
+of a point is not observable; policies are ``llm`` (default: side-channel
+reconcile judge) or ``oldest`` (FIFO fallback / explicit opt-in). Full
+procedures stay behind ``skill_view``.
 """
 
 from __future__ import annotations
@@ -125,6 +128,29 @@ _PLACEHOLDER_ONLY_RE = re.compile(
     r"(?i)^[\s,.;:]*((?:<(?:path|id|email)>|and|or|the|a|an|to|on|in|at|of)[\s,.;:]*)+$"
 )
 
+# Meta / authoring skills — never admit to the broadcast pool.
+_DEFAULT_EXCLUDE_SKILLS_FROM_POOL = frozenset({"hermes-agent-skill-authoring"})
+
+# Template bullets from SKILL.md examples (not real guardrails).
+_JUNK_POINT_EXACT = frozenset(
+    {
+        "important details",
+        "```",
+        "---",
+        "...",
+    }
+)
+
+_JUNK_POINT_PREFIX_RES = (
+    re.compile(r"^trigger conditions\b", re.IGNORECASE),
+    re.compile(r"^numbered steps\b", re.IGNORECASE),
+    re.compile(r"^key points section\b", re.IGNORECASE),
+    re.compile(r"^keep it short\b", re.IGNORECASE),
+    re.compile(r"^test — load with\b", re.IGNORECASE),
+    re.compile(r"^test - load with\b", re.IGNORECASE),
+    re.compile(r"^don'?t put session progress\b", re.IGNORECASE),
+)
+
 _DEFAULT_HOT_POOL = {
     "enabled": True,
     # Retain = inject: this many key points are stored and dumped into
@@ -135,13 +161,19 @@ _DEFAULT_HOT_POOL = {
     "max_chars": 0,
     "max_points_per_skill": 8,
     "max_chars_per_point": 240,
-    # Admission-time victim when over max_entries. Model reliance is not
-    # observable — do not treat inject as "use".
-    # llm (default): side-channel judge — keep a broadcast-worthy subset
-    #      (one call per overflow). Falls back to oldest if judge missing/fails.
-    # oldest: drop points with the earliest recorded_turn (FIFO of extract).
-    #      Deprecated as primary policy; keep for fallback / explicit opt-in.
+    # Pool curation when over max_entries or on material updates (admit/sync).
+    # llm (default): side-channel reconcile judge — keep a broadcast-worthy
+    #      subset (runs on overflow and on each material update when
+    #      reconcile_on_update is true). Falls back to oldest if missing/fails.
+    # oldest: drop earliest recorded_turn only when over max_entries.
     "eviction_policy": "llm",
+    # Run LLM reconcile after admit/sync even when the pool is under cap.
+    "reconcile_on_update": True,
+    # Drop template/meta bullets after extract (see filter_junk_key_points).
+    "junk_filter": True,
+    "junk_min_point_chars": 12,
+    # Extra skill names denied admission (lowercased); merged with built-in denylist.
+    "exclude_skills_from_pool": [],
     "inject_on_turn": True,
     "skip_if_in_history": True,
     "history_lookback": 40,
@@ -205,6 +237,18 @@ def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     )
     cfg["abstract_extract"] = bool(cfg.get("abstract_extract", True))
     cfg["inject_filter_utilities"] = bool(cfg.get("inject_filter_utilities", True))
+    cfg["reconcile_on_update"] = bool(cfg.get("reconcile_on_update", True))
+    cfg["junk_filter"] = bool(cfg.get("junk_filter", True))
+    cfg["junk_min_point_chars"] = max(
+        4, int(cfg.get("junk_min_point_chars", 12) or 12)
+    )
+    raw_exclude = cfg.get("exclude_skills_from_pool")
+    if isinstance(raw_exclude, (list, tuple)):
+        cfg["exclude_skills_from_pool"] = [
+            str(s).strip() for s in raw_exclude if str(s).strip()
+        ]
+    else:
+        cfg["exclude_skills_from_pool"] = []
     return cfg
 
 
@@ -273,7 +317,8 @@ def extract_hot_key_points(content: str, config: Optional[dict] = None) -> List[
 
     if cfg.get("abstract_extract", True):
         points = abstract_hot_key_points(points, cfg)
-    return _normalize_key_points(points, cfg)
+    points = _normalize_key_points(points, cfg)
+    return filter_junk_key_points(points, cfg)
 
 
 def skill_has_hot_section(content: str) -> bool:
@@ -408,6 +453,64 @@ def abstract_hot_key_points(points: List[str], config: Optional[dict] = None) ->
         if key in seen:
             continue
         seen.add(key)
+        out.append(pt)
+    return out
+
+
+def is_excluded_hot_skill(name: str, config: Optional[dict] = None) -> bool:
+    """True when a skill must never enter the hot pool (meta/authoring docs)."""
+    cfg = config if isinstance(config, dict) else load_hot_skills_config()
+    if not cfg.get("junk_filter", True):
+        return False
+    key = (name or "").strip().lower()
+    if not key:
+        return False
+    deny = {s.lower() for s in _DEFAULT_EXCLUDE_SKILLS_FROM_POOL}
+    extra = cfg.get("exclude_skills_from_pool") or []
+    if isinstance(extra, (list, tuple)):
+        deny.update(str(s).strip().lower() for s in extra if str(s).strip())
+    return key in deny
+
+
+def is_junk_key_point(text: str, config: Optional[dict] = None) -> bool:
+    """Deterministic filter for template/scaffold bullets after extract."""
+    cfg = config if isinstance(config, dict) else load_hot_skills_config()
+    if not cfg.get("junk_filter", True):
+        return False
+    pt = re.sub(r"\s+", " ", (text or "").strip())
+    if not pt:
+        return True
+    if re.fullmatch(r"`+", pt):
+        return True
+    key = pt.lower()
+    if key in _JUNK_POINT_EXACT:
+        return True
+    min_len = int(cfg.get("junk_min_point_chars", 12) or 12)
+    if len(pt) < min_len and not _GUARDRAIL_PREFIX_RE.match(pt):
+        return True
+    for pat in _JUNK_POINT_PREFIX_RES:
+        if pat.search(pt):
+            return True
+    return False
+
+
+def filter_junk_key_points(
+    points: List[str], config: Optional[dict] = None
+) -> List[str]:
+    """Drop template/meta bullets; preserve order."""
+    cfg = config if isinstance(config, dict) else load_hot_skills_config()
+    if not cfg.get("junk_filter", True):
+        return list(points or [])
+    out: List[str] = []
+    seen: Set[str] = set()
+    for raw in points or []:
+        pt = re.sub(r"\s+", " ", (raw or "").strip())
+        if not pt or is_junk_key_point(pt, cfg):
+            continue
+        norm = pt.lower()
+        if norm in seen:
+            continue
+        seen.add(norm)
         out.append(pt)
     return out
 
@@ -618,6 +721,8 @@ class HotPoolTelemetry:
     global_turn_at_end: int = 0
     new_records_this_task: int = 0
     records_skipped_no_points: int = 0
+    records_skipped_excluded_skill: int = 0
+    records_junk_filtered: int = 0
     persist_path: str = ""
     build_block_applied: bool = False
     skills_injected: List[str] = field(default_factory=list)
@@ -639,6 +744,7 @@ class HotPoolTelemetry:
     skill_manage_sync: int = 0
     skill_manage_evict: int = 0
     evicted_capacity: int = 0
+    reconcile_ran: bool = False
     outcome_feedback_applied: bool = False
     outcome_feedback_points: int = 0
     outcome_attributions: Dict[str, int] = field(default_factory=dict)
@@ -663,6 +769,8 @@ class HotPoolTelemetry:
                 "global_turn_at_end": self.global_turn_at_end,
                 "new_records_this_task": self.new_records_this_task,
                 "records_skipped_no_points": self.records_skipped_no_points,
+                "records_skipped_excluded_skill": self.records_skipped_excluded_skill,
+                "records_junk_filtered": self.records_junk_filtered,
                 "persist_path": self.persist_path,
             },
             "inject": {
@@ -691,6 +799,7 @@ class HotPoolTelemetry:
             },
             "eviction": {
                 "capacity": self.evicted_capacity,
+                "reconcile_ran": self.reconcile_ran,
             },
             "outcome_feedback": {
                 "applied": self.outcome_feedback_applied,
@@ -1053,10 +1162,19 @@ class HotSkillPool:
         key = (name or "").strip()
         if not key:
             return
+        if is_excluded_hot_skill(key, self._config):
+            logger.debug("hot skill pool: skill %r excluded from pool", key)
+            self._telemetry.records_skipped_excluded_skill += 1
+            return
 
         points = list(key_points) if key_points is not None else extract_hot_key_points(content, self._config)
         if key_points is not None and self._config.get("abstract_extract", True):
             points = abstract_hot_key_points(points, self._config)
+            points = _normalize_key_points(points, self._config)
+            before = len(points)
+            points = filter_junk_key_points(points, self._config)
+            if before > len(points):
+                self._telemetry.records_junk_filtered += before - len(points)
         if not points:
             logger.debug("hot skill pool: no key points extracted for %r — skipping", key)
             self._telemetry.records_skipped_no_points += 1
@@ -1103,7 +1221,7 @@ class HotSkillPool:
         )
         self._entries[key] = entry
         context = user_message if user_message is not None else self._admission_context
-        self._trim_to_max_entries(new_name=key, context=context or "")
+        self.reconcile_pool(new_name=key, context=context or "", material_update=True)
         self._telemetry.new_records_this_task += 1
         self._maybe_persist()
 
@@ -1255,7 +1373,11 @@ class HotSkillPool:
             entry.skill_md_mtime = current_mtime
             refreshed += 1
         if refreshed:
-            self._trim_to_max_entries(new_name="", context=self._admission_context)
+            self.reconcile_pool(
+                new_name="",
+                context=self._admission_context,
+                material_update=True,
+            )
             self._maybe_persist()
         return refreshed
 
@@ -1472,26 +1594,54 @@ class HotSkillPool:
         if not entry.key_points:
             self._entries.pop(skill, None)
 
-    def _trim_to_max_entries(self, *, new_name: str, context: str) -> None:
+    def reconcile_pool(
+        self,
+        *,
+        new_name: str = "",
+        context: str = "",
+        material_update: bool = True,
+    ) -> None:
+        """Curate the pool to ``max_entries`` after admit, sync, or refresh.
+
+        Under policy ``llm``, runs the side-channel keep-set judge when the
+        pool overflows *or* on each material update (``reconcile_on_update``).
+        Falls back to ``oldest`` point drops when still over cap.
+        """
         cap = int(self._config.get("max_entries", 12) or 0)
         if cap <= 0:
             self._entries.clear()
             return
-        incoming = self._entries.get(new_name)
-        if incoming is not None and len(incoming.key_points) > cap:
-            incoming.key_points = incoming.key_points[:cap]
-            if incoming.point_utilities:
-                incoming.point_utilities = incoming.point_utilities[:cap]
-        if self._total_points() <= cap:
-            return
 
+        incoming = self._entries.get(new_name) if new_name else None
+        if incoming is not None:
+            per_skill = int(self._config.get("max_points_per_skill", 8) or 8)
+            if len(incoming.key_points) > per_skill:
+                incoming.key_points = incoming.key_points[:per_skill]
+                if incoming.point_utilities:
+                    incoming.point_utilities = incoming.point_utilities[:per_skill]
+            if len(incoming.key_points) > cap:
+                incoming.key_points = incoming.key_points[:cap]
+                if incoming.point_utilities:
+                    incoming.point_utilities = incoming.point_utilities[:cap]
+
+        total = self._total_points()
         policy = str(self._config.get("eviction_policy") or _DEFAULT_EVICTION_POLICY)
-        evicted = 0
-        if policy == "llm":
-            dropped = self._apply_llm_keep(cap, context)
-            evicted += dropped
+        reconcile_on_update = bool(self._config.get("reconcile_on_update", True))
 
-        # oldest fallback (also the full path when eviction_policy == "oldest")
+        evicted = 0
+        should_llm = (
+            policy == "llm"
+            and callable(self.eviction_judge)
+            and self._point_items()
+            and (
+                total > cap
+                or (material_update and reconcile_on_update)
+            )
+        )
+        if should_llm:
+            self._telemetry.reconcile_ran = True
+            evicted += self._apply_llm_keep(cap, context)
+
         while self._total_points() > cap:
             items = self._point_items()
             if not items:
@@ -1501,8 +1651,13 @@ class HotSkillPool:
                 break
             self._drop_point(victim[0], victim[1])
             evicted += 1
+
         if evicted:
             self._telemetry.evicted_capacity += evicted
+
+    def _trim_to_max_entries(self, *, new_name: str, context: str) -> None:
+        """Deprecated alias — use :meth:`reconcile_pool`."""
+        self.reconcile_pool(new_name=new_name, context=context, material_update=True)
 
     def _apply_llm_keep(self, cap: int, context: str) -> int:
         """Ask the judge once for which point ids to keep. Returns how many dropped."""
@@ -1523,8 +1678,6 @@ class HotSkillPool:
         drop.sort(key=lambda it: (str(it["skill"]), -int(it["index"])))
         dropped = 0
         for it in drop:
-            if self._total_points() <= cap:
-                break
             self._drop_point(str(it["skill"]), int(it["index"]))
             dropped += 1
         return dropped
@@ -1966,7 +2119,7 @@ def _reload_skill_content(name: str, *, session_id: Optional[str] = None) -> str
 
 
 def build_llm_eviction_system_prompt(keep_n: int) -> str:
-    """System prompt for overflow keep-set judgment (retain = inject)."""
+    """System prompt for pool reconcile / overflow keep-set judgment (retain = inject)."""
     return (
         "You curate a small hot-skill key-point pool used as short guardrail "
         "reminders.\n"
@@ -1977,7 +2130,7 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "unseen-task transfer and broadcast-safety (still helpful or at least "
         "harmless out of domain). Do NOT optimize for replaying the same "
         "tasks that produced the tips, and do NOT maximize usefulness on the "
-        "present overflow alone.\n"
+        "present pool alone.\n"
         "\n"
         f"Return JSON only: {{\"keep\": [\"id\", ...]}} with at most {keep_n} "
         "ids drawn from the provided points. Do not invent ids. Prefer fewer "
@@ -2036,8 +2189,8 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "Imperative intensity (NEVER/ALWAYS/MUST) is not evidence of quality — "
         "judge the abstract claim, not the wording.\n"
         "\n"
-        "About context: it describes the overflow / incoming extract only "
-        "(often from the current training task). Use it to understand what is "
+        "About context: it describes the incoming extract / current task only "
+        "(often from the training task). Use it to understand what is "
         "being admitted and to break ties. Do NOT treat \"most relevant to "
         "context\", \"will help if this task is repeated\", or \"likely needed "
         "on similar seen tasks\" as the primary keep criterion under "

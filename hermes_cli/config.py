@@ -928,19 +928,22 @@ DEFAULT_CONFIG = {
         "hot_pool": {
             "enabled": True,
             # Retain = inject: this many key points are stored AND dumped into
-            # <hot-skills> (minus skip_if_in_history). Eviction runs only when a
-            # new extract would overflow — not every turn.
+            # <hot-skills> (minus skip_if_in_history). Reconcile runs on each
+            # material admit/sync (policy llm) and when over max_entries.
             "max_entries": 12,
             "max_chars": 0,  # ignored — inject budget is max_entries (points)
             "max_points_per_skill": 8,
             "max_chars_per_point": 240,
-            # llm (default): side-channel judge on the running agent's LLM client
-            #      (one call per overflow). Prefer transferable / broadcast-safe
-            #      tips; falls back to oldest if unavailable or judge fails.
-            # oldest: drop earliest recorded_turn (FIFO of extract; persisted
-            #      global_turn when persist_across_conversations is on).
-            #      Deprecated as primary policy — keep for fallback / opt-in.
+            # llm (default): side-channel reconcile judge on the running agent's
+            #      LLM client (on overflow and on each material pool update).
+            #      Prefer transferable / broadcast-safe tips; falls back to
+            #      oldest if unavailable or judge fails.
+            # oldest: drop earliest recorded_turn only when over max_entries.
             "eviction_policy": "llm",
+            "reconcile_on_update": True,
+            "junk_filter": True,
+            "junk_min_point_chars": 12,
+            "exclude_skills_from_pool": [],
             "inject_on_turn": True,
             # Omit pool skills already opened via skill_view in recent history
             # (avoid duplicating full SKILL.md + hot tips). Telemetry:
