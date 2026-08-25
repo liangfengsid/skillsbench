@@ -1,0 +1,6 @@
+Official curator prompts from
+https://github.com/suzgunmirac/dynamic-cheatsheet
+(MIT License; Suzgun et al., arXiv:2504.07952).
+
+curator_cu.txt  <- prompts/curator_prompt_for_dc_cumulative.txt
+curator_rs.txt  <- prompts/curator_prompt_for_dc_retrieval_synthesis.txt

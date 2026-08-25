@@ -76,6 +76,14 @@ def test_apply_amem_argparse_policy_rejects_hot_pool():
         mod.apply_amem_argparse_policy(parser, args)
 
 
+def test_apply_amem_argparse_policy_rejects_dc():
+    mod = _load_module()
+    parser = argparse.ArgumentParser()
+    args = argparse.Namespace(amem=True, dc=True, hot_pool=None, skip_memory=False)
+    with pytest.raises(SystemExit):
+        mod.apply_amem_argparse_policy(parser, args)
+
+
 def test_apply_amem_argparse_policy_forces_no_hot_pool_and_skip_memory():
     mod = _load_module()
     parser = argparse.ArgumentParser()

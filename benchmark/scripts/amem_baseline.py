@@ -99,9 +99,14 @@ def add_amem_cli_flags(parser) -> None:
 
 
 def apply_amem_argparse_policy(parser, args) -> None:
-    """``--amem`` cannot share a run with ``--hot-pool``; MEMORY.md stays off."""
+    """``--amem`` cannot share a run with ``--hot-pool`` or ``--dc``."""
     if not getattr(args, "amem", False):
         return
+    if getattr(args, "dc", False):
+        parser.error(
+            "--amem cannot be combined with --dc "
+            "(pick one paper memory baseline per run)."
+        )
     if getattr(args, "hot_pool", None) is True:
         parser.error(
             "--amem cannot be combined with --hot-pool "

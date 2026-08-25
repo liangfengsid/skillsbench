@@ -1,0 +1,8 @@
+name: dcheatsheet
+version: 1.0.0
+description: >-
+  Dynamic Cheatsheet (Suzgun et al., 2025) — paper baseline vs hot-skill.
+  Official curator prompts; Hermes is the generator. Enable with HERMES_DC_ENABLED=1.
+hooks:
+  - prefetch
+  - sync_turn

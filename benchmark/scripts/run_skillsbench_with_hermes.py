@@ -29,6 +29,13 @@ Examples (from Hermes repo root):
       --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \\
       --log-jsonl benchmark/runs/exp_amem_train/runs.jsonl --print-summary
 
+  # Dynamic Cheatsheet baseline (same Hermes + skill tools, no hot-skill pool):
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \\
+      --dc --experiment-dir benchmark/runs/exp_dc_train \\
+      --isolate-hermes-home \\
+      --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \\
+      --log-jsonl benchmark/runs/exp_dc_train/runs.jsonl --print-summary
+
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --start-task-index 10 \\
       --log-jsonl ./runs.jsonl  # skip first 10 tasks (sorted order), run the rest
 
@@ -97,6 +104,13 @@ from amem_baseline import (  # noqa: E402
     apply_amem_argparse_policy,
     apply_amem_cli_overrides,
     resolve_amem_persist,
+)
+from dc_baseline import (  # noqa: E402
+    add_dc_cli_flags,
+    apply_dc_argparse_policy,
+    apply_dc_cli_overrides,
+    dc_telemetry_from_agent,
+    resolve_dc_persist,
 )
 from skillsbench_metrics import build_envelope_metrics  # noqa: E402
 
@@ -331,6 +345,10 @@ def run_one_task(
     amem: bool = False,
     amem_persist: Optional[str] = None,
     amem_k: int = 5,
+    dc: bool = False,
+    dc_persist: Optional[str] = None,
+    dc_mode: str = "cu",
+    dc_k: int = 3,
     wait_background_review: bool = True,
     background_review_timeout: Optional[float] = 180.0,
     batch_review_prompt: bool = True,
@@ -369,6 +387,15 @@ def run_one_task(
         api_key=agent_runtime.get("api_key"),
         base_url=agent_runtime.get("base_url"),
     )
+    apply_dc_cli_overrides(
+        enabled=bool(dc),
+        persist_dir=dc_persist,
+        mode=dc_mode,
+        k=dc_k,
+        llm_model=resolved_model,
+        api_key=agent_runtime.get("api_key"),
+        base_url=agent_runtime.get("base_url"),
+    )
     agent = AIAgent(
         model=resolved_model,
         api_key=agent_runtime.get("api_key"),
@@ -378,7 +405,7 @@ def run_one_task(
         quiet_mode=quiet_mode,
         max_iterations=max_iterations,
         skip_context_files=skip_context_files,
-        skip_memory=True if amem else skip_memory,
+        skip_memory=True if amem or dc else skip_memory,
         save_trajectories=save_trajectories,
         platform=platform,
     )
@@ -484,6 +511,9 @@ def run_one_task(
         "hot_pool_persist": hot_pool_persist,
         "amem_enabled": bool(amem),
         "amem_persist": amem_persist,
+        "dc_enabled": bool(dc),
+        "dc_persist": dc_persist,
+        "dc_mode": dc_mode if dc else None,
         "model": resolved_model,
         "background_review": background_review,
         "run_conversation_result": result,
@@ -497,6 +527,8 @@ def run_one_task(
         envelope["hot_pool_telemetry"] = result["hot_pool_telemetry"]
     if amem:
         envelope["amem_telemetry"] = amem_telemetry_from_agent(agent)
+    if dc:
+        envelope["dc_telemetry"] = dc_telemetry_from_agent(agent)
     return envelope
 
 
@@ -732,6 +764,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.set_defaults(hot_pool=None)
     add_amem_cli_flags(parser)
+    add_dc_cli_flags(parser)
     parser.add_argument(
         "--no-wait-background-review",
         action="store_true",
@@ -910,6 +943,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     args = parser.parse_args(argv)
     apply_amem_argparse_policy(parser, args)
+    apply_dc_argparse_policy(parser, args)
     preset = benchmark_presets()["skillsbench"]
     if args.reset_task_workspaces and not args.experiment_dir:
         parser.error("--reset-task-workspaces requires --experiment-dir")
@@ -1051,7 +1085,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         skillsbench_root = Path(manifest["skillsbench_root"])
         prompt_tasks_base = str(manifest["prompt_tasks_base"])
-        if args.amem:
+        if args.amem or args.dc:
             args.hot_pool = False
         elif not args.hot_pool_persist and args.hot_pool is not False:
             args.hot_pool_persist = str(experiment_hot_pool_path(experiment_dir))
@@ -1099,6 +1133,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     if args.amem:
         print(f"[amem] persist → {args.amem_persist} k={args.amem_k}", flush=True)
+    args.dc_persist = resolve_dc_persist(
+        enabled=bool(args.dc),
+        persist=args.dc_persist,
+        experiment_dir=experiment_dir,
+    )
+    if args.dc:
+        print(
+            f"[dc] persist → {args.dc_persist} mode={args.dc_mode} k={args.dc_k}",
+            flush=True,
+        )
 
     if args.resume_success_only:
         args.resume = True
@@ -1213,6 +1257,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     amem=bool(args.amem),
                     amem_persist=args.amem_persist,
                     amem_k=int(args.amem_k),
+                    dc=bool(args.dc),
+                    dc_persist=args.dc_persist,
+                    dc_mode=str(args.dc_mode),
+                    dc_k=int(args.dc_k),
                     wait_background_review=not args.no_wait_background_review,
                     background_review_timeout=args.background_review_timeout,
                     batch_review_prompt=not args.no_batch_review_prompt,

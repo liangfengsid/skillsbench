@@ -1646,10 +1646,13 @@ class AIAgent:
 
         # Memory provider plugin (external — one at a time, alongside built-in)
         # Reads memory.provider from config to select which plugin to activate.
-        # HERMES_AMEM_ENABLED loads the A-Mem paper baseline even when
+        # HERMES_AMEM_ENABLED / HERMES_DC_ENABLED load paper baselines even when
         # skip_memory=True (builtin MEMORY.md stays off).
         self._memory_manager = None
         _amem_env = os.getenv("HERMES_AMEM_ENABLED", "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        _dc_env = os.getenv("HERMES_DC_ENABLED", "").strip().lower() in (
             "1", "true", "yes", "on",
         )
         _mem_provider_name = (os.getenv("HERMES_MEMORY_PROVIDER") or "").strip()
@@ -1657,7 +1660,9 @@ class AIAgent:
             _mem_provider_name = str(mem_config.get("provider") or "").strip()
         if _amem_env:
             _mem_provider_name = "amem"
-        if _mem_provider_name and (not skip_memory or _amem_env):
+        elif _dc_env:
+            _mem_provider_name = "dcheatsheet"
+        if _mem_provider_name and (not skip_memory or _amem_env or _dc_env):
             try:
                 from agent.memory_manager import MemoryManager as _MemoryManager
                 from plugins.memory import load_memory_provider as _load_mem

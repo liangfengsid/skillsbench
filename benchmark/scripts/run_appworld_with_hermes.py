@@ -38,6 +38,14 @@ Examples (from Hermes repo root):
       --isolate-hermes-home --experiment-name hermes-amem-train \\
       --log-jsonl benchmark/runs/appworld_amem_train/runs.jsonl \\
       --resume --print-summary
+
+  # Dynamic Cheatsheet baseline (same Hermes + skill tools, no hot-skill pool):
+  python3 benchmark/scripts/run_appworld_with_hermes.py \\
+      --dataset train --all --model Qwen/Qwen3.6-27B --dc \\
+      --experiment-dir benchmark/runs/appworld_dc_train \\
+      --isolate-hermes-home --experiment-name hermes-dc-train \\
+      --log-jsonl benchmark/runs/appworld_dc_train/runs.jsonl \\
+      --resume --print-summary
 """
 
 from __future__ import annotations
@@ -250,6 +258,13 @@ from amem_baseline import (  # noqa: E402
     apply_amem_argparse_policy,
     apply_amem_cli_overrides,
     resolve_amem_persist,
+)
+from dc_baseline import (  # noqa: E402
+    add_dc_cli_flags,
+    apply_dc_argparse_policy,
+    apply_dc_cli_overrides,
+    dc_telemetry_from_agent,
+    resolve_dc_persist,
 )
 from run_skillsbench_with_hermes import (  # noqa: E402
     apply_hot_pool_cli_overrides,
@@ -891,6 +906,10 @@ def run_one_task(
     amem: bool = False,
     amem_persist: Optional[str] = None,
     amem_k: int = 5,
+    dc: bool = False,
+    dc_persist: Optional[str] = None,
+    dc_mode: str = "cu",
+    dc_k: int = 3,
     runtime: Optional[Dict[str, Any]] = None,
     config_hermes_home: Optional[Path] = None,
 ) -> Dict[str, Any]:
@@ -946,6 +965,15 @@ def run_one_task(
         api_key=agent_runtime.get("api_key"),
         base_url=agent_runtime.get("base_url"),
     )
+    apply_dc_cli_overrides(
+        enabled=bool(dc),
+        persist_dir=dc_persist,
+        mode=dc_mode,
+        k=dc_k,
+        llm_model=resolved_model,
+        api_key=agent_runtime.get("api_key"),
+        base_url=agent_runtime.get("base_url"),
+    )
 
     t0 = time.perf_counter()
     world_guard_host = None
@@ -967,7 +995,7 @@ def run_one_task(
                 "quiet_mode": quiet_mode,
                 "max_iterations": hermes_iterations,
                 "skip_context_files": skip_context_files,
-                "skip_memory": True if amem else skip_memory,
+                "skip_memory": True if amem or dc else skip_memory,
                 "save_trajectories": save_trajectories,
                 "platform": "appworld-batch",
                 "ephemeral_system_prompt": (
@@ -1106,6 +1134,9 @@ def run_one_task(
         "hot_pool_persist": hot_pool_persist,
         "amem_enabled": bool(amem),
         "amem_persist": amem_persist,
+        "dc_enabled": bool(dc),
+        "dc_persist": dc_persist,
+        "dc_mode": dc_mode if dc else None,
         "steps_taken": len(steps),
         "task_completed": task_completed,
         "run_error": run_error,
@@ -1130,6 +1161,8 @@ def run_one_task(
             pass
         if amem:
             envelope["amem_telemetry"] = amem_telemetry_from_agent(agent)
+        if dc:
+            envelope["dc_telemetry"] = dc_telemetry_from_agent(agent)
     return envelope
 
 
@@ -1337,6 +1370,7 @@ def main() -> int:
         help="Persist hot pool JSON across tasks (implies pool enabled).",
     )
     add_amem_cli_flags(parser)
+    add_dc_cli_flags(parser)
     parser.add_argument(
         "--experiment-dir",
         type=str,
@@ -1378,6 +1412,7 @@ def main() -> int:
         return _worker_main(Path(args.worker_request))
 
     apply_amem_argparse_policy(parser, args)
+    apply_dc_argparse_policy(parser, args)
 
     hermes_root = _expand(args.hermes_root)
     appworld_root = _expand(args.appworld_root)
@@ -1461,7 +1496,7 @@ def main() -> int:
                 flush=True,
             )
             config_hermes_home = source_home if source_home.is_dir() else None
-        if hot_pool and not hot_pool_persist and not args.amem:
+        if hot_pool and not hot_pool_persist and not args.amem and not args.dc:
             hot_pool_persist = str(experiment_hot_pool_path(experiment_dir))
 
     amem_persist = resolve_amem_persist(
@@ -1471,6 +1506,16 @@ def main() -> int:
     )
     if args.amem:
         print(f"[amem] persist → {amem_persist} k={args.amem_k}", flush=True)
+    dc_persist = resolve_dc_persist(
+        enabled=bool(args.dc),
+        persist=args.dc_persist,
+        experiment_dir=experiment_dir,
+    )
+    if args.dc:
+        print(
+            f"[dc] persist → {dc_persist} mode={args.dc_mode} k={args.dc_k}",
+            flush=True,
+        )
 
     if hot_pool_persist:
         # Resolve once with host-safe expanduser so per-task re-apply never
@@ -1549,6 +1594,15 @@ def main() -> int:
             enabled=bool(args.amem),
             persist_dir=amem_persist,
             k=int(args.amem_k),
+            llm_model=resolved_model,
+            api_key=shared_runtime.get("api_key"),
+            base_url=shared_runtime.get("base_url"),
+        )
+        apply_dc_cli_overrides(
+            enabled=bool(args.dc),
+            persist_dir=dc_persist,
+            mode=str(args.dc_mode),
+            k=int(args.dc_k),
             llm_model=resolved_model,
             api_key=shared_runtime.get("api_key"),
             base_url=shared_runtime.get("base_url"),
@@ -1638,6 +1692,10 @@ def main() -> int:
                     "amem": bool(args.amem),
                     "amem_persist": amem_persist,
                     "amem_k": int(args.amem_k),
+                    "dc": bool(args.dc),
+                    "dc_persist": dc_persist,
+                    "dc_mode": str(args.dc_mode),
+                    "dc_k": int(args.dc_k),
                     "runtime": shared_runtime,
                     "config_hermes_home": config_hermes_home,
                 }
