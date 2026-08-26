@@ -266,6 +266,7 @@ from dc_baseline import (  # noqa: E402
     dc_telemetry_from_agent,
     resolve_dc_persist,
 )
+from hermes_hot_pool_outcome import apply_benchmark_hot_pool_outcome_feedback  # noqa: E402
 from run_skillsbench_with_hermes import (  # noqa: E402
     apply_hot_pool_cli_overrides,
     host_expand_path,
@@ -283,12 +284,30 @@ from skillsbench_experiment_workspace import (  # noqa: E402
 
 DATASET_NAMES = ("train", "dev", "test_normal", "test_challenge")
 
-_FULL_CODE_REGEX = re.compile(r"```python\n(.*?)```", re.DOTALL)
-_PARTIAL_CODE_REGEX = re.compile(r".*```python\n(.*)", re.DOTALL)
+_FULL_CODE_REGEX = re.compile(
+    r"```(?:python|py)\s*\n(.*?)```",
+    re.DOTALL | re.IGNORECASE,
+)
+_PARTIAL_CODE_REGEX = re.compile(
+    r".*```(?:python|py)\s*\n(.*)",
+    re.DOTALL | re.IGNORECASE,
+)
+_GENERIC_FENCE_REGEX = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+_APPWORLD_CODE_HINT = re.compile(
+    r"\b(?:apis\.|print\s*\(|# interact with apis)",
+    re.IGNORECASE,
+)
 _ROLE_SPLIT_REGEX = re.compile(r"(USER|ASSISTANT|SYSTEM):\n", re.IGNORECASE)
 
 _DEFAULT_MAX_HERMES_ITERATIONS_WITH_TOOLS = 90
 _DEFAULT_MAX_HERMES_ITERATIONS_NO_TOOLS = 1
+_MAX_PYTHON_FORMAT_RETRIES = 2
+_PYTHON_FORMAT_NUDGE = (
+    "Your last reply did not include a ```python ... ``` code block. "
+    "This AppWorld REPL only executes Python cells in that format—plain text "
+    "is not run. Reply again with exactly one ```python ... ``` block "
+    "(use print() or apis.* calls even if you believe the task is finished)."
+)
 
 _HERMES_BRIDGE_EPHEMERAL = (
     "You are solving an AppWorld benchmark task in a Python REPL that exposes "
@@ -296,14 +315,17 @@ _HERMES_BRIDGE_EPHEMERAL = (
     "files, web search, skills, memory, etc.) for research and preparation. "
     "When you are ready to interact with AppWorld APIs, your final reply for "
     "this turn must include exactly one ```python ... ``` code block to run in "
-    "the REPL. Follow the conversation format established in the prompt."
+    "the REPL—even if you are summarizing progress or believe the task is done. "
+    "Plain-text-only replies are invalid. Follow the conversation format "
+    "established in the prompt."
 )
 
 _HERMES_BRIDGE_EPHEMERAL_NO_TOOLS = (
     "You are solving an AppWorld benchmark task in a Python REPL that exposes "
     "an ``apis`` object. Respond with exactly one ```python ... ``` code block "
-    "per turn. Do not use tools. Do not browse the filesystem. Follow the "
-    "conversation format established in the prompt."
+    "per turn—even when reporting completion (use print() if needed). "
+    "Do not use tools. Do not browse the filesystem. Plain-text-only replies "
+    "are invalid. Follow the conversation format established in the prompt."
 )
 
 
@@ -462,7 +484,15 @@ def extract_python_code(text: str, *, ignore_multiple_calls: bool = True) -> str
     partial_match = _PARTIAL_CODE_REGEX.match(original_text[match_end:])
     if partial_match:
         output_code += partial_match.group(1).strip()
-    return output_code.strip()
+    if output_code.strip():
+        return output_code.strip()
+
+    # Fallback: a single generic fence that looks like AppWorld REPL code (not prose).
+    generic_blocks = [m.group(1).strip() for m in _GENERIC_FENCE_REGEX.finditer(original_text)]
+    generic_blocks = [b for b in generic_blocks if b and _APPWORLD_CODE_HINT.search(b)]
+    if len(generic_blocks) == 1:
+        return generic_blocks[0]
+    return ""
 
 
 def render_initial_prompt(
@@ -1011,31 +1041,53 @@ def run_one_task(
 
             for step_number in range(1, max_steps + 1):
                 history, user_message = split_history_for_turn(conversation)
-                step_result = agent.run_conversation(
-                    user_message=user_message,
-                    conversation_history=history,
-                    task_id=f"{hermes_task_id}-step-{step_number}",
-                )
-                _accumulate_hermes_stats(hermes_stats, step_result)
-
-                messages = step_result.get("messages") or []
-                if not messages or messages[-1].get("role") != "assistant":
-                    run_error = "Hermes did not return an assistant message."
-                    steps.append(
-                        {
-                            "step": step_number,
-                            "error": run_error,
-                            "hermes_result": json_safe(step_result),
-                        }
+                format_attempt = 0
+                step_result: Dict[str, Any] = {}
+                messages: List[Dict[str, Any]] = []
+                assistant_content = ""
+                code = ""
+                while True:
+                    step_result = agent.run_conversation(
+                        user_message=user_message,
+                        conversation_history=history,
+                        task_id=f"{hermes_task_id}-step-{step_number}",
                     )
+                    _accumulate_hermes_stats(hermes_stats, step_result)
+
+                    messages = step_result.get("messages") or []
+                    if not messages or messages[-1].get("role") != "assistant":
+                        run_error = "Hermes did not return an assistant message."
+                        steps.append(
+                            {
+                                "step": step_number,
+                                "error": run_error,
+                                "format_retries": format_attempt,
+                                "hermes_result": json_safe(step_result),
+                            }
+                        )
+                        break
+
+                    assistant_content = messages[-1].get("content") or ""
+                    code = extract_python_code(assistant_content)
+                    if code:
+                        break
+                    if format_attempt >= _MAX_PYTHON_FORMAT_RETRIES:
+                        break
+                    format_attempt += 1
+                    conversation_retry = copy.deepcopy(messages)
+                    conversation_retry.append(
+                        {"role": "user", "content": _PYTHON_FORMAT_NUDGE},
+                    )
+                    history, user_message = split_history_for_turn(conversation_retry)
+
+                if run_error:
                     break
 
-                assistant_content = messages[-1].get("content") or ""
-                code = extract_python_code(assistant_content)
                 step_record: Dict[str, Any] = {
                     "step": step_number,
                     "assistant_preview": assistant_content[:500],
                     "code": code,
+                    "format_retries": format_attempt,
                 }
                 if not code:
                     run_error = "No ```python block found in Hermes response."
@@ -1099,11 +1151,14 @@ def run_one_task(
 
     if agent is not None and evaluation is not None:
         try:
-            agent.apply_hot_pool_outcome_feedback(
+            apply_benchmark_hot_pool_outcome_feedback(
+                agent,
                 evaluation=evaluation,
                 run_result=hermes_stats,
                 duration_sec=duration_sec,
                 benchmark="appworld",
+                wait_background_review=False,
+                post_wait=_restore_stdio_for_appworld,
             )
         except Exception:
             pass

@@ -84,6 +84,7 @@ from dc_baseline import (  # noqa: E402
     dc_telemetry_from_agent,
     resolve_dc_persist,
 )
+from hermes_hot_pool_outcome import apply_benchmark_hot_pool_outcome_feedback  # noqa: E402
 from run_skillsbench_with_hermes import (  # noqa: E402
     apply_hot_pool_cli_overrides,
     resolve_agent_runtime,
@@ -367,7 +368,8 @@ def run_one_game(
         "failed": bool(hermes_stats.get("failed")),
     }
     try:
-        agent.apply_hot_pool_outcome_feedback(
+        apply_benchmark_hot_pool_outcome_feedback(
+            agent,
             evaluation=evaluation,
             run_result=run_conversation_result,
             duration_sec=duration_sec,

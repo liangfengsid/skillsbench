@@ -22,6 +22,8 @@ from agent.hot_skills import (
     heuristic_outcome_attributions,
     is_excluded_hot_skill,
     is_junk_key_point,
+    _fenced_char_ranges,
+    _position_in_fenced_region,
     llm_eviction_keep_ids,
     load_hot_skills_config,
     normalize_hot_scope_value,
@@ -1110,8 +1112,8 @@ def test_outcome_feedback_heuristic_persists_when_llm_empty(pool_cfg, tmp_path):
 
 def test_outcome_feedback_heuristic_failure_is_irrelevant(pool_cfg):
     items = [
-        {"id": "0", "skill": "a", "point": "NEVER skip examine"},
-        {"id": "1", "skill": "a", "point": "random leftover note"},
+        {"id": "0", "skill": "a", "point": "NEVER skip examine", "via": "inject"},
+        {"id": "1", "skill": "a", "point": "random leftover note", "via": "inject"},
     ]
     labels = heuristic_outcome_attributions(
         items, {"success": False, "iterations": 40}, low_step_threshold=12
@@ -1120,11 +1122,40 @@ def test_outcome_feedback_heuristic_failure_is_irrelevant(pool_cfg):
 
 
 def test_outcome_feedback_heuristic_ignores_wording():
-    items = [{"id": "0", "skill": "a", "point": "NEVER skip examine"}]
+    items = [{"id": "0", "skill": "a", "point": "NEVER skip examine", "via": "inject"}]
     labels = heuristic_outcome_attributions(
         items, {"success": True, "iterations": 40}, low_step_threshold=12
     )
     assert labels == {"0": "irrelevant"}
+
+
+def test_heuristic_outcome_only_injected_tips_helpful_on_success():
+    items = [
+        {"id": "0", "skill": "a", "point": "check fridge", "via": "inject"},
+        {"id": "1", "skill": "b", "point": "already in skill_view", "via": "history"},
+    ]
+    labels = heuristic_outcome_attributions(
+        items, {"success": True, "iterations": 8}, low_step_threshold=12
+    )
+    assert labels == {"0": "helpful", "1": "irrelevant"}
+
+
+def test_heuristic_outcome_history_skipped_even_on_fast_success(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(name="nav", content="", key_points=["tip from history"], turn=1)
+    pool._exposed_tips[("nav", "tip from history")] = {
+        "skill": "nav",
+        "point": "tip from history",
+        "scope": "",
+        "via": "history",
+    }
+    summary = pool.apply_outcome_feedback(
+        {"success": True, "reward": 1.0, "iterations": 5},
+        complete_fn=lambda _m: "",
+    )
+    assert summary["attribution_source"] == "heuristic"
+    assert summary["attributions"]["irrelevant"] == 1
+    assert summary["attributions"].get("helpful", 0) == 0
 
 
 def test_inject_score_penalizes_slow_successes():
@@ -1250,6 +1281,74 @@ def test_excluded_meta_skill_not_admitted(pool_cfg):
     )
     assert "hermes-agent-skill-authoring" not in pool._entries
     assert pool._telemetry.records_skipped_excluded_skill == 1
+
+
+def test_appworld_batch_platform_excludes_mcp_media_skills(pool_cfg):
+    assert is_excluded_hot_skill(
+        "spotify",
+        {"runtime_platform": "appworld-batch", "exclude_skills_from_pool": []},
+    )
+    assert not is_excluded_hot_skill(
+        "spotify",
+        {"runtime_platform": "cli", "exclude_skills_from_pool": []},
+    )
+
+
+def test_set_platform_evicts_mcp_media_from_pool(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(
+        name="spotify",
+        content="<!-- hermes-hot -->\n- ALWAYS check Premium before playback\n<!-- /hermes-hot -->",
+        turn=1,
+    )
+    assert "spotify" in pool._entries
+    pool.set_platform("appworld-batch")
+    assert "spotify" not in pool._entries
+
+
+def test_extract_section_points_skips_headings_inside_code_fences():
+    content = """
+## SKILL.md Format
+
+```markdown
+---
+name: skill-name
+---
+
+# Skill Name
+
+## Key Points
+
+- Important details
+```
+
+## Common Pitfalls
+
+- ALWAYS paginate API results
+"""
+    points = extract_hot_key_points(
+        content,
+        config={
+            "use_hermes_hot_markers": False,
+            "extract_sections": True,
+            "fallback_extract": False,
+            "junk_filter": True,
+            "max_points_per_skill": 8,
+            "max_chars_per_point": 240,
+        },
+    )
+    assert "Important details" not in points
+    assert any("paginate" in p.lower() for p in points)
+
+
+def test_fenced_char_ranges_open_close():
+    text = "before\n```markdown\n## Key Points\n- fake\n```\nafter"
+    ranges = _fenced_char_ranges(text)
+    assert len(ranges) == 1
+    start, end = ranges[0]
+    assert "## Key Points" in text[start:end]
+    assert _position_in_fenced_region(text.index("## Key Points"), ranges)
+    assert not _position_in_fenced_region(0, ranges)
 
 
 def test_reconcile_on_update_runs_llm_under_cap():

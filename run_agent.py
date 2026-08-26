@@ -1757,6 +1757,11 @@ class AIAgent:
             self._hot_skill_pool.eviction_judge = self._hot_pool_eviction_judge
         except Exception:
             pass
+        try:
+            if getattr(self, "platform", None):
+                self._hot_skill_pool.set_platform(self.platform)
+        except Exception:
+            pass
 
         # Tool-use enforcement config: "auto" (default — matches hardcoded
         # model list), true (always), false (never), or list of substrings.

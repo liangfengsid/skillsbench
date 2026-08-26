@@ -112,6 +112,7 @@ from dc_baseline import (  # noqa: E402
     dc_telemetry_from_agent,
     resolve_dc_persist,
 )
+from hermes_hot_pool_outcome import apply_benchmark_hot_pool_outcome_feedback  # noqa: E402
 from skillsbench_metrics import build_envelope_metrics  # noqa: E402
 
 
@@ -478,11 +479,13 @@ def run_one_task(
             eval_timeout_sec=eval_timeout_sec,
         )
         try:
-            agent.apply_hot_pool_outcome_feedback(
+            apply_benchmark_hot_pool_outcome_feedback(
+                agent,
                 evaluation=evaluation,
                 run_result=result if isinstance(result, dict) else None,
                 duration_sec=elapsed,
                 benchmark=benchmark_id,
+                wait_background_review=False,
             )
             refreshed = agent.export_hot_pool_telemetry()
             if refreshed is not None and isinstance(result, dict):

@@ -28,6 +28,26 @@ def test_extract_python_code_single_block():
     assert mod.extract_python_code(text) == "print(apis.api_docs.show_app_descriptions())"
 
 
+def test_extract_python_code_case_insensitive_and_py_tag():
+    mod = _load_module()
+    text = "```Python\nprint(1)\n```"
+    assert mod.extract_python_code(text) == "print(1)"
+    text2 = "```py\napis.spotify.show_playlist_library()\n```"
+    assert "apis.spotify" in mod.extract_python_code(text2)
+
+
+def test_extract_python_code_generic_fence_with_apis_hint():
+    mod = _load_module()
+    text = "Run this:\n```\napis.file_system.list_dir(path='.')\n```"
+    assert mod.extract_python_code(text) == "apis.file_system.list_dir(path='.')"
+
+
+def test_extract_python_code_rejects_prose_fenced_blocks():
+    mod = _load_module()
+    text = "Outline:\n```\n1. How to Use This Guide\n   1.1. Identify your goal\n```"
+    assert mod.extract_python_code(text) == ""
+
+
 def test_text_to_messages_roles():
     mod = _load_module()
     prompt = "USER:\nhello\n\nASSISTANT:\nworld\n"
@@ -287,7 +307,7 @@ def test_script_documents_hot_pool_cli_flags():
     assert "--isolate-hermes-home" in text
     assert "--experiment-dir" in text
     assert "--amem" in text
-    assert "apply_hot_pool_outcome_feedback" in text
+    assert "apply_benchmark_hot_pool_outcome_feedback" in text
     assert "task_success" in text
 
 

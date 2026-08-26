@@ -944,6 +944,8 @@ DEFAULT_CONFIG = {
             "reconcile_on_update": True,
             "junk_filter": True,
             "junk_min_point_chars": 12,
+            # Extra skill names denied at admit (merged with built-in meta denylist).
+            # On ``appworld-batch``, bundled ``skills/media/*`` MCP skills are also denied.
             "exclude_skills_from_pool": [],
             "inject_on_turn": True,
             # Omit pool skills already opened via skill_view in recent history

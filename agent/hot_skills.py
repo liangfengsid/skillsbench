@@ -131,6 +131,20 @@ _PLACEHOLDER_ONLY_RE = re.compile(
 # Meta / authoring skills — never admit to the broadcast pool.
 _DEFAULT_EXCLUDE_SKILLS_FROM_POOL = frozenset({"hermes-agent-skill-authoring"})
 
+# Bundled ``skills/media/*`` — real MCP / external API integrations (not ``apis.*`` REPL).
+_DEFAULT_MCP_MEDIA_SKILLS_FROM_POOL = frozenset(
+    {
+        "spotify",
+        "gif-search",
+        "heartmula",
+        "youtube-content",
+        "songsee",
+    }
+)
+
+# Sandbox REPL platforms where MCP media tips are wrong-domain (e.g. ``apis.spotify``).
+_PLATFORM_DENY_MCP_MEDIA_SKILLS = frozenset({"appworld-batch"})
+
 # Template bullets from SKILL.md examples (not real guardrails).
 _JUNK_POINT_EXACT = frozenset(
     {
@@ -323,7 +337,11 @@ def extract_hot_key_points(content: str, config: Optional[dict] = None) -> List[
 
 def skill_has_hot_section(content: str) -> bool:
     """True if SKILL.md has a Pitfalls / Best Practices / Key Points-style heading."""
-    for match in _HEADING_RE.finditer(content or ""):
+    text = content or ""
+    fenced = _fenced_char_ranges(text)
+    for match in _HEADING_RE.finditer(text):
+        if _position_in_fenced_region(match.start(), fenced):
+            continue
         if _is_hot_section_title(match.group(2)):
             return True
     return False
@@ -457,15 +475,22 @@ def abstract_hot_key_points(points: List[str], config: Optional[dict] = None) ->
     return out
 
 
+def _platform_exclude_skills(config: dict) -> Set[str]:
+    """Skill names denied for the active runtime platform (e.g. MCP media on REPL batch)."""
+    platform = str(config.get("runtime_platform") or "").strip().lower()
+    if platform in _PLATFORM_DENY_MCP_MEDIA_SKILLS:
+        return {s.lower() for s in _DEFAULT_MCP_MEDIA_SKILLS_FROM_POOL}
+    return set()
+
+
 def is_excluded_hot_skill(name: str, config: Optional[dict] = None) -> bool:
-    """True when a skill must never enter the hot pool (meta/authoring docs)."""
+    """True when a skill must never enter the hot pool (meta/authoring / platform deny)."""
     cfg = config if isinstance(config, dict) else load_hot_skills_config()
-    if not cfg.get("junk_filter", True):
-        return False
     key = (name or "").strip().lower()
     if not key:
         return False
     deny = {s.lower() for s in _DEFAULT_EXCLUDE_SKILLS_FROM_POOL}
+    deny.update(_platform_exclude_skills(cfg))
     extra = cfg.get("exclude_skills_from_pool") or []
     if isinstance(extra, (list, tuple)):
         deny.update(str(s).strip().lower() for s in extra if str(s).strip())
@@ -523,9 +548,11 @@ def heuristic_outcome_attributions(
 ) -> Dict[str, str]:
     """Label exposed tips when the attribution LLM is missing or empty.
 
-    Outcome-only: success + low steps → helpful; otherwise irrelevant.
-    Tip wording is not a signal — meaning stays with the side-channel judge.
-    Never invents ``harmful``.
+    Per-point and exposure-aware: only tips actually injected this turn
+    (``via == "inject"``) may be ``helpful`` on success with low steps.
+    History-only exposure (``via == "history"`` — skill already in recent
+    ``skill_view``) is always ``irrelevant``. Tip wording is not a signal;
+    meaning stays with the side-channel judge. Never invents ``harmful``.
     """
     success = bool(outcome.get("success"))
     iterations = None
@@ -539,10 +566,13 @@ def heuristic_outcome_attributions(
     )
     labels: Dict[str, str] = {}
     for item in items:
-        iid = str(item.get("id") if isinstance(item, dict) else "")
+        if not isinstance(item, dict):
+            continue
+        iid = str(item.get("id") or "")
         if not iid:
             continue
-        if success and low_steps:
+        via = str(item.get("via") or "")
+        if success and low_steps and via == "inject":
             labels[iid] = "helpful"
         else:
             labels[iid] = "irrelevant"
@@ -1010,6 +1040,17 @@ class HotSkillPool:
         self._exposed_tips: "OrderedDict[Tuple[str, str], Dict[str, Any]]" = OrderedDict()
         if self._persist_enabled():
             self._load_persisted()
+
+    def set_platform(self, platform: str) -> None:
+        """Set runtime platform for deny rules; evict entries that no longer qualify."""
+        self._config["runtime_platform"] = (platform or "").strip()
+        evicted = 0
+        for name in list(self._entries.keys()):
+            if is_excluded_hot_skill(name, self._config):
+                self.evict(name)
+                evicted += 1
+        if evicted:
+            self._maybe_persist()
 
     def _normalize_config(self) -> None:
         self._config = _normalize_hot_pool_cfg(self._config)
@@ -1710,9 +1751,9 @@ class HotSkillPool:
         """Attribute exposed tips after a labeled task; persist utilities.
 
         Prefers a side-channel LLM (transfer vs episode-local is a prompt
-        judgment). When that is missing or unparseable, a conservative
-        heuristic labels low-step successes as helpful and everything else
-        as irrelevant so scores actually land on the store and can rank inject.
+        judgment).         When that is missing or unparseable, a conservative per-point
+        heuristic labels only injected tips on low-step success as helpful;
+        history-only exposure is irrelevant so utilities can rank inject.
         """
         summary = {
             "applied": False,
@@ -1981,13 +2022,41 @@ def _is_hot_section_title(title: str) -> bool:
     return any(pat.search(normalized) for pat in _HOT_SECTION_TITLE_RES)
 
 
+def _fenced_char_ranges(content: str) -> List[Tuple[int, int]]:
+    """Return ``(start, end)`` spans inside markdown ``` fenced blocks (exclusive of markers)."""
+    ranges: List[Tuple[int, int]] = []
+    in_fence = False
+    fence_start = 0
+    pos = 0
+    for line in (content or "").splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if not in_fence:
+                in_fence = True
+                fence_start = pos + len(line)
+            else:
+                ranges.append((fence_start, pos))
+                in_fence = False
+        pos += len(line)
+    if in_fence:
+        ranges.append((fence_start, len(content)))
+    return ranges
+
+
+def _position_in_fenced_region(pos: int, fenced_ranges: List[Tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in fenced_ranges)
+
+
 def _extract_section_points(content: str) -> List[str]:
     headings = list(_HEADING_RE.finditer(content))
     if not headings:
         return []
 
+    fenced = _fenced_char_ranges(content)
     points: List[str] = []
     for idx, match in enumerate(headings):
+        if _position_in_fenced_region(match.start(), fenced):
+            continue
         title = match.group(2).strip()
         if not _is_hot_section_title(title):
             continue
