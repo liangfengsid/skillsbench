@@ -129,7 +129,12 @@ _PLACEHOLDER_ONLY_RE = re.compile(
 )
 
 # Meta / authoring skills — never admit to the broadcast pool.
-_DEFAULT_EXCLUDE_SKILLS_FROM_POOL = frozenset({"hermes-agent-skill-authoring"})
+_DEFAULT_EXCLUDE_SKILLS_FROM_POOL = frozenset(
+    {
+        "hermes-agent-skill-authoring",
+        "hermes-agent",
+    }
+)
 
 # Bundled ``skills/media/*`` — real MCP / external API integrations (not ``apis.*`` REPL).
 _DEFAULT_MCP_MEDIA_SKILLS_FROM_POOL = frozenset(
@@ -144,6 +149,15 @@ _DEFAULT_MCP_MEDIA_SKILLS_FROM_POOL = frozenset(
 
 # Sandbox REPL platforms where MCP media tips are wrong-domain (e.g. ``apis.spotify``).
 _PLATFORM_DENY_MCP_MEDIA_SKILLS = frozenset({"appworld-batch"})
+
+# Agent final-response phrases that falsely claim pass/completion.
+_CLAIMED_PASS_RE = re.compile(
+    r"(?i)\b("
+    r"all tests passed|all \d+ tests passed|task (?:is )?complete|"
+    r"successfully completed|verification passed|fully passed|"
+    r"tests pass(?:ed)?(?: successfully)?|macro success"
+    r")\b"
+)
 
 # Template bullets from SKILL.md examples (not real guardrails).
 _JUNK_POINT_EXACT = frozenset(
@@ -165,6 +179,17 @@ _JUNK_POINT_PREFIX_RES = (
     re.compile(r"^don'?t put session progress\b", re.IGNORECASE),
 )
 
+# Oracle / harness shortcuts that do not transfer across benchmark tasks.
+_JUNK_POINT_SUBSTRING_RES = (
+    re.compile(r"pre-existing solution", re.IGNORECASE),
+    re.compile(r"reference solution", re.IGNORECASE),
+    re.compile(r"\bsolution/solve\.sh\b", re.IGNORECASE),
+    re.compile(r"static ground truth", re.IGNORECASE),
+    re.compile(r"skip heavy build", re.IGNORECASE),
+    re.compile(r"ground truth.*from.*test", re.IGNORECASE),
+    re.compile(r"read.*expected.*from.*test", re.IGNORECASE),
+)
+
 _DEFAULT_HOT_POOL = {
     "enabled": True,
     # Retain = inject: this many key points are stored and dumped into
@@ -183,6 +208,8 @@ _DEFAULT_HOT_POOL = {
     "eviction_policy": "llm",
     # Run LLM reconcile after admit/sync even when the pool is under cap.
     "reconcile_on_update": True,
+    # Per-tip side-channel gate before admit (transfer vs episode-local).
+    "admit_transfer_gate": True,
     # Drop template/meta bullets after extract (see filter_junk_key_points).
     "junk_filter": True,
     "junk_min_point_chars": 12,
@@ -219,6 +246,10 @@ _PERSIST_SCHEMA = "hermes.hot_skill_pool.v1"
 
 # Optional test/agent hook: (items, keep_n, context) -> list[id str] to keep.
 EvictionJudge = Callable[[List[Dict[str, Any]], int, str], Optional[List[str]]]
+# Side-channel gate: (items, skill_name, scope, context) -> ids to admit.
+AdmissionJudge = Callable[
+    [List[Dict[str, Any]], str, str, str], Optional[List[str]]
+]
 
 
 def _normalize_hot_pool_cfg(cfg: dict) -> dict:
@@ -252,6 +283,7 @@ def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     cfg["abstract_extract"] = bool(cfg.get("abstract_extract", True))
     cfg["inject_filter_utilities"] = bool(cfg.get("inject_filter_utilities", True))
     cfg["reconcile_on_update"] = bool(cfg.get("reconcile_on_update", True))
+    cfg["admit_transfer_gate"] = bool(cfg.get("admit_transfer_gate", True))
     cfg["junk_filter"] = bool(cfg.get("junk_filter", True))
     cfg["junk_min_point_chars"] = max(
         4, int(cfg.get("junk_min_point_chars", 12) or 12)
@@ -483,6 +515,17 @@ def _platform_exclude_skills(config: dict) -> Set[str]:
     return set()
 
 
+def is_oracle_style_tip(text: str) -> bool:
+    """True when a tip encodes oracle/harness shortcuts (non-transferable)."""
+    pt = re.sub(r"\s+", " ", (text or "").strip())
+    if not pt:
+        return False
+    for pat in _JUNK_POINT_SUBSTRING_RES:
+        if pat.search(pt):
+            return True
+    return False
+
+
 def is_excluded_hot_skill(name: str, config: Optional[dict] = None) -> bool:
     """True when a skill must never enter the hot pool (meta/authoring / platform deny)."""
     cfg = config if isinstance(config, dict) else load_hot_skills_config()
@@ -514,6 +557,9 @@ def is_junk_key_point(text: str, config: Optional[dict] = None) -> bool:
     if len(pt) < min_len and not _GUARDRAIL_PREFIX_RE.match(pt):
         return True
     for pat in _JUNK_POINT_PREFIX_RES:
+        if pat.search(pt):
+            return True
+    for pat in _JUNK_POINT_SUBSTRING_RES:
         if pat.search(pt):
             return True
     return False
@@ -550,11 +596,11 @@ def heuristic_outcome_attributions(
 
     Per-point and exposure-aware: only tips actually injected this turn
     (``via == "inject"``) may be ``helpful`` on success with low steps.
-    History-only exposure (``via == "history"`` — skill already in recent
-    ``skill_view``) is always ``irrelevant``. Tip wording is not a signal;
-    meaning stays with the side-channel judge. Never invents ``harmful``.
+    Injected tips on failure or claimed-success mismatch are ``harmful``.
+    History-only exposure (``via == "history"``) is ``irrelevant``.
     """
     success = bool(outcome.get("success"))
+    claimed_mismatch = bool(outcome.get("claimed_success_mismatch"))
     iterations = None
     if outcome.get("iterations") is not None:
         try:
@@ -572,7 +618,14 @@ def heuristic_outcome_attributions(
         if not iid:
             continue
         via = str(item.get("via") or "")
-        if success and low_steps and via == "inject":
+        if via != "inject":
+            labels[iid] = "irrelevant"
+            continue
+        if claimed_mismatch:
+            labels[iid] = "harmful"
+        elif not success:
+            labels[iid] = "harmful"
+        elif low_steps:
             labels[iid] = "helpful"
         else:
             labels[iid] = "irrelevant"
@@ -667,7 +720,24 @@ def build_hot_pool_outcome(
             outcome["tests_total"] = int(ev["tests_total"])
         except (TypeError, ValueError):
             pass
+    if detect_claimed_success_mismatch(ev, res):
+        outcome["claimed_success_mismatch"] = True
     return outcome
+
+
+def detect_claimed_success_mismatch(
+    evaluation: Optional[dict],
+    run_result: Optional[dict],
+) -> bool:
+    """True when the agent claimed pass/completion but labeled eval failed."""
+    ev = evaluation if isinstance(evaluation, dict) else {}
+    res = run_result if isinstance(run_result, dict) else {}
+    if bool(ev.get("task_success") if "task_success" in ev else ev.get("success")):
+        return False
+    final = str(res.get("final_response") or "").strip()
+    if not final:
+        return False
+    return bool(_CLAIMED_PASS_RE.search(final))
 
 
 def derive_hot_scope(
@@ -753,6 +823,8 @@ class HotPoolTelemetry:
     records_skipped_no_points: int = 0
     records_skipped_excluded_skill: int = 0
     records_junk_filtered: int = 0
+    records_admit_gate_dropped: int = 0
+    evicted_deterministic: int = 0
     persist_path: str = ""
     build_block_applied: bool = False
     skills_injected: List[str] = field(default_factory=list)
@@ -801,6 +873,7 @@ class HotPoolTelemetry:
                 "records_skipped_no_points": self.records_skipped_no_points,
                 "records_skipped_excluded_skill": self.records_skipped_excluded_skill,
                 "records_junk_filtered": self.records_junk_filtered,
+                "records_admit_gate_dropped": self.records_admit_gate_dropped,
                 "persist_path": self.persist_path,
             },
             "inject": {
@@ -829,6 +902,7 @@ class HotPoolTelemetry:
             },
             "eviction": {
                 "capacity": self.evicted_capacity,
+                "deterministic": self.evicted_deterministic,
                 "reconcile_ran": self.reconcile_ran,
             },
             "outcome_feedback": {
@@ -1033,6 +1107,7 @@ class HotSkillPool:
         self._active_turn: int = 0
         self._admission_context: str = ""
         self.eviction_judge = eviction_judge
+        self.admission_judge: Optional[AdmissionJudge] = None
         self._telemetry = HotPoolTelemetry()
         self._telemetry_turn_started = False
         self._pool_at_turn_start: Set[str] = set()
@@ -1221,6 +1296,27 @@ class HotSkillPool:
             self._telemetry.records_skipped_no_points += 1
             return
 
+        tag_list = [str(t) for t in (tags or []) if t]
+        desc = (description or "").strip()
+        scope = derive_hot_scope(key, description=desc, tags=tag_list)
+        context = user_message if user_message is not None else self._admission_context
+        before_gate = len(points)
+        points = self._gate_admission_points(
+            key,
+            points,
+            scope=scope,
+            context=context or "",
+        )
+        if before_gate > len(points):
+            self._telemetry.records_admit_gate_dropped += before_gate - len(points)
+        if not points:
+            logger.debug(
+                "hot skill pool: no transferable key points for %r after admit gate — skipping",
+                key,
+            )
+            self._telemetry.records_skipped_no_points += 1
+            return
+
         previous = self._entries.get(key)
         if previous is not None and self._config.get("outcome_feedback", True):
             prev_utils = {
@@ -1244,9 +1340,6 @@ class HotSkillPool:
                 return
 
         mtime = _skill_md_mtime(skill_dir)
-        tag_list = [str(t) for t in (tags or []) if t]
-        desc = (description or "").strip()
-        scope = derive_hot_scope(key, description=desc, tags=tag_list)
         previous = self._entries.pop(key, None)
         now = self._effective_turn(turn)
         entry = HotSkillEntry(
@@ -1261,7 +1354,6 @@ class HotSkillPool:
             point_utilities=align_point_utilities(points, previous=previous),
         )
         self._entries[key] = entry
-        context = user_message if user_message is not None else self._admission_context
         self.reconcile_pool(new_name=key, context=context or "", material_update=True)
         self._telemetry.new_records_this_task += 1
         self._maybe_persist()
@@ -1635,6 +1727,105 @@ class HotSkillPool:
         if not entry.key_points:
             self._entries.pop(skill, None)
 
+    def _gate_admission_points(
+        self,
+        skill_name: str,
+        points: List[str],
+        *,
+        scope: str,
+        context: str,
+    ) -> List[str]:
+        """Per-tip transfer gate before admit (LLM when configured, else deterministic)."""
+        if not self._config.get("admit_transfer_gate", True) or not points:
+            return list(points)
+        items = [
+            {"id": str(i), "point": p, "scope": scope or ""}
+            for i, p in enumerate(points)
+        ]
+        admit_ids: Optional[List[str]] = None
+        if callable(self.admission_judge):
+            try:
+                admit_ids = self.admission_judge(
+                    items,
+                    skill_name,
+                    scope or "",
+                    context or "",
+                )
+            except Exception:
+                logger.debug("hot skill admission_judge failed", exc_info=True)
+                admit_ids = None
+        if admit_ids is not None:
+            keep = {str(i) for i in admit_ids}
+            filtered = [p for i, p in enumerate(points) if str(i) in keep]
+        else:
+            filtered = [p for p in points if not is_oracle_style_tip(p)]
+        if not filtered and points:
+            filtered = [p for p in points if not is_oracle_style_tip(p)]
+        return filtered
+
+    def _deterministic_reconcile_drops(self, cap: int) -> int:
+        """Drop oracle tips and harmful-heavy utilities before/alongside LLM reconcile."""
+        dropped = 0
+        for name in list(self._entries.keys()):
+            entry = self._entries.get(name)
+            if entry is None:
+                continue
+            for idx in reversed(range(len(entry.key_points))):
+                if is_oracle_style_tip(entry.key_points[idx]):
+                    self._drop_point(name, idx)
+                    dropped += 1
+
+        skill_counts = {
+            name: len(entry.key_points)
+            for name, entry in self._entries.items()
+            if entry.key_points
+        }
+
+        while self._total_points() > cap:
+            items = self._point_items()
+            if not items:
+                break
+
+            oracle_items = [
+                it
+                for it in items
+                if is_oracle_style_tip(str(it.get("point") or ""))
+            ]
+            if oracle_items:
+                victim = oracle_items[0]
+            else:
+                harmful_items = [
+                    it
+                    for it in items
+                    if int((it.get("utility") or {}).get("n_labeled") or 0) > 0
+                    and int((it.get("utility") or {}).get("harmful") or 0)
+                    > int((it.get("utility") or {}).get("helpful") or 0)
+                ]
+                if harmful_items:
+                    victim = max(
+                        harmful_items,
+                        key=lambda it: (
+                            int((it.get("utility") or {}).get("harmful") or 0),
+                            int(it.get("recorded_turn") or 0),
+                        ),
+                    )
+                else:
+                    victim = min(
+                        items,
+                        key=lambda it: (
+                            int(it.get("recorded_turn") or 0),
+                            str(it.get("skill") or ""),
+                            int(it.get("index") or 0),
+                        ),
+                    )
+            skill = str(victim["skill"])
+            index = int(victim["index"])
+            self._drop_point(skill, index)
+            if skill in skill_counts:
+                skill_counts[skill] = max(0, skill_counts.get(skill, 1) - 1)
+            dropped += 1
+        return dropped
+
     def reconcile_pool(
         self,
         *,
@@ -1670,6 +1861,13 @@ class HotSkillPool:
         reconcile_on_update = bool(self._config.get("reconcile_on_update", True))
 
         evicted = 0
+        if material_update or total > cap:
+            det = self._deterministic_reconcile_drops(cap)
+            if det:
+                self._telemetry.evicted_deterministic += det
+                evicted += det
+                total = self._total_points()
+
         should_llm = (
             policy == "llm"
             and callable(self.eviction_judge)
@@ -1682,6 +1880,8 @@ class HotSkillPool:
         if should_llm:
             self._telemetry.reconcile_ran = True
             evicted += self._apply_llm_keep(cap, context)
+        elif evicted and material_update:
+            self._telemetry.reconcile_ran = True
 
         while self._total_points() > cap:
             items = self._point_items()
@@ -1861,6 +2061,9 @@ class HotSkillPool:
 
         if scored:
             self._maybe_persist()
+            if self._config.get("reconcile_on_update", True):
+                bench = str(outcome.get("benchmark") or "")
+                self.reconcile_pool(context=bench, material_update=True)
         summary.update(
             {
                 "applied": scored > 0,
@@ -2263,8 +2466,111 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "being admitted and to break ties. Do NOT treat \"most relevant to "
         "context\", \"will help if this task is repeated\", or \"likely needed "
         "on similar seen tasks\" as the primary keep criterion under "
-        "retain = inject."
+        "retain = inject.\n"
+        "\n"
+        "When utilities_flat_no_helpful is true in the user payload, no tip "
+        "yet has a helpful attribution — prefer dropping oracle/cheatsheet "
+        "candidates and episode-local recipes even if they are merely irrelevant."
     )
+
+
+def build_admit_transfer_system_prompt() -> str:
+    """System prompt for per-tip admission gate (transfer vs episode-local)."""
+    return (
+        "You gate admission of individual hot-skill key points to a broadcast pool.\n"
+        "\n"
+        "Every admitted tip will be injected on later tasks, including held-out "
+        "tasks never seen while the pool was built. Admit only tips that remain "
+        "meaningful after stripping instance-specific tokens and would help on an "
+        "unseen task in the same benchmark/environment genre.\n"
+        "\n"
+        "Return JSON only: {\"admit\": [\"id\", ...]} listing ids to admit from "
+        "the provided candidates. Omit ids for non-transferable tips. Prefer "
+        "admitting fewer strong tips over keeping marginal ones.\n"
+        "\n"
+        "ADMIT tips that:\n"
+        "- State evaluator-/environment-agnostic process rules (write graded outputs "
+        "where the harness reads them; verify on the graded surface; use admissible "
+        "APIs/tools)\n"
+        "- Describe reusable pitfalls without absolute paths, task IDs, or oracle "
+        "shortcuts\n"
+        "\n"
+        "REJECT tips that:\n"
+        "- Tell the agent to run bundled solution/ scripts, read ground truth from "
+        "tests, or skip builds using static expected constants\n"
+        "- Encode one episode's Docker/Lean/install recipe rather than a reusable rule\n"
+        "- Would mislead on an unrelated later task\n"
+    )
+
+
+def build_admit_transfer_messages(
+    items: List[Dict[str, Any]],
+    skill_name: str,
+    scope: str,
+    context: str,
+) -> List[Dict[str, str]]:
+    payload = {
+        "skill_name": skill_name,
+        "scope": scope or "",
+        "context": context or "",
+        "candidates": items,
+    }
+    return [
+        {"role": "system", "content": build_admit_transfer_system_prompt()},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+
+
+def parse_admit_transfer_ids(
+    text: str,
+    items: List[Dict[str, Any]],
+) -> Optional[List[str]]:
+    valid_ids = {str(it["id"]) for it in items}
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    raw = re.sub(
+        r"<think(?:ing)?\b[^>]*>.*?</think(?:ing)?>",
+        "",
+        raw,
+        flags=re.I | re.DOTALL,
+    ).strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I).strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    admit = data.get("admit") if isinstance(data, dict) else None
+    if not isinstance(admit, list):
+        return None
+    out = [str(i) for i in admit if str(i) in valid_ids]
+    return out if out else []
+
+
+def llm_admit_transfer_ids(
+    items: List[Dict[str, Any]],
+    skill_name: str,
+    scope: str,
+    context: str,
+    complete_fn: Callable[[List[Dict[str, str]]], str],
+) -> Optional[List[str]]:
+    if not callable(complete_fn) or not items:
+        return None
+    try:
+        text = complete_fn(
+            build_admit_transfer_messages(items, skill_name, scope, context)
+        ) or ""
+    except Exception:
+        logger.debug("hot skill llm admit transfer complete_fn failed", exc_info=True)
+        return None
+    return parse_admit_transfer_ids(text, items)
 
 
 def build_outcome_attribution_messages(
@@ -2282,12 +2588,19 @@ def build_outcome_attribution_messages(
         "benchmarks where success is near-ceiling, prefer judging whether a tip "
         "helped or hurt efficiency and reliability.\n"
         "\n"
+        "When outcome.claimed_success_mismatch is true, the agent asserted "
+        "pass/completion in its final response but labeled evaluation failed — "
+        "label injected tips that plausibly steered toward wrong-env verification, "
+        "oracle/replay shortcuts, or premature success claims as harmful.\n"
+        "\n"
         "Return JSON only: {\"labels\": {\"<id>\": \"helpful\"|\"harmful\"|"
         "\"irrelevant\", ...}} for the given point ids. Do not invent ids.\n"
         "- helpful: tip is a transferable process or constraint that plausibly "
         "improved this episode and would still apply to a new task instance\n"
         "- harmful: tip plausibly caused waste, wrong paths, or failure modes, "
-        "or would mislead on a different instance (wrong object, path, account)\n"
+        "or would mislead on a different instance (wrong object, path, account). "
+        "On task failure, prefer harmful over irrelevant for injected tips that "
+        "prescribe shortcuts, oracle replay, or environment-specific cheats\n"
         "- irrelevant: tip did not meaningfully affect this episode, OR it is "
         "an episode-local recap (specific objects/locations/accounts/filenames) "
         "even if the episode succeeded — those do not transfer\n"
@@ -2355,6 +2668,14 @@ def build_llm_eviction_messages(
     context: str,
 ) -> List[Dict[str, str]]:
     """Isolated judge prompt — not appended to the conversation."""
+    labeled = [
+        it
+        for it in items
+        if int((it.get("utility") or {}).get("n_labeled") or 0) > 0
+    ]
+    utilities_flat = bool(labeled) and all(
+        int((it.get("utility") or {}).get("helpful") or 0) == 0 for it in labeled
+    )
     payload = {
         "selection_goal": (
             "Choose a keep-set that transfers to held-out / unseen tasks "
@@ -2368,6 +2689,7 @@ def build_llm_eviction_messages(
         ),
         "context": context or "",
         "keep_n": keep_n,
+        "utilities_flat_no_helpful": utilities_flat,
         "points": items,
     }
     return [

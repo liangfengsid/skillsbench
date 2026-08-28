@@ -60,6 +60,7 @@ def pool_cfg():
         "max_chars": 2000,
         "max_points_per_skill": 8,
         "max_chars_per_point": 240,
+        "junk_min_point_chars": 4,
         "eviction_policy": "oldest",
         "inject_on_turn": True,
         "skip_if_in_history": True,
@@ -240,6 +241,7 @@ def test_global_pool_max_entries_is_retain_and_inject():
         "max_chars": 4000,
         "max_points_per_skill": 8,
         "max_chars_per_point": 240,
+        "junk_min_point_chars": 4,
         "eviction_policy": "oldest",
         "inject_on_turn": True,
     }
@@ -580,6 +582,7 @@ def test_persist_oldest_eviction_uses_global_turn_across_conversations(tmp_path)
         "max_chars": 2000,
         "max_points_per_skill": 8,
         "max_chars_per_point": 240,
+        "junk_min_point_chars": 4,
         "eviction_policy": "oldest",
         "inject_on_turn": True,
         "persist_across_conversations": True,
@@ -732,6 +735,7 @@ def test_llm_eviction_falls_back_to_oldest_without_judge():
         "max_chars": 4000,
         "max_points_per_skill": 8,
         "max_chars_per_point": 240,
+        "junk_min_point_chars": 4,
         "eviction_policy": "llm",
         "inject_on_turn": True,
     }
@@ -1110,7 +1114,7 @@ def test_outcome_feedback_heuristic_persists_when_llm_empty(pool_cfg, tmp_path):
     assert util["helpful"] == 1
 
 
-def test_outcome_feedback_heuristic_failure_is_irrelevant(pool_cfg):
+def test_outcome_feedback_heuristic_failure_marks_injected_harmful(pool_cfg):
     items = [
         {"id": "0", "skill": "a", "point": "NEVER skip examine", "via": "inject"},
         {"id": "1", "skill": "a", "point": "random leftover note", "via": "inject"},
@@ -1118,7 +1122,7 @@ def test_outcome_feedback_heuristic_failure_is_irrelevant(pool_cfg):
     labels = heuristic_outcome_attributions(
         items, {"success": False, "iterations": 40}, low_step_threshold=12
     )
-    assert labels == {"0": "irrelevant", "1": "irrelevant"}
+    assert labels == {"0": "harmful", "1": "harmful"}
 
 
 def test_outcome_feedback_heuristic_ignores_wording():
@@ -1292,6 +1296,137 @@ def test_appworld_batch_platform_excludes_mcp_media_skills(pool_cfg):
         "spotify",
         {"runtime_platform": "cli", "exclude_skills_from_pool": []},
     )
+
+
+def test_skillsbench_task_runner_not_excluded_by_platform(pool_cfg):
+    cfg = {"runtime_platform": "skillsbench-batch", "exclude_skills_from_pool": []}
+    assert not is_excluded_hot_skill("skillsbench-task-runner", cfg)
+
+
+def test_detect_claimed_success_mismatch():
+    from agent.hot_skills import build_hot_pool_outcome, detect_claimed_success_mismatch
+
+    assert detect_claimed_success_mismatch(
+        {"task_success": False},
+        {"final_response": "All tests passed successfully."},
+    )
+    assert not detect_claimed_success_mismatch(
+        {"task_success": True},
+        {"final_response": "All tests passed successfully."},
+    )
+    outcome = build_hot_pool_outcome(
+        evaluation={"task_success": False, "tests_passed": 0, "tests_total": 5},
+        run_result={"final_response": "Task is complete — all tests passed."},
+        benchmark="skillsbench",
+    )
+    assert outcome["claimed_success_mismatch"] is True
+
+
+def test_heuristic_claimed_success_mismatch_marks_injected_harmful():
+    items = [{"id": "0", "skill": "a", "point": "verify in container", "via": "inject"}]
+    labels = heuristic_outcome_attributions(
+        items,
+        {"success": False, "claimed_success_mismatch": True, "iterations": 20},
+        low_step_threshold=12,
+    )
+    assert labels == {"0": "harmful"}
+
+
+def test_admit_gate_drops_oracle_tips_deterministically(pool_cfg):
+    pool = HotSkillPool({**pool_cfg, "admit_transfer_gate": True})
+    pool.record(
+        name="skillsbench-task-runner",
+        content="",
+        key_points=[
+            "NEVER claim success without host outputs",
+            "Test pre-existing solution before writing a new one",
+        ],
+        turn=1,
+    )
+    assert "skillsbench-task-runner" in pool._entries
+    assert len(pool._entries["skillsbench-task-runner"].key_points) == 1
+    assert "host outputs" in pool._entries["skillsbench-task-runner"].key_points[0]
+
+
+def test_deterministic_reconcile_drops_oracle_tips(pool_cfg):
+    from agent.hot_skills import HotSkillEntry, empty_point_utility
+
+    pool = HotSkillPool(pool_cfg)
+    pool._entries["x"] = HotSkillEntry(
+        name="x",
+        key_points=["Use reference solution from solution/solve.sh"],
+        skill_dir=None,
+        skill_md_mtime=0.0,
+        recorded_turn=1,
+        description="",
+        tags=[],
+        scope="",
+        point_utilities=[empty_point_utility()],
+    )
+    pool.reconcile_pool(material_update=True)
+    assert "x" not in pool._entries
+
+
+def test_apply_outcome_feedback_reconciles_after_scoring(pool_cfg):
+    cfg = {**pool_cfg, "max_entries": 2, "eviction_policy": "oldest", "reconcile_on_update": True}
+    pool = HotSkillPool(cfg)
+    pool._telemetry.reconcile_ran = False
+    pool.record(name="good", content="", key_points=["NEVER skip graded outputs"], turn=1)
+    pool.record(name="bad", content="", key_points=["ALWAYS paginate long API lists"], turn=2)
+    pool.build_block(user_message="task", turn=2)
+    pool._telemetry.reconcile_ran = False
+    summary = pool.apply_outcome_feedback(
+        {"success": False, "benchmark": "skillsbench", "iterations": 30},
+        complete_fn=lambda _m: "",
+    )
+    assert summary["applied"] is True
+    assert summary["attributions"]["harmful"] >= 1
+    assert pool._entries["good"].point_utilities[0]["harmful"] >= 1
+
+
+def test_admit_transfer_parse():
+    from agent.hot_skills import parse_admit_transfer_ids
+
+    items = [{"id": "0", "point": "good"}, {"id": "1", "point": "bad"}]
+    assert parse_admit_transfer_ids('{"admit": ["0"]}', items) == ["0"]
+    assert parse_admit_transfer_ids('{"admit": []}', items) == []
+
+
+def test_admit_transfer_gate_with_judge(pool_cfg):
+    items = [
+        {"id": "0", "point": "NEVER claim pass without host verification"},
+        {"id": "1", "point": "Test pre-existing solution before writing a new one"},
+    ]
+
+    def judge(candidates, skill_name, scope, context):
+        return ["0"]
+
+    pool = HotSkillPool({**pool_cfg, "admit_transfer_gate": True})
+    pool.admission_judge = judge
+    filtered = pool._gate_admission_points(
+        "skillsbench-task-runner",
+        [it["point"] for it in items],
+        scope="batch tasks",
+        context="solve task",
+    )
+    assert filtered == ["NEVER claim pass without host verification"]
+
+
+def test_hermes_agent_globally_excluded_from_pool(pool_cfg):
+    assert is_excluded_hot_skill("hermes-agent", {"runtime_platform": "cli"})
+    pool = HotSkillPool(pool_cfg)
+    pool.record(
+        name="hermes-agent",
+        content="<!-- hermes-hot -->\n- ALWAYS use /tools\n<!-- /hermes-hot -->",
+        turn=1,
+    )
+    assert "hermes-agent" not in pool._entries
+
+
+def test_junk_filter_oracle_shortcut_bullets():
+    assert is_junk_key_point("Test pre-existing solution before writing a new one")
+    assert is_junk_key_point("Static ground truth in test file — skip heavy build")
+    assert not is_junk_key_point("NEVER claim success from in-container pytest alone")
 
 
 def test_set_platform_evicts_mcp_media_from_pool(pool_cfg):

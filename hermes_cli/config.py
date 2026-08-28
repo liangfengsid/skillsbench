@@ -942,6 +942,7 @@ DEFAULT_CONFIG = {
             # oldest: drop earliest recorded_turn only when over max_entries.
             "eviction_policy": "llm",
             "reconcile_on_update": True,
+            "admit_transfer_gate": True,
             "junk_filter": True,
             "junk_min_point_chars": 12,
             # Extra skill names denied at admit (merged with built-in meta denylist).

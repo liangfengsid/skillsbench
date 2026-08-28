@@ -87,7 +87,7 @@ from tools.browser_tool import cleanup_browser
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import StreamingContextScrubber, build_memory_context_block, sanitize_context
-from agent.hot_skills import HotSkillPool, build_hot_pool_outcome, llm_eviction_keep_ids
+from agent.hot_skills import HotSkillPool, build_hot_pool_outcome, llm_admit_transfer_ids, llm_eviction_keep_ids
 from agent.retry_utils import jittered_backoff
 from agent.error_classifier import classify_api_error, FailoverReason
 from agent.prompt_builder import (
@@ -1755,6 +1755,7 @@ class AIAgent:
             self._hot_skill_pool = HotSkillPool({})
         try:
             self._hot_skill_pool.eviction_judge = self._hot_pool_eviction_judge
+            self._hot_skill_pool.admission_judge = self._hot_pool_admission_judge
         except Exception:
             pass
         try:
@@ -3702,6 +3703,33 @@ class AIAgent:
             )
         except Exception:
             logger.debug("hot pool llm eviction judge failed", exc_info=True)
+            return None
+        finally:
+            self._hot_pool_llm_judge_inflight = False
+
+    def _hot_pool_admission_judge(
+        self,
+        items: list,
+        skill_name: str,
+        scope: str,
+        context: str,
+    ):
+        """Side-channel per-tip admission gate. Does not touch session history."""
+        if getattr(self, "_hot_pool_llm_judge_inflight", False):
+            return None
+        self._hot_pool_llm_judge_inflight = True
+        try:
+            return llm_admit_transfer_ids(
+                items,
+                skill_name,
+                scope,
+                context,
+                complete_fn=lambda msgs: self._complete_sidechannel_text(
+                    msgs, max_tokens=512, reason="hot_pool_admit_transfer"
+                ),
+            )
+        except Exception:
+            logger.debug("hot pool llm admission judge failed", exc_info=True)
             return None
         finally:
             self._hot_pool_llm_judge_inflight = False

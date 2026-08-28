@@ -33,9 +33,41 @@ def test_build_skillsbench_skill_review_prompt_includes_batch_rules():
     assert "skillsbench-host-verification" not in prompt
     assert "mega-skill" in prompt.lower() or "catch-all" in prompt.lower()
     assert "held-out" in prompt.lower() or "abstract" in prompt.lower()
+    assert "pre-existing solution" in prompt.lower() or "solution/" in prompt
     combined = mod.build_skillsbench_combined_review_prompt("BASE")
     assert "skillsbench" in combined.lower()
-    assert len(mod.SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX) < 900
+    assert len(mod.SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX) < 1100
+
+
+def test_build_user_message_includes_host_verification_when_eval_on():
+    mod = _load_module()
+    msg = mod.build_user_message("/tmp/tasks", "foo", evaluate_after_run=True)
+    assert "foo" in msg
+    assert "Host verification" in msg
+    assert "Do NOT claim" in msg
+    assert "solution/" in msg
+    short = mod.build_user_message("/tmp/tasks", "foo", evaluate_after_run=False)
+    assert "Host verification" not in short
+
+
+def test_build_host_eval_feedback_message_summarizes_failure():
+    mod = _load_module()
+    text = mod.build_host_eval_feedback_message(
+        {
+            "task_success": False,
+            "tests_passed": 2,
+            "tests_total": 5,
+            "tests_failed": 3,
+            "test_cases": [
+                {"nodeid": "tests/test_outputs.py::test_a", "outcome": "failed"},
+            ],
+            "stderr_tail": "AssertionError: missing report.json",
+        }
+    )
+    assert "Host verification failed" in text
+    assert "2/5" in text
+    assert "test_a" in text
+    assert "report.json" in text
 
 
 def test_format_run_summary_includes_background_review_actions():

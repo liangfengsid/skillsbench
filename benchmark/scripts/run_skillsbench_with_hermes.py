@@ -157,15 +157,29 @@ SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX = (
     "Bar is slightly lower than interactive: after non-trivial trial-and-error, "
     "prefer saving a class-level skill over 'Nothing to save.' "
     "Name by task genre (not task id; no catch-all skillsbench-host/verification "
-    "mega-skill). Include short '## Common Pitfalls' or '## Best Practices' "
-    "bullets that stay abstract (no absolute paths, solution/oracle peeking, or "
-    "temp-dir remaps of graded outputs) so hot-pool tips transfer to held-out tasks."
+    "or skillsbench-task-runner mega-skills). Include short '## Common Pitfalls' "
+    "or '## Best Practices' bullets that stay abstract (no absolute paths, "
+    "solution/oracle peeking, running bundled solution/ scripts, reading ground "
+    "truth from tests, or temp-dir remaps of graded outputs) so hot-pool tips "
+    "transfer to held-out tasks."
 )
 
 SKILLSBENCH_BATCH_COMBINED_REVIEW_APPENDIX = (
     "\n\n**SkillsBench batch:** for skills, same rules — no confirmation; "
     "prefer a class-level save after real trial-and-error; no catch-all "
-    "skillsbench mega-skills; abstract pitfalls only (no oracle/path recipes)."
+    "skillsbench mega-skills; abstract pitfalls only (no oracle/path recipes, "
+    "no 'test pre-existing solution first')."
+)
+
+SKILLSBENCH_HOST_VERIFICATION_APPENDIX = (
+    "\n\n**Host verification (SkillsBench batch):** When this driver is used, "
+    "a host-side pytest verifier runs after your turn on outputs staged from "
+    "this task directory — not from an ephemeral container. Do NOT claim the "
+    "task is complete or that all tests passed until deliverables exist where "
+    "the graded tests expect them under the task tree. In-container or "
+    "Docker-only pytest is not sufficient. Do NOT treat running bundled "
+    "`solution/` scripts as completing the task — write your own outputs in the "
+    "graded workspace."
 )
 
 
@@ -211,11 +225,59 @@ def discover_task_ids(tasks_dir: Path) -> List[str]:
     return ids
 
 
-def build_user_message(prompt_tasks_base: str, task_id: str) -> str:
+def build_user_message(
+    prompt_tasks_base: str,
+    task_id: str,
+    *,
+    evaluate_after_run: bool = True,
+) -> str:
     base = prompt_tasks_base.rstrip("/")
-    return (
+    msg = (
         f"complete task in {base}/{task_id}, following instruction.md and verify the result."
     )
+    if evaluate_after_run:
+        msg += SKILLSBENCH_HOST_VERIFICATION_APPENDIX
+    return msg
+
+
+def build_host_eval_feedback_message(evaluation: Dict[str, Any]) -> str:
+    """Follow-up user turn after host verification failed."""
+    ev = evaluation or {}
+    passed = ev.get("tests_passed", 0)
+    total = ev.get("tests_total", 0)
+    failed = ev.get("tests_failed", 0)
+    lines = [
+        "**Host verification failed.** The driver ran the host pytest verifier "
+        "on staged task outputs. Do not claim success until this passes.",
+        f"Score: {passed}/{total} tests passed"
+        + (f" ({failed} failed)" if failed else "")
+        + ".",
+    ]
+    err = ev.get("error")
+    if err:
+        lines.append(f"Verifier error: {err}")
+    cases = ev.get("test_cases") or []
+    failed_cases = [
+        c for c in cases if str(c.get("outcome", "")).lower() not in ("passed", "skipped")
+    ]
+    if failed_cases:
+        sample = failed_cases[:8]
+        lines.append(
+            "Failed cases: "
+            + "; ".join(str(c.get("nodeid") or c.get("name") or c) for c in sample)
+            + (" …" if len(failed_cases) > len(sample) else "")
+        )
+    stderr = (ev.get("stderr_tail") or "").strip()
+    if stderr:
+        lines.append(f"Verifier stderr (tail):\n{stderr[-1200:]}")
+    stdout = (ev.get("stdout_tail") or "").strip()
+    if stdout and not failed_cases:
+        lines.append(f"Verifier stdout (tail):\n{stdout[-1200:]}")
+    lines.append(
+        "Fix deliverables under the task directory (paths the tests expect), "
+        "then reply when ready for another host verification attempt."
+    )
+    return "\n\n".join(lines)
 
 
 def json_safe(obj: Any) -> Any:
@@ -356,6 +418,7 @@ def run_one_task(
     pass_k_turns: Optional[List[int]] = None,
     eval_timeout_sec: float = 600.0,
     evaluate_after_run: bool = False,
+    host_verification_retries: int = 1,
     runtime: Optional[Dict[str, Any]] = None,
     config_hermes_home: Optional[Path] = None,
     benchmark_id: str = "skillsbench",
@@ -433,7 +496,11 @@ def run_one_task(
             AIAgent._COMBINED_REVIEW_PROMPT,
         )
 
-    user_message = build_user_message(prompt_tasks_base, task_id)
+    user_message = build_user_message(
+        prompt_tasks_base,
+        task_id,
+        evaluate_after_run=evaluate_after_run,
+    )
     hermes_task_id = f"{benchmark_id}-{task_id}"
 
     pass_tracker = None
@@ -450,6 +517,7 @@ def run_one_task(
 
     t0 = time.perf_counter()
     pass_at_turn: Dict[str, Dict[str, Any]] = {}
+    host_verification_attempts: List[Dict[str, Any]] = []
     try:
         result = agent.run_conversation(
             user_message=user_message,
@@ -458,6 +526,39 @@ def run_one_task(
         if pass_tracker is not None and isinstance(result, dict):
             final_calls = int(result.get("api_calls") or 0)
             pass_at_turn = pass_tracker.finalize(final_calls)
+
+        if evaluate_after_run:
+            retries_left = max(0, int(host_verification_retries or 0))
+            while True:
+                evaluation = evaluate_skillsbench_task(
+                    task_id=task_id,
+                    skillsbench_root=skillsbench_root,
+                    eval_timeout_sec=eval_timeout_sec,
+                )
+                attempt = {
+                    "attempt": len(host_verification_attempts) + 1,
+                    "evaluation": evaluation,
+                }
+                if isinstance(result, dict):
+                    attempt["api_calls"] = result.get("api_calls")
+                    attempt["completed"] = result.get("completed")
+                host_verification_attempts.append(attempt)
+                if evaluation.get("task_success"):
+                    break
+                if retries_left <= 0 or not isinstance(result, dict):
+                    break
+                if result.get("interrupted"):
+                    break
+                feedback = build_host_eval_feedback_message(evaluation)
+                result = agent.run_conversation(
+                    user_message=feedback,
+                    conversation_history=result.get("messages") or [],
+                    task_id=hermes_task_id,
+                )
+                if pass_tracker is not None and isinstance(result, dict):
+                    final_calls = int(result.get("api_calls") or 0)
+                    pass_at_turn = pass_tracker.finalize(final_calls)
+                retries_left -= 1
     finally:
         if pass_tracker is not None:
             pass_tracker.detach(agent)
@@ -473,10 +574,14 @@ def run_one_task(
 
     evaluation: Optional[Dict[str, Any]] = None
     if evaluate_after_run:
-        evaluation = evaluate_skillsbench_task(
-            task_id=task_id,
-            skillsbench_root=skillsbench_root,
-            eval_timeout_sec=eval_timeout_sec,
+        evaluation = (
+            host_verification_attempts[-1]["evaluation"]
+            if host_verification_attempts
+            else evaluate_skillsbench_task(
+                task_id=task_id,
+                skillsbench_root=skillsbench_root,
+                eval_timeout_sec=eval_timeout_sec,
+            )
         )
         try:
             apply_benchmark_hot_pool_outcome_feedback(
@@ -523,6 +628,8 @@ def run_one_task(
     }
     if evaluation is not None:
         envelope["evaluation"] = evaluation
+    if host_verification_attempts:
+        envelope["host_verification_attempts"] = host_verification_attempts
     if pass_tracker is not None and pass_at_turn:
         envelope["pass_k_turns"] = list(pass_k_turns or [])
         envelope["pass_at_turn"] = pass_at_turn
@@ -799,6 +906,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Run host pytest verifier after each agent run (default: on).",
+    )
+    parser.add_argument(
+        "--host-verification-retries",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "When --evaluate-after-run and host verification fails, continue the "
+            "conversation with verifier feedback up to N extra times (default: 1)."
+        ),
     )
     parser.add_argument(
         "--evaluate-only",
@@ -1270,6 +1387,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     pass_k_turns=pass_k_turns,
                     eval_timeout_sec=args.eval_timeout_sec,
                     evaluate_after_run=bool(args.evaluate_after_run),
+                    host_verification_retries=int(args.host_verification_retries),
                     runtime=shared_runtime,
                     config_hermes_home=config_hermes_home,
                     benchmark_id="skillsbench",
