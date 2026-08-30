@@ -6,12 +6,14 @@ import logging
 import time
 from typing import Any, Callable, Dict, Optional
 
-from agent.hot_skills import build_hot_pool_outcome
+from agent.hot_skills import build_hot_pool_outcome, collect_outcome_episode_log
 
 logger = logging.getLogger(__name__)
 
 
-def _hot_pool_outcome_complete_fn(agent: Any) -> Callable[[list], str]:
+def _hot_pool_outcome_complete_fn(
+    agent: Any, *, max_tokens: int = 2048
+) -> Callable[[list], str]:
     """Side-channel LLM completion for per-tip outcome labels (not session history)."""
 
     def complete_fn(messages: list) -> str:
@@ -20,7 +22,7 @@ def _hot_pool_outcome_complete_fn(agent: Any) -> Callable[[list], str]:
             return ""
         return sidechannel(
             messages,
-            max_tokens=512,
+            max_tokens=max_tokens,
             reason="hot_pool_outcome_feedback",
         )
 
@@ -69,7 +71,11 @@ def apply_benchmark_hot_pool_outcome_feedback(
         duration_sec=duration_sec,
         benchmark=benchmark,
     )
-    complete_fn = _hot_pool_outcome_complete_fn(agent)
+    try:
+        max_tokens = int(pool.config.get("outcome_judge_max_tokens", 2048) or 2048)
+    except (TypeError, ValueError):
+        max_tokens = 2048
+    complete_fn = _hot_pool_outcome_complete_fn(agent, max_tokens=max_tokens)
 
     inflight = getattr(agent, "_hot_pool_llm_judge_inflight", False)
     if inflight:
@@ -83,7 +89,17 @@ def apply_benchmark_hot_pool_outcome_feedback(
 
     agent._hot_pool_llm_judge_inflight = True
     try:
-        return pool.apply_outcome_feedback(record, complete_fn=complete_fn)
+        episode_log = collect_outcome_episode_log(
+            agent=agent, run_result=run_result, pool=pool
+        )
+        summary = pool.apply_outcome_feedback(
+            record, complete_fn=complete_fn, episode_log=episode_log
+        )
+        note = getattr(pool, "note_outcome_judge_meta", None)
+        meta = getattr(agent, "_last_sidechannel_meta", None)
+        if callable(note) and isinstance(meta, dict) and meta.get("reason") == "hot_pool_outcome_feedback":
+            note(meta)
+        return summary
     except Exception:
         logger.debug("benchmark hot pool outcome feedback failed", exc_info=True)
         return {"applied": False, "skipped_reason": "error"}

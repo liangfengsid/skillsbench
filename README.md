@@ -94,7 +94,7 @@ Skills already expose full procedures through `skill_view`, but loading every re
 skill_view / skill_manage / recent use
         │
         ▼
-  extract key points  ──►  HotSkillPool (max_entries retain=inject; eviction at overflow)
+  extract key points  ──►  HotSkillPool (max_entries store; inject_k retrieve subset)
         │
         ▼
   <hot-skills>…</hot-skills>  prepended to this turn’s user message
@@ -123,8 +123,8 @@ skill_view / skill_manage / recent use
 
 | Stage | Behavior |
 |-------|----------|
-| Populate | After a skill is viewed/created, key points enter the pool |
-| Inject | Each user turn prepends retained tips as `<hot-skills>`. Strongly harmful utilities are omitted (`inject_filter_utilities`); irrelevant scores only change order. Unlabeled tips still inject. With `skip_if_in_history` (default), skills already in recent `skill_view` history are omitted from the block to avoid duplicating the full skill body — that is channel separation, not “hot off.” Telemetry records `inject.skills_excluded_in_history` / `inject.points_excluded_in_history` / `inject.points_omitted_utility`. |
+| Populate | After a skill is viewed/created, key points enter the pool if they pass the lexical domain gate (`admit_domain_gate`: closed-world platforms omit distinctive off-domain skills; SkillsBench/CLI fail-open except framework identities) and the transfer tip gate |
+| Inject | Each user turn prepends up to `inject_k` tips as `<hot-skills>`. Selection is lexical retrieve (skill/tip tokens ∩ frozen episode instruction), then utility. Off-domain skills with empty overlap are omitted. Strongly harmful utilities are omitted (`inject_filter_utilities`); irrelevant scores only change order. Unlabeled tips can still inject. With `skip_if_in_history` (default), skills already in recent `skill_view` history are omitted from the block to avoid duplicating the full skill body — that is channel separation, not “hot off.” Telemetry records `inject.skills_excluded_in_history` / `inject.points_excluded_in_history` / `inject.points_omitted_utility` / `inject.points_omitted_retrieve`. |
 | Evict | Only when a new extract would exceed `max_entries`. Policies: `oldest` (FIFO of extract time on a persisted global clock when the pool is saved across conversations) or `llm` (optional judge at overflow). Model "use" of a point is not observable. |
 | Outcome feedback (default on) | After a labeled task/episode, a side-channel LLM attributes exposed tips (`helpful` / `harmful` / `irrelevant`) using **multi-dimensional** metrics (success, reward, iterations/steps, tests, duration). If the LLM is missing or empty, a heuristic still persists labels (`outcome_feedback_heuristic`). Utilities feed eviction, a conservative admit filter, and inject ranking. Disable with `outcome_feedback: false`. |
 | Persist (optional) | Pool JSON can survive across conversations / sequential benchmark tasks |
@@ -135,19 +135,26 @@ skill_view / skill_manage / recent use
 skills:
   hot_pool:
     enabled: true
-    max_entries: 12               # retain = inject (key-point budget)
-    # max_chars: ignored          # legacy; do not use — budget is max_entries
+    max_entries: 12               # store budget (key points)
+    inject_k: 4                   # per-turn inject budget; 0 = no cap
+    inject_retrieve: true         # lexical skill/tip ∩ frozen episode query
+    admit_domain_gate: true       # refuse off-domain skills at admit (no LLM)
+    # max_chars: ignored          # legacy; do not use — budget is inject_k
     max_chars_per_point: 240      # truncate individual extracted tips
     eviction_policy: llm          # llm (default) | oldest (fallback / opt-in)
     outcome_feedback: true        # default on; set false to A/B without attribution
     outcome_feedback_heuristic: true  # persist labels when the LLM is empty
+    outcome_judge_max_tokens: 2048    # side-channel JSON budget (thinking disabled)
+    outcome_judge_log: true           # compressed tool/env actions for the judge
+    outcome_judge_log_max_events: 48
+    outcome_judge_log_arg_chars: 96
     abstract_extract: true        # redact paths/emails/UUIDs at extract
     inject_filter_utilities: true # omit strongly harmful at inject (not irrelevant)
     persist_across_conversations: false
     # persist_path: ""            # default ~/.hermes/hot_skill_pool.json when persisting
 ```
 
-`eviction_policy` runs only when a new extract would exceed `max_entries` (model "use" of a point is not observable, so inject never refreshes eviction clocks). The store keeps retained tips; inject omits ones with a clear harmful majority. Irrelevant labels only rank the block. Extract redacts structural identifiers (paths, emails, UUIDs). Whether a tip is transferable vs an episode recap is judged in the overflow / outcome side-channel prompts, not by semantic regex:
+`eviction_policy` runs only when a new extract would exceed `max_entries` (model "use" of a point is not observable, so inject never refreshes eviction clocks). The store keeps retained tips; inject selects a retrieve top-k and omits ones with a clear harmful majority. Irrelevant labels only rank the block. Extract redacts structural identifiers (paths, emails, UUIDs). Whether a tip is transferable vs an episode recap is judged in the overflow / outcome side-channel prompts, not by semantic regex:
 
 | Policy | Victim | When to use |
 |--------|--------|-------------|
@@ -156,13 +163,13 @@ skills:
 
 **`llm` judge prompt** (built by `build_llm_eviction_messages` in [`agent/hot_skills.py`](agent/hot_skills.py); isolated from the conversation):
 
-System (summary): curate a keep-set under retain=inject; prefer transferable guardrails; drop instance-bound recipes (paths, credentials, one-off filenames, single-product workflows); use `context` only as overflow/admit background and tie-breaker — not as primary relevance ranking. Return JSON `{"keep": ["id", ...]}` with at most `keep_n` ids (fewer allowed).
+System (summary): curate a keep-set for the store (inject later retrieves a subset); prefer transferable guardrails; drop instance-bound recipes (paths, credentials, one-off filenames, single-product workflows); use `context` only as overflow/admit background and tie-breaker — not as primary relevance ranking. Return JSON `{"keep": ["id", ...]}` with at most `keep_n` ids (fewer allowed).
 
 User (JSON):
 
 ```json
 {
-  "selection_goal": "Choose a keep-set that transfers to held-out / unseen tasks (retain = inject). Prefer abstract, evaluator-safe pitfalls over cheatsheets for replaying seen tasks. Prefer fewer strong tips over filling keep_n.",
+  "selection_goal": "Choose a keep-set that transfers to held-out / unseen tasks (store; inject later retrieves a subset). Prefer abstract, evaluator-safe pitfalls over cheatsheets for replaying seen tasks. Prefer fewer strong tips over filling keep_n.",
   "context_role": "Background for the incoming extract / overflow. Tie-breaker only; not the primary ranking objective.",
   "context": "<overflow / admit background text>",
   "keep_n": 12,
@@ -180,7 +187,7 @@ User (JSON):
 
 `keep_n` is `max_entries`. Unknown ids are ignored; an empty or unparseable reply falls back to `oldest`.
 
-Injected sections may include a soft natural-language **`Scope:`** line (prefer skill description, else tags, else skill name). Scope helps the model — and the LLM eviction judge — decide how to weigh tips; it is **not** used to filter the retain=inject dump.
+Injected sections may include a soft natural-language **`Scope:`** line (prefer skill description, else tags, else skill name). Scope tokens also feed the retrieve lexicon (with tip nouns and tags). The LLM eviction judge still uses scope as soft guidance, not as a dump filter.
 
 **Not the same as** step-level variant pools (above): step pools rewrite *which procedure variant* `skill_view` shows; hot skills inject *short reminders* without opening the skill body.
 

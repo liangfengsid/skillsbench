@@ -55,7 +55,21 @@ def test_apply_benchmark_hot_pool_outcome_feedback_wires_complete_fn(pool_cfg):
         calls: list = []
 
         def _complete_sidechannel_text(self, messages, max_tokens=512, reason=""):
-            self.calls.append({"messages": messages, "reason": reason})
+            self.calls.append(
+                {"messages": messages, "reason": reason, "max_tokens": max_tokens}
+            )
+            self._last_sidechannel_meta = {
+                "reason": reason,
+                "max_tokens": max_tokens,
+                "finish_reason": "stop",
+                "raw_chars": 20,
+                "stripped_chars": 20,
+                "raw_preview": '{"labels":{"0":"helpful"}}',
+                "stripped_preview": '{"labels":{"0":"helpful"}}',
+                "thinking_off": True,
+                "retries": 0,
+                "recovered_json": False,
+            }
             return json.dumps({"labels": {"0": "helpful"}})
 
         def wait_for_background_review(self, timeout=60.0):
@@ -72,6 +86,11 @@ def test_apply_benchmark_hot_pool_outcome_feedback_wires_complete_fn(pool_cfg):
     assert summary["attribution_source"] == "llm"
     assert agent.calls
     assert agent.calls[0]["reason"] == "hot_pool_outcome_feedback"
+    assert agent.calls[0]["max_tokens"] == 2048
+    of = pool.export_telemetry()["outcome_feedback"]
+    assert of["judge_finish_reason"] == "stop"
+    assert of["judge_thinking_off"] is True
+    assert of["judge_max_tokens"] == 2048
 
 
 def test_apply_benchmark_hot_pool_outcome_feedback_skips_when_disabled(pool_cfg):

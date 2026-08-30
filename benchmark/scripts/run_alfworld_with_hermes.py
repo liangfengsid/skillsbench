@@ -355,6 +355,11 @@ def run_one_game(
         "max_steps": max_steps,
         "error": run_error,
     }
+    last_assistant = ""
+    if conversation:
+        last = conversation[-1] if isinstance(conversation[-1], dict) else {}
+        if last.get("role") == "assistant":
+            last_assistant = str(last.get("content") or "")
     run_conversation_result = {
         "api_calls": hermes_stats.get("api_calls"),
         "input_tokens": hermes_stats.get("input_tokens"),
@@ -366,6 +371,13 @@ def run_one_game(
         "completed": bool(hermes_stats.get("completed")),
         "interrupted": bool(hermes_stats.get("interrupted")),
         "failed": bool(hermes_stats.get("failed")),
+        "messages": conversation,
+        "env_actions": [
+            s.get("action")
+            for s in steps
+            if isinstance(s, dict) and s.get("action")
+        ],
+        "final_response": last_assistant,
     }
     try:
         apply_benchmark_hot_pool_outcome_feedback(

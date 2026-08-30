@@ -16,11 +16,16 @@ only on overflow).
 The pool cap is the store budget (``max_entries`` points). Under policy
 ``llm``, reconcile runs on every material pool update (admit / skill sync /
 stale refresh), not only when over cap — so a full pool can still drop weak
-tips. Inject dumps retained tips minus strongly harmful ones when outcome
-utilities exist. Irrelevant scores only rank; they do not omit. Model "use"
-of a point is not observable; policies are ``llm`` (default: side-channel
-reconcile judge) or ``oldest`` (FIFO fallback / explicit opt-in). Full
-procedures stay behind ``skill_view``.
+tips. Admit also applies a lexical domain gate (no LLM): closed-world
+platforms (AppWorld / ALFWorld) refuse distinctive off-domain skills;
+open-world (SkillsBench / CLI) fail-open except framework identities.
+Inject is a subset: ``inject_k`` tips selected by retrieve-lexicon
+overlap with a frozen episode query, then utility. Off-domain skills with
+empty intersection are omitted. Strongly harmful utilities are omitted when
+outcome utilities exist. Irrelevant scores only rank; they do not omit.
+Model "use" of a point is not observable; policies are ``llm`` (default:
+side-channel reconcile judge) or ``oldest`` (FIFO fallback / explicit
+opt-in). Full procedures stay behind ``skill_view``.
 """
 
 from __future__ import annotations
@@ -33,7 +38,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -192,11 +197,13 @@ _JUNK_POINT_SUBSTRING_RES = (
 
 _DEFAULT_HOT_POOL = {
     "enabled": True,
-    # Retain = inject: this many key points are stored and dumped into
-    # <hot-skills> (minus skip_if_in_history). No second per-turn subset.
+    # Store budget (key points). Inject is a separate top-k subset.
     "max_entries": 12,
-    # Deprecated / ignored: inject size is governed by max_entries (points),
-    # not a character budget. Kept in normalize for old configs only.
+    # Per-turn inject budget. 0 = no cap (all tips that pass the skill gate).
+    "inject_k": 4,
+    # Lexical skill/tip gate against a frozen episode query (no LLM).
+    "inject_retrieve": True,
+    # Deprecated / ignored: inject size is inject_k, not a character budget.
     "max_chars": 0,
     "max_points_per_skill": 8,
     "max_chars_per_point": 240,
@@ -210,6 +217,10 @@ _DEFAULT_HOT_POOL = {
     "reconcile_on_update": True,
     # Per-tip side-channel gate before admit (transfer vs episode-local).
     "admit_transfer_gate": True,
+    # Lexical skill-vs-session domain gate at admit (no LLM). Closed-world
+    # platforms omit distinctive off-domain skills; SkillsBench/CLI fail-open
+    # except framework identities. Does not evict persist on episode change.
+    "admit_domain_gate": True,
     # Drop template/meta bullets after extract (see filter_junk_key_points).
     "junk_filter": True,
     "junk_min_point_chars": 12,
@@ -233,6 +244,14 @@ _DEFAULT_HOT_POOL = {
     "outcome_feedback_heuristic": True,
     # Success with env/API steps at or below this counts as "low-step" helpful.
     "outcome_helpful_max_iterations": 12,
+    # Side-channel completion budget for per-tip outcome JSON. Thinking
+    # models need headroom after thinking is disabled; 512 was too small.
+    "outcome_judge_max_tokens": 2048,
+    # Include a compressed tool/env action log in the outcome judge payload
+    # (no observations / API dumps).
+    "outcome_judge_log": True,
+    "outcome_judge_log_max_events": 48,
+    "outcome_judge_log_arg_chars": 96,
     # Rewrite structural identifiers (paths, emails, UUIDs, hex IDs).
     "abstract_extract": True,
     # Omit strongly harmful tips at inject (store still retains them).
@@ -255,6 +274,8 @@ AdmissionJudge = Callable[
 def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     cfg["enabled"] = bool(cfg.get("enabled", False))
     cfg["max_entries"] = max(0, int(cfg.get("max_entries", 12) or 0))
+    cfg["inject_k"] = max(0, int(cfg.get("inject_k", 4) or 0))
+    cfg["inject_retrieve"] = bool(cfg.get("inject_retrieve", True))
     # Legacy key — no longer truncates the inject block.
     cfg["max_chars"] = max(0, int(cfg.get("max_chars", 0) or 0))
     cfg["max_points_per_skill"] = max(1, int(cfg.get("max_points_per_skill", 8) or 8))
@@ -280,10 +301,21 @@ def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     cfg["outcome_helpful_max_iterations"] = max(
         1, int(cfg.get("outcome_helpful_max_iterations", 12) or 12)
     )
+    cfg["outcome_judge_max_tokens"] = max(
+        256, int(cfg.get("outcome_judge_max_tokens", 2048) or 2048)
+    )
+    cfg["outcome_judge_log"] = bool(cfg.get("outcome_judge_log", True))
+    cfg["outcome_judge_log_max_events"] = max(
+        4, int(cfg.get("outcome_judge_log_max_events", 48) or 48)
+    )
+    cfg["outcome_judge_log_arg_chars"] = max(
+        24, int(cfg.get("outcome_judge_log_arg_chars", 96) or 96)
+    )
     cfg["abstract_extract"] = bool(cfg.get("abstract_extract", True))
     cfg["inject_filter_utilities"] = bool(cfg.get("inject_filter_utilities", True))
     cfg["reconcile_on_update"] = bool(cfg.get("reconcile_on_update", True))
     cfg["admit_transfer_gate"] = bool(cfg.get("admit_transfer_gate", True))
+    cfg["admit_domain_gate"] = bool(cfg.get("admit_domain_gate", True))
     cfg["junk_filter"] = bool(cfg.get("junk_filter", True))
     cfg["junk_min_point_chars"] = max(
         4, int(cfg.get("junk_min_point_chars", 12) or 12)
@@ -740,6 +772,379 @@ def detect_claimed_success_mismatch(
     return bool(_CLAIMED_PASS_RE.search(final))
 
 
+_RETRIEVE_TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+_RETRIEVE_SPLIT_RE = re.compile(r"[-_/.:]+")
+_RETRIEVE_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "to",
+        "of",
+        "in",
+        "on",
+        "at",
+        "for",
+        "from",
+        "with",
+        "by",
+        "as",
+        "is",
+        "are",
+        "be",
+        "do",
+        "not",
+        "no",
+        "if",
+        "then",
+        "this",
+        "that",
+        "it",
+        "its",
+        "your",
+        "you",
+        "we",
+        "our",
+        "my",
+        "always",
+        "never",
+        "must",
+        "should",
+        "check",
+        "use",
+        "using",
+        "used",
+        "call",
+        "called",
+        "return",
+        "returned",
+        "just",
+        "only",
+        "also",
+        "before",
+        "after",
+        "when",
+        "than",
+        "into",
+        "via",
+        "per",
+        "task",
+        "skill",
+        "please",
+        "hello",
+        "hi",
+        "ok",
+        "yes",
+        "all",
+        "any",
+        "each",
+        "both",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "than",
+        "too",
+        "very",
+        "can",
+        "will",
+        "may",
+        "dont",
+        "does",
+        "did",
+        "has",
+        "have",
+        "had",
+        "was",
+        "were",
+        "been",
+        "being",
+        "them",
+        "they",
+        "their",
+    }
+)
+_OBS_USER_PREFIX_RE = re.compile(
+    r"(?is)^\s*(?:output|observation|stdout|stderr)\s*:",
+)
+_PLATFORM_DOMAIN_ALIASES: Dict[str, FrozenSet[str]] = {
+    "appworld-batch": frozenset({"appworld", "sandbox", "apis", "api", "repl"}),
+    "alfworld-batch": frozenset({"alfworld", "household", "receptacle"}),
+    "skillsbench-batch": frozenset({"skillsbench"}),
+}
+
+# One environment / API surface — empty ∩ + distinctive identity ⇒ foreign.
+_CLOSED_WORLD_PLATFORMS = frozenset({"appworld-batch", "alfworld-batch"})
+
+# Product / framework tokens. Open-world omits only these when the session
+# does not mention them. Do not add task-domain names (github, xlsx, pdf):
+# those are legitimate SkillsBench skills.
+_FRAMEWORK_IDENTITY_TOKENS = frozenset(
+    {
+        "hermes",
+        "claude",
+        "anthropic",
+        "opencode",
+        "vscode",
+        "copilot",
+        "gateway",
+    }
+)
+
+# Identity leftovers that do not name a competing domain. Closed-world
+# fail-open when identity ⊆ this set so agent-authored generic skills
+# (nav, helper) still admit on ALFWorld / AppWorld.
+_GENERIC_IDENTITY_TOKENS = frozenset(
+    {
+        "nav",
+        "helper",
+        "helpers",
+        "guide",
+        "runner",
+        "notes",
+        "note",
+        "general",
+        "common",
+        "basic",
+        "demo",
+        "test",
+        "tests",
+        "bench",
+        "batch",
+        "tool",
+        "tools",
+        "env",
+        "environment",
+        "process",
+        "practice",
+        "practices",
+        "tip",
+        "tips",
+        "rule",
+        "rules",
+        "usage",
+        "workflow",
+        "workflows",
+        "utility",
+        "utilities",
+        "core",
+        "main",
+        "misc",
+        "default",
+        "standard",
+        "simple",
+        "navigation",
+        "navigate",
+        "explore",
+        "exploration",
+        "look",
+        "agent",
+        "assistant",
+        "proc",
+    }
+)
+
+
+def tokenize_retrieve(text: str, *, min_len: int = 3) -> Set[str]:
+    """Lowercased content tokens for retrieve intersection (no stemming)."""
+    if not text:
+        return set()
+    split = _RETRIEVE_SPLIT_RE.sub(" ", str(text).lower())
+    out: Set[str] = set()
+    min_len = max(1, int(min_len or 1))
+    for match in _RETRIEVE_TOKEN_RE.finditer(split):
+        tok = match.group(0)
+        if len(tok) < min_len or tok in _RETRIEVE_STOPWORDS:
+            continue
+        out.add(tok)
+    return out
+
+
+def is_observation_user_message(text: str) -> bool:
+    """True when *text* is env/tool output, not a new episode instruction."""
+    raw = str(text or "").lstrip()
+    if not raw:
+        return True
+    if raw.startswith("```"):
+        return True
+    return bool(_OBS_USER_PREFIX_RE.match(raw))
+
+
+def skill_identity_tokens(
+    name: str,
+    tags: Optional[Iterable[str]] = None,
+    scope: str = "",
+    description: str = "",
+) -> FrozenSet[str]:
+    """Name / catalog tags / scope — used for platform-domain fallback."""
+    toks = tokenize_retrieve(name, min_len=3)
+    for tag in tags or ():
+        toks |= tokenize_retrieve(str(tag), min_len=3)
+    toks |= tokenize_retrieve(scope, min_len=3)
+    toks |= tokenize_retrieve(description, min_len=3)
+    return frozenset(toks)
+
+
+def tip_retrieve_tokens(point: str) -> FrozenSet[str]:
+    return frozenset(tokenize_retrieve(point, min_len=3))
+
+
+def skill_retrieve_tokens(
+    name: str,
+    tags: Optional[Iterable[str]] = None,
+    scope: str = "",
+    description: str = "",
+    points: Optional[Iterable[str]] = None,
+) -> FrozenSet[str]:
+    """Admit-time retrieve lexicon: identity tokens plus tip nouns."""
+    toks = set(skill_identity_tokens(name, tags, scope, description))
+    for point in points or ():
+        toks |= tip_retrieve_tokens(str(point))
+    return frozenset(toks)
+
+
+def platform_retrieve_tokens(platform: str) -> FrozenSet[str]:
+    key = (platform or "").strip().lower()
+    toks = tokenize_retrieve(key, min_len=3)
+    toks |= set(_PLATFORM_DOMAIN_ALIASES.get(key) or ())
+    return frozenset(toks)
+
+
+_SIDECANNEL_LOG_PREVIEW_CHARS = 240
+_JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
+
+
+def sidechannel_text_preview(text: str, *, max_chars: int = _SIDECANNEL_LOG_PREVIEW_CHARS) -> str:
+    """Single-line preview for JSONL telemetry (not a full transcript)."""
+    n = max(0, int(max_chars or 0))
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if n == 0 or len(cleaned) <= n:
+        return cleaned
+    return cleaned[:n]
+
+
+def recover_json_object(text: str) -> str:
+    """First JSON object in *text*, including inside think blocks."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("{") and raw.endswith("}"):
+        return raw
+    match = _JSON_OBJECT_RE.search(raw)
+    return match.group(0).strip() if match else ""
+
+
+def sidechannel_thinking_off_extra_body(
+    *,
+    model: str = "",
+    is_openrouter: bool = False,
+    is_nous: bool = False,
+    is_kimi: bool = False,
+    is_custom_provider: bool = False,
+) -> Dict[str, Any]:
+    """Provider extras that disable thinking on a tools-free JSON judge.
+
+    Official OpenAI chat.completions gets an empty dict (unknown extra_body
+    keys can 400). Qwen/vLLM, OpenRouter, Kimi, and custom/Ollama get the
+    flags those stacks actually honor.
+    """
+    extra: Dict[str, Any] = {}
+    model_l = (model or "").lower()
+    if "qwen" in model_l:
+        extra["chat_template_kwargs"] = {"enable_thinking": False}
+        extra["enable_thinking"] = False
+    if is_openrouter or is_nous:
+        extra["reasoning"] = {"enabled": False}
+    if is_kimi:
+        extra["thinking"] = {"type": "disabled"}
+    if is_custom_provider:
+        extra["think"] = False
+    return extra
+
+
+def retrieve_overlap(
+    query: FrozenSet[str],
+    lexicon: FrozenSet[str],
+    *,
+    ignore: Optional[FrozenSet[str]] = None,
+) -> FrozenSet[str]:
+    """Query ∩ lexicon, minus tokens that sit on every skill (IDF)."""
+    hits = set(query or ()) & set(lexicon or ())
+    if ignore:
+        hits -= set(ignore)
+    return frozenset(hits)
+
+
+def is_closed_world_platform(platform: str) -> bool:
+    """True for single-environment batch platforms (AppWorld, ALFWorld)."""
+    return (platform or "").strip().lower() in _CLOSED_WORLD_PLATFORMS
+
+
+def session_domain_tokens(
+    platform: str,
+    query_tokens: Optional[Iterable[str]] = None,
+) -> FrozenSet[str]:
+    """Platform aliases ∪ frozen episode-query tokens."""
+    toks = set(platform_retrieve_tokens(platform))
+    for tok in query_tokens or ():
+        piece = str(tok).strip().lower()
+        if piece:
+            toks.add(piece)
+    return frozenset(toks)
+
+
+def foreign_closed_world_tokens(platform: str) -> FrozenSet[str]:
+    """Alias tokens that belong to a different closed-world platform."""
+    key = (platform or "").strip().lower()
+    mine = set(platform_retrieve_tokens(key))
+    foreign: Set[str] = set()
+    for plat in _CLOSED_WORLD_PLATFORMS:
+        if plat == key:
+            continue
+        foreign |= set(platform_retrieve_tokens(plat))
+    return frozenset(foreign - mine)
+
+
+def is_off_session_domain(
+    name: str,
+    *,
+    tags: Optional[Iterable[str]] = None,
+    scope: str = "",
+    description: str = "",
+    points: Optional[Iterable[str]] = None,
+    platform: str = "",
+    query_tokens: Optional[Iterable[str]] = None,
+) -> bool:
+    """True when *name* is a foreign domain for this session.
+
+    Fail-open when the session has no domain signal, when identity/tips
+    overlap the session, or when a closed-world skill is generic
+    (``nav`` / ``helper``). SkillsBench / CLI omit only framework-shaped
+    identities the query did not mention — so a task skill with a weak
+    name still admits. No LLM.
+    """
+    session = session_domain_tokens(platform, query_tokens)
+    if not session:
+        return False
+
+    identity = skill_identity_tokens(name, tags, scope, description)
+    lexicon = skill_retrieve_tokens(name, tags, scope, description, points)
+    session_fs = frozenset(session)
+    if retrieve_overlap(session_fs, identity):
+        return False
+    if retrieve_overlap(session_fs, lexicon):
+        return False
+
+    if is_closed_world_platform(platform):
+        distinctive = identity - _GENERIC_IDENTITY_TOKENS
+        return bool(distinctive)
+
+    return bool(identity & _FRAMEWORK_IDENTITY_TOKENS)
+
+
 def derive_hot_scope(
     name: str,
     description: str = "",
@@ -822,6 +1227,7 @@ class HotPoolTelemetry:
     new_records_this_task: int = 0
     records_skipped_no_points: int = 0
     records_skipped_excluded_skill: int = 0
+    records_skipped_off_domain: int = 0
     records_junk_filtered: int = 0
     records_admit_gate_dropped: int = 0
     evicted_deterministic: int = 0
@@ -837,6 +1243,10 @@ class HotPoolTelemetry:
     skills_excluded_in_history: List[str] = field(default_factory=list)
     points_excluded_in_history: int = 0
     points_omitted_utility: int = 0
+    points_omitted_retrieve: int = 0
+    skills_omitted_retrieve: List[str] = field(default_factory=list)
+    retrieve_mode: str = ""
+    episode_query_preview: str = ""
     injections_attempted: int = 0
     injections_nonempty: int = 0
     first_nonempty_inject_iter: Optional[int] = None
@@ -852,6 +1262,17 @@ class HotPoolTelemetry:
     outcome_attributions: Dict[str, int] = field(default_factory=dict)
     outcome_feedback_skipped_reason: str = ""
     outcome_feedback_attribution_source: str = ""
+    outcome_judge_finish_reason: str = ""
+    outcome_judge_raw_chars: int = 0
+    outcome_judge_stripped_chars: int = 0
+    outcome_judge_raw_preview: str = ""
+    outcome_judge_stripped_preview: str = ""
+    outcome_judge_max_tokens: int = 0
+    outcome_judge_thinking_off: bool = False
+    outcome_judge_retries: int = 0
+    outcome_judge_recovered_json: bool = False
+    outcome_judge_log_events: int = 0
+    outcome_judge_log_preview: str = ""
     _skill_view_seen: Set[str] = field(default_factory=set, repr=False)
 
     @property
@@ -872,6 +1293,7 @@ class HotPoolTelemetry:
                 "new_records_this_task": self.new_records_this_task,
                 "records_skipped_no_points": self.records_skipped_no_points,
                 "records_skipped_excluded_skill": self.records_skipped_excluded_skill,
+                "records_skipped_off_domain": self.records_skipped_off_domain,
                 "records_junk_filtered": self.records_junk_filtered,
                 "records_admit_gate_dropped": self.records_admit_gate_dropped,
                 "persist_path": self.persist_path,
@@ -886,6 +1308,10 @@ class HotPoolTelemetry:
                 "skills_excluded_in_history": list(self.skills_excluded_in_history),
                 "points_excluded_in_history": self.points_excluded_in_history,
                 "points_omitted_utility": self.points_omitted_utility,
+                "points_omitted_retrieve": self.points_omitted_retrieve,
+                "skills_omitted_retrieve": list(self.skills_omitted_retrieve),
+                "retrieve_mode": self.retrieve_mode,
+                "episode_query_preview": self.episode_query_preview,
                 "injections_attempted": self.injections_attempted,
                 "injections_nonempty": self.injections_nonempty,
                 "first_nonempty_inject_iter": self.first_nonempty_inject_iter,
@@ -911,6 +1337,17 @@ class HotPoolTelemetry:
                 "attributions": dict(self.outcome_attributions),
                 "skipped_reason": self.outcome_feedback_skipped_reason,
                 "attribution_source": self.outcome_feedback_attribution_source,
+                "judge_finish_reason": self.outcome_judge_finish_reason,
+                "judge_raw_chars": self.outcome_judge_raw_chars,
+                "judge_stripped_chars": self.outcome_judge_stripped_chars,
+                "judge_raw_preview": self.outcome_judge_raw_preview,
+                "judge_stripped_preview": self.outcome_judge_stripped_preview,
+                "judge_max_tokens": self.outcome_judge_max_tokens,
+                "judge_thinking_off": self.outcome_judge_thinking_off,
+                "judge_retries": self.outcome_judge_retries,
+                "judge_recovered_json": self.outcome_judge_recovered_json,
+                "judge_log_events": self.outcome_judge_log_events,
+                "judge_log_preview": self.outcome_judge_log_preview,
             },
         }
 
@@ -1027,6 +1464,237 @@ def _is_subfile_skill_view(args: str) -> bool:
     return False
 
 
+_BULKY_ARG_KEYS = frozenset(
+    {
+        "content",
+        "output",
+        "stdout",
+        "stderr",
+        "observation",
+        "result",
+        "html",
+        "text",
+        "body",
+        "data",
+        "messages",
+        "transcript",
+    }
+)
+_COMMAND_ARG_KEYS = frozenset({"command", "cmd", "code", "script", "source"})
+_API_CALL_RE = re.compile(
+    r"(?:apis\.\w[\w.]*|complete_task)\s*\([^)]{0,80}",
+    re.IGNORECASE,
+)
+
+
+def _head_tail(items: List[Any], max_n: int, *, head: int = 8) -> Tuple[List[Any], int]:
+    if max_n <= 0 or len(items) <= max_n:
+        return list(items), 0
+    tail = max(1, max_n - min(head, max_n // 2))
+    keep_head = max_n - tail
+    return list(items[:keep_head]) + list(items[-tail:]), len(items) - max_n
+
+
+def compress_tool_args(args: Any, *, max_chars: int = 96) -> Any:
+    """Keep short structured args; drop observation-sized blobs."""
+    max_chars = max(16, int(max_chars or 96))
+    if isinstance(args, str):
+        raw = args.strip()
+        if not raw:
+            return ""
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return sidechannel_text_preview(raw, max_chars=max_chars)
+        return compress_tool_args(parsed, max_chars=max_chars)
+    if isinstance(args, dict):
+        slim: Dict[str, Any] = {}
+        for key, val in args.items():
+            k = str(key)
+            if k.lower() in _BULKY_ARG_KEYS:
+                continue
+            if isinstance(val, str):
+                if k.lower() in _COMMAND_ARG_KEYS:
+                    first = val.strip().splitlines()[0] if val.strip() else ""
+                    slim[k] = first[:max_chars]
+                else:
+                    slim[k] = val[:max_chars]
+            elif isinstance(val, (int, float, bool)) or val is None:
+                slim[k] = val
+            # skip nested dict/list blobs
+        return slim
+    if isinstance(args, (int, float, bool)) or args is None:
+        return args
+    return sidechannel_text_preview(str(args), max_chars=max_chars)
+
+
+def compress_env_code(code: str, *, max_snippets: int = 3, max_chars: int = 80) -> List[str]:
+    """AppWorld-style snippets: apis.* / complete_task, else first code line."""
+    max_chars = max(16, int(max_chars or 80))
+    snippets: List[str] = []
+    for match in _API_CALL_RE.finditer(code or ""):
+        snippets.append(match.group(0)[:max_chars])
+        if len(snippets) >= max_snippets:
+            return snippets
+    if snippets:
+        return snippets
+    for line in str(code or "").splitlines():
+        text = line.strip()
+        if text and not text.startswith("#"):
+            return [text[:max_chars]]
+    return []
+
+
+def build_compressed_episode_log(
+    *,
+    messages: Optional[List[dict]] = None,
+    run_result: Optional[dict] = None,
+    episode_query: str = "",
+    env_actions: Optional[Iterable[Any]] = None,
+    max_events: int = 48,
+    max_arg_chars: int = 96,
+    max_final_chars: int = 240,
+    max_query_chars: int = 160,
+) -> Dict[str, Any]:
+    """Compressed tool/env actions for the outcome judge — no observations.
+
+    Sources, when present:
+    - assistant ``tool_calls`` in *messages* (SkillsBench / CLI)
+    - ``run_result.env_actions`` / ``actions`` / ``steps`` (ALFWorld actions,
+      AppWorld ``code`` snippets)
+    - frozen *episode_query* and truncated ``final_response``
+    """
+    max_events = max(1, int(max_events or 48))
+    max_arg_chars = max(16, int(max_arg_chars or 96))
+    res = run_result if isinstance(run_result, dict) else {}
+    events: List[Dict[str, Any]] = []
+    tool_counts: Dict[str, int] = {}
+
+    def _add(via: str, name: str, args: Any = "") -> None:
+        key = (name or via or "event").strip() or "event"
+        tool_counts[key] = tool_counts.get(key, 0) + 1
+        events.append({"via": via, "name": key, "args": args})
+
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            name = str(fn.get("name") or "").strip()
+            if not name or name in _HOUSEKEEPING_TOOLS:
+                continue
+            _add("tool", name, compress_tool_args(fn.get("arguments") or "", max_chars=max_arg_chars))
+
+    extra_actions = env_actions
+    if extra_actions is None:
+        extra_actions = res.get("env_actions")
+        if extra_actions is None:
+            extra_actions = res.get("actions")
+    for raw in extra_actions or ():
+        if isinstance(raw, dict):
+            action = raw.get("action") or raw.get("name") or ""
+            code = raw.get("code") or ""
+            if action:
+                _add("env", "action", sidechannel_text_preview(str(action), max_chars=max_arg_chars))
+            elif code:
+                snippets = compress_env_code(str(code), max_chars=max_arg_chars)
+                if snippets:
+                    _add("code", snippets[0], snippets[1:] if len(snippets) > 1 else "")
+                else:
+                    _add("code", "execute", "")
+            continue
+        text = str(raw or "").strip()
+        if text:
+            _add("env", "action", sidechannel_text_preview(text, max_chars=max_arg_chars))
+
+    for step in res.get("steps") or ():
+        if not isinstance(step, dict):
+            continue
+        if step.get("action"):
+            _add(
+                "env",
+                "action",
+                sidechannel_text_preview(str(step.get("action")), max_chars=max_arg_chars),
+            )
+        elif step.get("code"):
+            snippets = compress_env_code(str(step.get("code")), max_chars=max_arg_chars)
+            if snippets:
+                _add("code", snippets[0], snippets[1:] if len(snippets) > 1 else "")
+
+    query = (episode_query or "").strip()
+    if not query:
+        for msg in messages or []:
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            content = str(msg.get("content") or "")
+            if content and not is_observation_user_message(content):
+                query = content.strip()
+                break
+
+    final = str(res.get("final_response") or "").strip()
+    if not final:
+        for msg in reversed(list(messages or [])):
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            text = str(msg.get("content") or "").strip()
+            if text:
+                final = text
+                break
+
+    kept, n_truncated = _head_tail(events, max_events)
+    numbered = []
+    for i, ev in enumerate(kept, start=1):
+        numbered.append({"i": i, **ev})
+
+    return {
+        "query": sidechannel_text_preview(query, max_chars=max_query_chars),
+        "final_response": sidechannel_text_preview(final, max_chars=max_final_chars),
+        "events": numbered,
+        "tool_counts": dict(sorted(tool_counts.items())),
+        "n_events": len(events),
+        "n_truncated": n_truncated,
+    }
+
+
+def collect_outcome_episode_log(
+    *,
+    agent: Any = None,
+    run_result: Optional[dict] = None,
+    pool: Any = None,
+    messages: Optional[List[dict]] = None,
+) -> Dict[str, Any]:
+    """Build the judge log from agent / run_result / pool query."""
+    cfg = {}
+    if pool is not None:
+        cfg = getattr(pool, "config", None) or getattr(pool, "_config", None) or {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+    if cfg and not cfg.get("outcome_judge_log", True):
+        return {}
+    res = run_result if isinstance(run_result, dict) else {}
+    msgs = messages
+    if msgs is None and isinstance(res.get("messages"), list):
+        msgs = res.get("messages")
+    if msgs is None and agent is not None:
+        candidate = getattr(agent, "messages", None)
+        if isinstance(candidate, list):
+            msgs = candidate
+    query = ""
+    if pool is not None:
+        query = str(getattr(pool, "_episode_query", "") or "")
+    return build_compressed_episode_log(
+        messages=msgs,
+        run_result=res,
+        episode_query=query,
+        max_events=int(cfg.get("outcome_judge_log_max_events", 48) or 48),
+        max_arg_chars=int(cfg.get("outcome_judge_log_arg_chars", 96) or 96),
+    )
+
+
 def compute_alignment_hits(
     substantive_tools: List[tuple[str, str]],
     injected_points: Iterable[str],
@@ -1085,9 +1753,11 @@ class HotSkillPool:
     """Admission-capped pool of skill key points (session or persisted).
 
     ``max_entries`` is the store cap. Eviction happens when a new extract
-    overflows that cap. Inject dumps retained tips, optionally omitting
-    strongly harmful ones (``inject_filter_utilities``) and skipping
-    skills already in recent ``skill_view`` history.
+    overflows that cap. Admit applies a lexical domain gate before the
+    transfer tip gate. Inject selects up to ``inject_k`` tips by retrieve
+    overlap with a frozen episode query, optionally omitting strongly
+    harmful ones (``inject_filter_utilities``) and skipping skills already
+    in recent ``skill_view`` history.
     """
 
     def __init__(
@@ -1113,15 +1783,48 @@ class HotSkillPool:
         self._pool_at_turn_start: Set[str] = set()
         # Tips exposed this episode (injected or skipped via history) for outcome feedback.
         self._exposed_tips: "OrderedDict[Tuple[str, str], Dict[str, Any]]" = OrderedDict()
+        self._episode_query: str = ""
+        self._episode_query_tokens: FrozenSet[str] = frozenset()
+        self._lexicon_dirty = True
+        self._skill_lexicons: Dict[str, FrozenSet[str]] = {}
+        self._tip_lexicons: Dict[Tuple[str, int], FrozenSet[str]] = {}
+        self._identity_lexicons: Dict[str, FrozenSet[str]] = {}
+        self._idf_ignore: FrozenSet[str] = frozenset()
         if self._persist_enabled():
             self._load_persisted()
 
     def set_platform(self, platform: str) -> None:
-        """Set runtime platform for deny rules; evict entries that no longer qualify."""
+        """Set runtime platform for deny rules; evict entries that no longer qualify.
+
+        Evicts name-denylist / MCP-media skills and, when the domain gate is
+        on, persist entries whose *identity* is another closed-world or a
+        framework. Does not empty-∩ evict (that would wipe ALFWorld
+        household persist at every agent init).
+        """
         self._config["runtime_platform"] = (platform or "").strip()
         evicted = 0
+        plat = str(self._config.get("runtime_platform") or "")
+        foreign = foreign_closed_world_tokens(plat)
+        domain_gate = bool(self._config.get("admit_domain_gate", True))
+        closed = is_closed_world_platform(plat)
         for name in list(self._entries.keys()):
             if is_excluded_hot_skill(name, self._config):
+                self.evict(name)
+                evicted += 1
+                continue
+            if not domain_gate:
+                continue
+            entry = self._entries.get(name)
+            if entry is None:
+                continue
+            ident = skill_identity_tokens(
+                entry.name, entry.tags, entry.scope, entry.description
+            )
+            if ident & foreign:
+                self.evict(name)
+                evicted += 1
+                continue
+            if closed and (ident & _FRAMEWORK_IDENTITY_TOKENS):
                 self.evict(name)
                 evicted += 1
         if evicted:
@@ -1189,6 +1892,84 @@ class HotSkillPool:
     def set_admission_context(self, text: str) -> None:
         """User/task text passed to llm eviction at record time."""
         self._admission_context = (text or "").strip()
+        self.note_episode_query(text)
+
+    def note_episode_query(self, text: str) -> None:
+        """Freeze retrieve query on the first real instruction; ignore observations."""
+        raw = str(text or "").strip()
+        if not raw or is_observation_user_message(raw):
+            return
+        self._episode_query = raw
+        self._episode_query_tokens = frozenset(tokenize_retrieve(raw, min_len=3))
+
+    def clear_episode_query(self) -> None:
+        self._episode_query = ""
+        self._episode_query_tokens = frozenset()
+
+    def _session_query_tokens(
+        self, user_message: Optional[str] = None
+    ) -> FrozenSet[str]:
+        """Frozen episode tokens, else a real instruction — never observations."""
+        if self._episode_query_tokens:
+            return self._episode_query_tokens
+        raw = user_message if user_message is not None else self._admission_context
+        if raw and not is_observation_user_message(raw):
+            return frozenset(tokenize_retrieve(raw, min_len=3))
+        return frozenset()
+
+    def _skill_off_session_domain(
+        self,
+        name: str,
+        *,
+        tags: Optional[Iterable[str]] = None,
+        scope: str = "",
+        description: str = "",
+        points: Optional[Iterable[str]] = None,
+        user_message: Optional[str] = None,
+    ) -> bool:
+        if not self._config.get("admit_domain_gate", True):
+            return False
+        return is_off_session_domain(
+            name,
+            tags=tags,
+            scope=scope,
+            description=description,
+            points=points,
+            platform=str(self._config.get("runtime_platform") or ""),
+            query_tokens=self._session_query_tokens(user_message),
+        )
+
+    def _mark_lexicons_dirty(self) -> None:
+        self._lexicon_dirty = True
+
+    def _ensure_lexicons(self) -> None:
+        if not self._lexicon_dirty:
+            return
+        skill_lex: Dict[str, FrozenSet[str]] = {}
+        tip_lex: Dict[Tuple[str, int], FrozenSet[str]] = {}
+        ident_lex: Dict[str, FrozenSet[str]] = {}
+        for name, entry in self._entries.items():
+            ident_lex[name] = skill_identity_tokens(
+                entry.name, entry.tags, entry.scope, entry.description
+            )
+            skill_lex[name] = skill_retrieve_tokens(
+                entry.name,
+                entry.tags,
+                entry.scope,
+                entry.description,
+                entry.key_points,
+            )
+            for idx, point in enumerate(entry.key_points):
+                tip_lex[(name, idx)] = tip_retrieve_tokens(point)
+        ignore: Set[str] = set()
+        if len(skill_lex) >= 2:
+            common = set.intersection(*(set(v) for v in skill_lex.values()))
+            ignore = common
+        self._skill_lexicons = skill_lex
+        self._tip_lexicons = tip_lex
+        self._identity_lexicons = ident_lex
+        self._idf_ignore = frozenset(ignore)
+        self._lexicon_dirty = False
 
     def reset_telemetry(self) -> None:
         """Reset per-conversation telemetry (call at start of run_conversation)."""
@@ -1245,16 +2026,23 @@ class HotSkillPool:
             "inject_filter_utilities": bool(
                 self._config.get("inject_filter_utilities", True)
             ),
+            "inject_k": int(self._config.get("inject_k", 4) or 0),
+            "inject_retrieve": bool(self._config.get("inject_retrieve", True)),
+            "outcome_judge_max_tokens": int(
+                self._config.get("outcome_judge_max_tokens", 2048) or 2048
+            ),
         }
         return out
 
     def clear(self) -> None:
         self._entries.clear()
+        self._mark_lexicons_dirty()
         self._maybe_persist()
 
     def evict(self, name: str) -> None:
         key = (name or "").strip()
         if key and self._entries.pop(key, None) is not None:
+            self._mark_lexicons_dirty()
             self._maybe_persist()
 
     def record(
@@ -1300,6 +2088,20 @@ class HotSkillPool:
         desc = (description or "").strip()
         scope = derive_hot_scope(key, description=desc, tags=tag_list)
         context = user_message if user_message is not None else self._admission_context
+        if self._skill_off_session_domain(
+            key,
+            tags=tag_list,
+            scope=scope,
+            description=desc,
+            points=points,
+            user_message=user_message,
+        ):
+            logger.debug(
+                "hot skill pool: skill %r off session domain — skipping admit",
+                key,
+            )
+            self._telemetry.records_skipped_off_domain += 1
+            return
         before_gate = len(points)
         points = self._gate_admission_points(
             key,
@@ -1354,6 +2156,7 @@ class HotSkillPool:
             point_utilities=align_point_utilities(points, previous=previous),
         )
         self._entries[key] = entry
+        self._mark_lexicons_dirty()
         self.reconcile_pool(new_name=key, context=context or "", material_update=True)
         self._telemetry.new_records_this_task += 1
         self._maybe_persist()
@@ -1505,6 +2308,7 @@ class HotSkillPool:
             entry.key_points = new_points
             entry.skill_md_mtime = current_mtime
             refreshed += 1
+            self._mark_lexicons_dirty()
         if refreshed:
             self.reconcile_pool(
                 new_name="",
@@ -1551,9 +2355,9 @@ class HotSkillPool:
         turn: int = 0,
         exclude_names: Optional[Set[str]] = None,
     ) -> str:
-        """Serialize retained tips, omitting strongly harmful ones."""
+        """Serialize a retrieve + utility subset of retained tips."""
         if user_message:
-            self._admission_context = user_message
+            self.set_admission_context(user_message)
         if not self.enabled or not self._config.get("inject_on_turn", True):
             return ""
         if not self._entries:
@@ -1573,6 +2377,11 @@ class HotSkillPool:
             len(e.key_points) for e in skipped
         )
         self._telemetry.points_omitted_utility = 0
+        self._telemetry.points_omitted_retrieve = 0
+        self._telemetry.skills_omitted_retrieve = []
+        self._telemetry.retrieve_mode = ""
+        preview = self._episode_query.replace("\n", " ").strip()
+        self._telemetry.episode_query_preview = preview[:160]
         # Track exposure for outcome feedback (injected + history-skipped).
         for entry in skipped:
             for text in entry.key_points:
@@ -1643,7 +2452,9 @@ class HotSkillPool:
         self, entries: List[HotSkillEntry]
     ) -> List[Tuple[HotSkillEntry, List[str]]]:
         if not self._config.get("inject_filter_utilities", True):
-            return [(entry, list(entry.key_points)) for entry in entries if entry.key_points]
+            ranked = [(entry, list(entry.key_points)) for entry in entries if entry.key_points]
+            self._telemetry.points_omitted_utility = 0
+            return self._select_retrieve_views(ranked)
 
         views: List[Tuple[HotSkillEntry, List[str]]] = []
         omitted = 0
@@ -1673,7 +2484,111 @@ class HotSkillPool:
             ]
 
         self._telemetry.points_omitted_utility = omitted
-        return views
+        return self._select_retrieve_views(views)
+
+    def _select_retrieve_views(
+        self, views: List[Tuple[HotSkillEntry, List[str]]]
+    ) -> List[Tuple[HotSkillEntry, List[str]]]:
+        """Keep in-domain skills and top-k tips. No LLM on this path."""
+        if not views:
+            return views
+        if not self._config.get("inject_retrieve", True):
+            self._telemetry.retrieve_mode = "off"
+            return self._cap_inject_views(views)
+
+        self._ensure_lexicons()
+        query = self._episode_query_tokens
+        ignore = self._idf_ignore
+        platform = platform_retrieve_tokens(
+            str(self._config.get("runtime_platform") or "")
+        )
+
+        scored_skills: List[Tuple[HotSkillEntry, List[str], int]] = []
+        omitted_skills: List[str] = []
+        for entry, points in views:
+            lex = self._skill_lexicons.get(entry.name) or skill_retrieve_tokens(
+                entry.name, entry.tags, entry.scope, entry.description, points
+            )
+            hits = retrieve_overlap(query, lex, ignore=ignore)
+            if hits:
+                scored_skills.append((entry, points, len(hits)))
+                continue
+            if query:
+                ident = self._identity_lexicons.get(entry.name) or skill_identity_tokens(
+                    entry.name, entry.tags, entry.scope, entry.description
+                )
+                if retrieve_overlap(platform, ident):
+                    scored_skills.append((entry, points, 0))
+                    continue
+                omitted_skills.append(entry.name)
+                continue
+            scored_skills.append((entry, points, 0))
+
+        self._telemetry.skills_omitted_retrieve = omitted_skills
+        if query and scored_skills and any(n > 0 for _, _, n in scored_skills):
+            self._telemetry.retrieve_mode = "overlap"
+        elif query and omitted_skills and scored_skills:
+            self._telemetry.retrieve_mode = "platform_fallback"
+        elif query and not scored_skills:
+            self._telemetry.retrieve_mode = "utility_fallback"
+            scored_skills = [(entry, points, 0) for entry, points in views]
+            self._telemetry.skills_omitted_retrieve = []
+        else:
+            self._telemetry.retrieve_mode = "utility_fallback"
+
+        ranked_items: List[Tuple[float, str, int, HotSkillEntry, str]] = []
+        for entry, points, _skill_hits in scored_skills:
+            utils = self._aligned_utils(entry)
+            util_by_text = {text: util for text, util in zip(entry.key_points, utils)}
+            for idx, text in enumerate(points):
+                orig_idx = next(
+                    (i for i, point in enumerate(entry.key_points) if point == text),
+                    idx,
+                )
+                tip_lex = self._tip_lexicons.get((entry.name, orig_idx))
+                if tip_lex is None:
+                    tip_lex = tip_retrieve_tokens(text)
+                overlap_n = len(retrieve_overlap(query, tip_lex, ignore=ignore))
+                util_score = _utility_inject_score(util_by_text.get(text) or empty_point_utility())
+                score = (10.0 * overlap_n) + util_score
+                ranked_items.append((score, entry.name, idx, entry, text))
+
+        ranked_items.sort(key=lambda item: (-item[0], item[1], item[2]))
+        inject_k = int(self._config.get("inject_k", 4) or 0)
+        chosen = ranked_items if inject_k <= 0 else ranked_items[:inject_k]
+        kept_texts = {(entry.name, text) for _, _, _, entry, text in chosen}
+        omitted_pts = 0
+        grouped: "OrderedDict[str, Tuple[HotSkillEntry, List[str]]]" = OrderedDict()
+        for _score, _name, _idx, entry, text in chosen:
+            grouped.setdefault(entry.name, (entry, []))
+            grouped[entry.name][1].append(text)
+        for entry, points, _hits in scored_skills:
+            for text in points:
+                if (entry.name, text) not in kept_texts:
+                    omitted_pts += 1
+        self._telemetry.points_omitted_retrieve = omitted_pts
+        return [(entry, pts) for entry, pts in grouped.values() if pts]
+
+    def _cap_inject_views(
+        self, views: List[Tuple[HotSkillEntry, List[str]]]
+    ) -> List[Tuple[HotSkillEntry, List[str]]]:
+        inject_k = int(self._config.get("inject_k", 4) or 0)
+        if inject_k <= 0:
+            return views
+        kept: List[Tuple[HotSkillEntry, List[str]]] = []
+        remaining = inject_k
+        omitted = 0
+        for entry, points in views:
+            if remaining <= 0:
+                omitted += len(points)
+                continue
+            take = points[:remaining]
+            omitted += len(points) - len(take)
+            remaining -= len(take)
+            if take:
+                kept.append((entry, take))
+        self._telemetry.points_omitted_retrieve += omitted
+        return kept
 
     def _format_entries(self, entries: List[HotSkillEntry]) -> str:
         return self._format_entry_views(
@@ -1726,6 +2641,7 @@ class HotSkillPool:
             entry.point_utilities.pop(index)
         if not entry.key_points:
             self._entries.pop(skill, None)
+        self._mark_lexicons_dirty()
 
     def _gate_admission_points(
         self,
@@ -1941,12 +2857,15 @@ class HotSkillPool:
     def clear_exposed_tips(self) -> None:
         """Reset episode exposure tracking (call at episode / task start if needed)."""
         self._exposed_tips.clear()
+        self.clear_episode_query()
 
     def apply_outcome_feedback(
         self,
         outcome: dict,
         *,
         complete_fn: Optional[Callable[[List[Dict[str, str]]], str]] = None,
+        episode_log: Optional[Dict[str, Any]] = None,
+        messages: Optional[List[dict]] = None,
     ) -> Dict[str, Any]:
         """Attribute exposed tips after a labeled task; persist utilities.
 
@@ -1971,6 +2890,7 @@ class HotSkillPool:
         if not self._exposed_tips:
             summary["skipped_reason"] = "no_exposed_tips"
             return self._record_outcome_summary(summary)
+        self._reset_outcome_judge_meta()
 
         items = []
         for i, ((_sk, _pt), tip) in enumerate(self._exposed_tips.items()):
@@ -1984,11 +2904,28 @@ class HotSkillPool:
                 }
             )
 
+        log = episode_log
+        if log is None and self._config.get("outcome_judge_log", True):
+            log = build_compressed_episode_log(
+                messages=messages,
+                episode_query=self._episode_query,
+                max_events=int(self._config.get("outcome_judge_log_max_events", 48) or 48),
+                max_arg_chars=int(self._config.get("outcome_judge_log_arg_chars", 96) or 96),
+            )
+        if not isinstance(log, dict):
+            log = {}
+        events = log.get("events") if isinstance(log.get("events"), list) else []
+        self._telemetry.outcome_judge_log_events = int(log.get("n_events") or len(events) or 0)
+        names = [str(ev.get("name") or "") for ev in events if isinstance(ev, dict)]
+        self._telemetry.outcome_judge_log_preview = sidechannel_text_preview(
+            " | ".join(n for n in names if n)
+        )
+
         labels: Dict[str, str] = {}
         if callable(complete_fn):
             try:
                 text = complete_fn(
-                    build_outcome_attribution_messages(items, outcome)
+                    build_outcome_attribution_messages(items, outcome, episode_log=log)
                 ) or ""
             except Exception:
                 logger.debug("hot pool outcome attribution complete_fn failed", exc_info=True)
@@ -2074,6 +3011,57 @@ class HotSkillPool:
         if scored and not summary.get("attribution_source"):
             summary["attribution_source"] = "llm"
         return self._record_outcome_summary(summary)
+
+    def _reset_outcome_judge_meta(self) -> None:
+        self._telemetry.outcome_judge_finish_reason = ""
+        self._telemetry.outcome_judge_raw_chars = 0
+        self._telemetry.outcome_judge_stripped_chars = 0
+        self._telemetry.outcome_judge_raw_preview = ""
+        self._telemetry.outcome_judge_stripped_preview = ""
+        self._telemetry.outcome_judge_max_tokens = 0
+        self._telemetry.outcome_judge_thinking_off = False
+        self._telemetry.outcome_judge_retries = 0
+        self._telemetry.outcome_judge_recovered_json = False
+        self._telemetry.outcome_judge_log_events = 0
+        self._telemetry.outcome_judge_log_preview = ""
+
+    def note_outcome_judge_meta(self, meta: Optional[Dict[str, Any]]) -> None:
+        """Record side-channel decode diagnostics after an outcome judge call."""
+        if not isinstance(meta, dict) or not meta:
+            return
+        tel = self._telemetry
+        tel.outcome_judge_finish_reason = str(meta.get("finish_reason") or "")
+        try:
+            tel.outcome_judge_raw_chars = int(meta.get("raw_chars") or 0)
+        except (TypeError, ValueError):
+            tel.outcome_judge_raw_chars = 0
+        try:
+            tel.outcome_judge_stripped_chars = int(meta.get("stripped_chars") or 0)
+        except (TypeError, ValueError):
+            tel.outcome_judge_stripped_chars = 0
+        tel.outcome_judge_raw_preview = sidechannel_text_preview(
+            str(meta.get("raw_preview") or meta.get("raw") or "")
+        )
+        tel.outcome_judge_stripped_preview = sidechannel_text_preview(
+            str(meta.get("stripped_preview") or meta.get("stripped") or "")
+        )
+        try:
+            tel.outcome_judge_max_tokens = int(meta.get("max_tokens") or 0)
+        except (TypeError, ValueError):
+            tel.outcome_judge_max_tokens = 0
+        tel.outcome_judge_thinking_off = bool(meta.get("thinking_off"))
+        try:
+            tel.outcome_judge_retries = int(meta.get("retries") or 0)
+        except (TypeError, ValueError):
+            tel.outcome_judge_retries = 0
+        tel.outcome_judge_recovered_json = bool(meta.get("recovered_json"))
+        try:
+            tel.outcome_judge_log_events = int(meta.get("log_events") or 0)
+        except (TypeError, ValueError):
+            tel.outcome_judge_log_events = 0
+        preview = str(meta.get("log_preview") or "")
+        if preview:
+            tel.outcome_judge_log_preview = sidechannel_text_preview(preview)
 
     def _record_outcome_summary(self, summary: Dict[str, Any]) -> Dict[str, Any]:
         self._telemetry.outcome_feedback_applied = bool(summary.get("applied"))
@@ -2168,6 +3156,7 @@ class HotSkillPool:
             if entry is not None:
                 loaded[name] = entry
         self._entries = loaded
+        self._mark_lexicons_dirty()
         logger.debug(
             "hot skill pool: loaded %d entries from %s (global_turn=%d)",
             len(self._entries),
@@ -2391,14 +3380,15 @@ def _reload_skill_content(name: str, *, session_id: Optional[str] = None) -> str
 
 
 def build_llm_eviction_system_prompt(keep_n: int) -> str:
-    """System prompt for pool reconcile / overflow keep-set judgment (retain = inject)."""
+    """System prompt for pool reconcile / overflow keep-set judgment."""
     return (
         "You curate a small hot-skill key-point pool used as short guardrail "
         "reminders.\n"
         "\n"
-        "Hard constraint — retain equals inject: every tip you KEEP will be "
-        "prepended on later turns and on later tasks, including held-out tasks "
-        "that were never seen while the pool was built. Optimize for "
+        "Hard constraint — keep is the store, not a guaranteed inject: every "
+        "tip you KEEP may be prepended on later turns and on later tasks, "
+        "including held-out tasks that were never seen while the pool was "
+        "built. Inject later selects a matching subset. Optimize for "
         "unseen-task transfer and broadcast-safety (still helpful or at least "
         "harmless out of domain). Do NOT optimize for replaying the same "
         "tasks that produced the tips, and do NOT maximize usefulness on the "
@@ -2466,7 +3456,7 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "being admitted and to break ties. Do NOT treat \"most relevant to "
         "context\", \"will help if this task is repeated\", or \"likely needed "
         "on similar seen tasks\" as the primary keep criterion under "
-        "retain = inject.\n"
+        "store-then-retrieve inject.\n"
         "\n"
         "When utilities_flat_no_helpful is true in the user payload, no tip "
         "yet has a helpful attribution — prefer dropping oracle/cheatsheet "
@@ -2576,6 +3566,7 @@ def llm_admit_transfer_ids(
 def build_outcome_attribution_messages(
     items: List[Dict[str, Any]],
     outcome: dict,
+    episode_log: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, str]]:
     """Isolated judge: label each exposed tip helpful / harmful / irrelevant."""
     system = (
@@ -2587,6 +3578,14 @@ def build_outcome_attribution_messages(
         "succeeded), tests_passed/tests_total, and duration when present. On "
         "benchmarks where success is near-ceiling, prefer judging whether a tip "
         "helped or hurt efficiency and reliability.\n"
+        "\n"
+        "episode_log is a compressed action trace (tool names + short args, "
+        "env actions, or code API snippets). It does NOT include observations "
+        "or raw API dumps. Use it to see whether a tip was followed, ignored, "
+        "or contradicted. A tip whose advice never appears in the log is "
+        "irrelevant even on success. A tip that matches a long enumeration of "
+        "lookups or extra env steps is harmful when iterations are high. "
+        "Missing log fields are not evidence the tip helped.\n"
         "\n"
         "When outcome.claimed_success_mismatch is true, the agent asserted "
         "pass/completion in its final response but labeled evaluation failed — "
@@ -2615,6 +3614,7 @@ def build_outcome_attribution_messages(
     payload = {
         "outcome": outcome,
         "points": items,
+        "episode_log": episode_log if isinstance(episode_log, dict) else {},
     }
     return [
         {"role": "system", "content": system},
@@ -2679,7 +3679,7 @@ def build_llm_eviction_messages(
     payload = {
         "selection_goal": (
             "Choose a keep-set that transfers to held-out / unseen tasks "
-            "(retain = inject). Prefer abstract, evaluator-safe pitfalls over "
+            "(store; inject later retrieves a subset). Prefer abstract, evaluator-safe pitfalls over "
             "cheatsheets for replaying seen tasks. Prefer fewer strong tips "
             "over filling keep_n."
         ),

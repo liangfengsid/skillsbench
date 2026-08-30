@@ -87,7 +87,16 @@ from tools.browser_tool import cleanup_browser
 
 # Agent internals extracted to agent/ package for modularity
 from agent.memory_manager import StreamingContextScrubber, build_memory_context_block, sanitize_context
-from agent.hot_skills import HotSkillPool, build_hot_pool_outcome, llm_admit_transfer_ids, llm_eviction_keep_ids
+from agent.hot_skills import (
+    HotSkillPool,
+    build_hot_pool_outcome,
+    collect_outcome_episode_log,
+    llm_admit_transfer_ids,
+    llm_eviction_keep_ids,
+    recover_json_object,
+    sidechannel_text_preview,
+    sidechannel_thinking_off_extra_body,
+)
 from agent.retry_utils import jittered_backoff
 from agent.error_classifier import classify_api_error, FailoverReason
 from agent.prompt_builder import (
@@ -3670,12 +3679,23 @@ class AIAgent:
             return {"applied": False, "skipped_reason": "judge_inflight"}
         self._hot_pool_llm_judge_inflight = True
         try:
-            return pool.apply_outcome_feedback(
+            max_tokens = int(pool.config.get("outcome_judge_max_tokens", 2048) or 2048)
+            episode_log = collect_outcome_episode_log(
+                agent=self, run_result=run_result, pool=pool
+            )
+            summary = pool.apply_outcome_feedback(
                 record,
                 complete_fn=lambda msgs: self._complete_sidechannel_text(
-                    msgs, max_tokens=512, reason="hot_pool_outcome_feedback"
+                    msgs,
+                    max_tokens=max_tokens,
+                    reason="hot_pool_outcome_feedback",
                 ),
+                episode_log=episode_log,
             )
+            meta = getattr(self, "_last_sidechannel_meta", None)
+            if isinstance(meta, dict) and meta.get("reason") == "hot_pool_outcome_feedback":
+                pool.note_outcome_judge_meta(meta)
+            return summary
         except Exception:
             logger.debug("hot pool outcome feedback failed", exc_info=True)
             return {"applied": False, "skipped_reason": "error"}
@@ -3734,6 +3754,22 @@ class AIAgent:
         finally:
             self._hot_pool_llm_judge_inflight = False
 
+    def _sidechannel_thinking_off_extra_body(self) -> dict:
+        """Disable thinking on tools-free JSON judges (Qwen/vLLM, OpenRouter, Kimi)."""
+        base = getattr(self, "_base_url_lower", "") or (self.base_url or "").lower()
+        is_kimi = (
+            base_url_host_matches(self.base_url, "api.kimi.com")
+            or base_url_host_matches(self.base_url, "moonshot.ai")
+            or base_url_host_matches(self.base_url, "moonshot.cn")
+        )
+        return sidechannel_thinking_off_extra_body(
+            model=self.model or "",
+            is_openrouter=self._is_openrouter_url(),
+            is_nous="nousresearch" in base,
+            is_kimi=is_kimi,
+            is_custom_provider=self.provider == "custom",
+        )
+
     def _complete_sidechannel_text(
         self,
         messages: list,
@@ -3741,12 +3777,61 @@ class AIAgent:
         max_tokens: int = 512,
         reason: str = "sidechannel",
     ) -> str:
-        """Tools-free completion on the agent's existing client. Not written to history."""
+        """Tools-free completion on the agent's existing client. Not written to history.
+
+        Thinking is disabled where the provider honors it. Visible text is
+        think-stripped; think-only completions are not returned as the
+        answer. One retry if the first visible payload is empty.
+        """
+        meta = {
+            "reason": reason,
+            "max_tokens": int(max_tokens or 0),
+            "finish_reason": "",
+            "raw_chars": 0,
+            "stripped_chars": 0,
+            "raw_preview": "",
+            "stripped_preview": "",
+            "thinking_off": False,
+            "retries": 0,
+            "recovered_json": False,
+        }
+        self._last_sidechannel_meta = meta
         transport = self._get_transport()
         if transport is None:
             return ""
-        text = ""
-        try:
+
+        def _strip_visible(raw: str) -> str:
+            text = (raw or "").strip()
+            if not text or not hasattr(self, "_strip_think_blocks"):
+                return text
+            try:
+                return (self._strip_think_blocks(text) or "").strip()
+            except Exception:
+                return text
+
+        def _record(raw: str, visible: str, finish_reason: str, *, recovered: bool) -> str:
+            meta["finish_reason"] = finish_reason or ""
+            meta["raw_chars"] = len(raw or "")
+            meta["stripped_chars"] = len(visible or "")
+            meta["raw_preview"] = sidechannel_text_preview(raw)
+            meta["stripped_preview"] = sidechannel_text_preview(visible)
+            meta["recovered_json"] = bool(recovered)
+            self._last_sidechannel_meta = meta
+            return visible
+
+        def _resolve_visible(raw: str) -> tuple[str, bool]:
+            visible = _strip_visible(raw)
+            if visible:
+                return visible, False
+            recovered = recover_json_object(raw)
+            if recovered:
+                return recovered, True
+            return "", False
+
+        def _once() -> tuple[str, str]:
+            thinking_off = False
+            finish_reason = ""
+            raw_text = ""
             if self.api_mode == "anthropic_messages":
                 kw = transport.build_kwargs(
                     model=self.model,
@@ -3757,8 +3842,11 @@ class AIAgent:
                     is_oauth=getattr(self, "_is_anthropic_oauth", False),
                     preserve_dots=self._anthropic_preserve_dots(),
                 )
+                thinking_off = True
                 resp = self._anthropic_messages_create(kw)
-                text = (transport.normalize_response(resp).content or "").strip()
+                norm = transport.normalize_response(resp)
+                raw_text = (norm.content or "").strip()
+                finish_reason = str(getattr(norm, "finish_reason", "") or "")
             elif self.api_mode == "bedrock_converse":
                 region = getattr(self, "_bedrock_region", None) or "us-east-1"
                 kw = transport.build_kwargs(
@@ -3774,13 +3862,17 @@ class AIAgent:
                 kw.pop("__bedrock_region__", None)
                 kw.pop("__bedrock_converse__", None)
                 raw = _get_bedrock_runtime_client(region).converse(**kw)
-                text = (transport.normalize_response(raw).content or "").strip()
+                norm = transport.normalize_response(raw)
+                raw_text = (norm.content or "").strip()
+                finish_reason = str(getattr(norm, "finish_reason", "") or "")
             elif self.api_mode == "codex_responses":
                 kw = self._build_api_kwargs(messages)
                 kw.pop("tools", None)
                 kw.pop("tool_choice", None)
                 resp = self._run_codex_stream(kw)
-                text = (transport.normalize_response(resp).content or "").strip()
+                norm = transport.normalize_response(resp)
+                raw_text = (norm.content or "").strip()
+                finish_reason = str(getattr(norm, "finish_reason", "") or "")
             else:
                 kwargs = {
                     "model": self.model,
@@ -3798,18 +3890,35 @@ class AIAgent:
                         kwargs["temperature"] = 0 if temp is None else temp
                 except Exception:
                     kwargs["temperature"] = 0
+                extra = self._sidechannel_thinking_off_extra_body()
+                if extra:
+                    kwargs["extra_body"] = extra
+                    thinking_off = True
                 client = self._ensure_primary_openai_client(reason=reason)
                 resp = client.chat.completions.create(**kwargs)
-                text = (transport.normalize_response(resp).content or "").strip()
+                norm = transport.normalize_response(resp)
+                raw_text = (norm.content or "").strip()
+                finish_reason = str(getattr(norm, "finish_reason", "") or "")
+            meta["thinking_off"] = thinking_off
+            return raw_text, finish_reason
+
+        try:
+            raw_text, finish_reason = _once()
         except Exception:
             logger.debug("sidechannel completion failed (%s)", reason, exc_info=True)
-            return ""
-        if text and hasattr(self, "_strip_think_blocks"):
+            return _record("", "", "", recovered=False)
+
+        visible, recovered = _resolve_visible(raw_text)
+        if not visible:
             try:
-                text = self._strip_think_blocks(text) or text
+                raw_text, finish_reason = _once()
+                meta["retries"] = 1
+                visible, recovered = _resolve_visible(raw_text)
             except Exception:
-                pass
-        return (text or "").strip()
+                logger.debug(
+                    "sidechannel completion retry failed (%s)", reason, exc_info=True
+                )
+        return _record(raw_text, visible, finish_reason, recovered=recovered)
 
     def _build_memory_write_metadata(
         self,

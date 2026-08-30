@@ -920,7 +920,8 @@ DEFAULT_CONFIG = {
             "rank_strategy": "laplace",
             "ucb1_c": 1.4142135623730951,
         },
-        # Admission-capped key-point pool, injected in full each user turn
+        # Admission-capped key-point pool. Store size is max_entries; inject
+        # is a retrieve top-k (inject_k) against a frozen episode query
         # (API-call time only — preserves prompt cache). Eviction runs when a
         # new extract would overflow max_entries. Full procedures stay behind
         # skill_view. Extraction prefers ## Common Pitfalls / ## Best Practices /
@@ -928,11 +929,11 @@ DEFAULT_CONFIG = {
         # markers, then NEVER/ALWAYS heuristics.
         "hot_pool": {
             "enabled": True,
-            # Retain = inject: this many key points are stored AND dumped into
-            # <hot-skills> (minus skip_if_in_history). Reconcile runs on each
-            # material admit/sync (policy llm) and when over max_entries.
+            # Store budget. Inject is inject_k (retrieve ∩ query, then utility).
             "max_entries": 12,
-            "max_chars": 0,  # ignored — inject budget is max_entries (points)
+            "inject_k": 4,
+            "inject_retrieve": True,
+            "max_chars": 0,  # ignored — inject budget is inject_k (points)
             "max_points_per_skill": 8,
             "max_chars_per_point": 240,
             # llm (default): side-channel reconcile judge on the running agent's
@@ -943,6 +944,10 @@ DEFAULT_CONFIG = {
             "eviction_policy": "llm",
             "reconcile_on_update": True,
             "admit_transfer_gate": True,
+            # Lexical skill-vs-session domain at admit (no LLM). Closed-world
+            # (appworld-batch / alfworld-batch) omit distinctive off-domain
+            # skills; SkillsBench / CLI fail-open except framework identities.
+            "admit_domain_gate": True,
             "junk_filter": True,
             "junk_min_point_chars": 12,
             # Extra skill names denied at admit (merged with built-in meta denylist).
@@ -968,6 +973,12 @@ DEFAULT_CONFIG = {
             # (success + low steps). Wording is not a signal.
             "outcome_feedback_heuristic": True,
             "outcome_helpful_max_iterations": 12,
+            # Side-channel JSON budget for per-tip outcome labels (thinking off).
+            "outcome_judge_max_tokens": 2048,
+            # Compressed tool/env action log in the outcome judge (no observations).
+            "outcome_judge_log": True,
+            "outcome_judge_log_max_events": 48,
+            "outcome_judge_log_arg_chars": 96,
             # Rewrite structural identifiers (paths, emails, UUIDs, hex IDs).
             "abstract_extract": True,
             # Omit strongly harmful tips at inject (store retains).

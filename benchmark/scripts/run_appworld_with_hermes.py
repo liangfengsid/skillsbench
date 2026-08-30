@@ -972,6 +972,7 @@ def run_one_task(
     agent = None
 
     conversation = copy.deepcopy(initial_messages)
+    assistant_content = ""
     hermes_task_id = f"appworld-{dataset}-{task_id}"
     hermes_iterations = resolve_max_hermes_iterations(
         max_hermes_iterations,
@@ -1154,7 +1155,20 @@ def run_one_task(
             apply_benchmark_hot_pool_outcome_feedback(
                 agent,
                 evaluation=evaluation,
-                run_result=hermes_stats,
+                run_result={
+                    **hermes_stats,
+                    "messages": conversation,
+                    "steps": [
+                        {
+                            "step": s.get("step"),
+                            "code": s.get("code") or "",
+                            "action": s.get("action") or "",
+                        }
+                        for s in steps
+                        if isinstance(s, dict)
+                    ],
+                    "final_response": assistant_content or "",
+                },
                 duration_sec=duration_sec,
                 benchmark="appworld",
                 wait_background_review=False,

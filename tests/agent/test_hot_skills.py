@@ -22,6 +22,18 @@ from agent.hot_skills import (
     heuristic_outcome_attributions,
     is_excluded_hot_skill,
     is_junk_key_point,
+    is_off_session_domain,
+    is_observation_user_message,
+    platform_retrieve_tokens,
+    recover_json_object,
+    retrieve_overlap,
+    build_compressed_episode_log,
+    collect_outcome_episode_log,
+    compress_env_code,
+    compress_tool_args,
+    sidechannel_thinking_off_extra_body,
+    skill_retrieve_tokens,
+    tokenize_retrieve,
     _fenced_char_ranges,
     _position_in_fenced_region,
     llm_eviction_keep_ids,
@@ -213,6 +225,10 @@ def test_load_hot_skills_config_merges_defaults():
     assert cfg["enabled"] is False
     assert cfg["max_points_per_skill"] == 8
     assert cfg["eviction_policy"] == "llm"
+    assert cfg["inject_k"] == 4
+    assert cfg["inject_retrieve"] is True
+    assert cfg["admit_domain_gate"] is True
+    assert cfg["outcome_judge_max_tokens"] == 2048
 
 
 def test_unknown_eviction_policy_defaults_to_llm():
@@ -260,6 +276,8 @@ def test_global_pool_max_entries_is_retain_and_inject():
 
 
 def test_oldest_eviction_drops_earliest_skill(pool_cfg):
+    pool_cfg = dict(pool_cfg)
+    pool_cfg["inject_k"] = 0
     pool = HotSkillPool(pool_cfg)
     for i, name in enumerate(("a", "b", "c", "d")):
         pool.record(name=name, content=_SAMPLE_SKILL, turn=i + 1)
@@ -297,10 +315,11 @@ def test_build_block_injects_key_points_not_full_body(pool_cfg):
 
 
 def test_build_block_injects_full_retained_points(pool_cfg):
-    """Inject dumps the retained point set; no secondary char truncate."""
+    """inject_k=0 still serializes the full retained set (no char truncate)."""
     cfg = dict(pool_cfg)
     cfg["max_entries"] = 5
     cfg["max_points_per_skill"] = 5
+    cfg["inject_k"] = 0
     pool = HotSkillPool(cfg)
     points = [f"Guardrail point number {i} with some extra text" for i in range(5)]
     pool.record(
@@ -780,7 +799,7 @@ def test_build_llm_eviction_messages_broadcast_not_task_local():
     msgs = build_llm_eviction_messages(items, keep_n=1, context="schedule gmail meetings")
     assert len(msgs) == 2
     system = msgs[0]["content"]
-    assert "retain equals inject" in system.lower() or "retain = inject" in system.lower()
+    assert "keep is the store" in system.lower() or "store-then-retrieve" in system.lower()
     assert "broadcast" in system.lower() or "unseen" in system.lower()
     assert "cheatsheet" in system.lower() or "replay" in system.lower()
     assert "Do NOT treat" in system and "primary keep criterion" in system
@@ -887,6 +906,11 @@ def test_outcome_feedback_default_on():
     assert cfg.get("outcome_feedback_heuristic") is True
     assert cfg.get("abstract_extract") is True
     assert cfg.get("inject_filter_utilities") is True
+    assert cfg.get("inject_retrieve") is True
+    assert cfg.get("admit_domain_gate") is True
+    assert cfg.get("outcome_judge_max_tokens") == 2048
+    assert cfg.get("outcome_judge_log") is True
+    assert cfg.get("inject_k") == 4
 
 
 def test_build_hot_pool_outcome_prefers_env_steps():
@@ -1003,6 +1027,8 @@ def test_outcome_attribution_messages_include_outcome():
     assert "enumerat" in system or "extra iterations" in system
     body = json.loads(msgs[1]["content"])
     assert body["outcome"]["iterations"] == 5
+    assert "episode_log" in body
+    assert "episode_log" in msgs[0]["content"]
 
 
 def test_abstract_extract_redacts_structural_ids_only():
@@ -1543,4 +1569,557 @@ def test_reconcile_on_update_can_be_disabled():
     )
     assert "demo" in pool._entries
     assert pool.export_telemetry()["eviction"]["reconcile_ran"] is False
+
+
+def test_tokenize_retrieve_drops_process_stopwords():
+    toks = tokenize_retrieve("ALWAYS check the API before you call venmo login")
+    assert "venmo" in toks
+    assert "login" in toks
+    assert "always" not in toks
+    assert "check" not in toks
+    assert "the" not in toks
+
+
+def test_observation_user_message_detection():
+    assert is_observation_user_message("Output:\n```\nok\n```")
+    assert is_observation_user_message("```\nprint(1)\n```")
+    assert is_observation_user_message("Observation: You are in the kitchen")
+    assert not is_observation_user_message("Reset friends on venmo")
+
+
+def test_retrieve_overlap_ignores_pool_wide_tokens():
+    query = frozenset({"venmo", "never"})
+    lex = frozenset({"venmo", "never", "phone"})
+    hits = retrieve_overlap(query, lex, ignore=frozenset({"never"}))
+    assert hits == frozenset({"venmo"})
+
+
+def test_inject_retrieve_omits_off_domain_skill(pool_cfg):
+    cfg = dict(pool_cfg)
+    cfg["inject_k"] = 8
+    cfg["runtime_platform"] = "appworld-batch"
+    cfg["admit_domain_gate"] = False
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="appworld-api-interaction",
+        content="",
+        description="AppWorld sandbox APIs",
+        tags=["appworld", "sandbox", "apis"],
+        key_points=[
+            "ALWAYS paginate fully",
+            "Venmo search returns unrelated users — verify email",
+        ],
+        turn=1,
+    )
+    pool.record(
+        name="dev-config",
+        content="",
+        description="Configure the local agent install",
+        tags=["setup", "configuration", "cli", "gateway"],
+        key_points=[
+            "Use get_hermes_home for profile-safe paths",
+            "Config values go in config.yaml",
+        ],
+        turn=2,
+    )
+    block = pool.build_block(user_message="Reset friends on venmo to match my phone", turn=3)
+    assert "Venmo search" in block
+    assert "get_hermes_home" not in block
+    tel = pool.export_telemetry()["inject"]
+    assert "dev-config" in tel["skills_omitted_retrieve"]
+    assert tel["retrieve_mode"] == "overlap"
+
+
+def test_inject_retrieve_ranks_overlapping_tip_first(pool_cfg):
+    cfg = dict(pool_cfg)
+    cfg["inject_k"] = 1
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="appworld-api-interaction",
+        content="",
+        tags=["appworld"],
+        key_points=[
+            "ALWAYS paginate fully — don't stop at the first page",
+            "Venmo search returns unrelated users — verify email",
+        ],
+        turn=1,
+    )
+    block = pool.build_block(user_message="Request $28 on Venmo from Melissa", turn=2)
+    assert "Venmo search" in block
+    assert "paginate" not in block
+    assert pool.export_telemetry()["inject"]["point_count"] == 1
+
+
+def test_inject_k_caps_block(pool_cfg):
+    cfg = dict(pool_cfg)
+    cfg["inject_k"] = 2
+    pool = HotSkillPool(cfg)
+    points = [
+        "Venmo friends must be looked up via search",
+        "Phone contacts use phone.login username",
+        "ALWAYS paginate venmo transaction lists",
+        "Spotify library songs need show_song",
+    ]
+    pool.record(name="appworld-api-interaction", content="", key_points=points, turn=1)
+    block = pool.build_block(user_message="How many venmo friends did I add", turn=2)
+    assert block.count("- ") == 2
+    assert "venmo" in block.lower()
+
+
+def test_observation_keeps_frozen_episode_query(pool_cfg):
+    cfg = dict(pool_cfg)
+    cfg["inject_k"] = 1
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="appworld-api-interaction",
+        content="",
+        key_points=[
+            "Venmo search returns unrelated users",
+            "ALWAYS paginate fully",
+        ],
+        turn=1,
+    )
+    pool.build_block(user_message="Reset friends on venmo", turn=1)
+    block = pool.build_block(user_message="Output:\n```\n[]\n```", turn=2)
+    assert "Venmo search" in block
+    assert pool._episode_query.startswith("Reset friends")
+    assert pool.export_telemetry()["inject"]["retrieve_mode"] == "overlap"
+
+
+def test_clear_exposed_tips_resets_episode_query(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.note_episode_query("Reset friends on venmo")
+    assert pool._episode_query
+    pool.clear_exposed_tips()
+    assert pool._episode_query == ""
+    assert pool._episode_query_tokens == frozenset()
+
+
+def test_empty_query_falls_back_to_utility_without_omitting(pool_cfg):
+    cfg = dict(pool_cfg)
+    cfg["inject_k"] = 4
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="nav",
+        content="",
+        key_points=["go to fridge first", "never open locked door"],
+        turn=1,
+    )
+    block = pool.build_block(user_message="hello", turn=2)
+    assert "fridge" in block
+    assert "locked door" in block
+    tel = pool.export_telemetry()["inject"]
+    assert tel["retrieve_mode"] == "utility_fallback"
+    assert tel["skills_omitted_retrieve"] == []
+
+
+def test_platform_fallback_keeps_in_domain_when_query_misses_tips(pool_cfg):
+    cfg = dict(pool_cfg)
+    cfg["inject_k"] = 4
+    cfg["runtime_platform"] = "appworld-batch"
+    cfg["admit_domain_gate"] = False
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="appworld-api-interaction",
+        content="",
+        tags=["appworld", "sandbox", "apis"],
+        key_points=["ALWAYS paginate fully"],
+        turn=1,
+    )
+    pool.record(
+        name="dev-config",
+        content="",
+        tags=["setup", "cli", "gateway"],
+        key_points=["Use get_hermes_home for paths"],
+        turn=2,
+    )
+    block = pool.build_block(user_message="walk the dog around the block", turn=3)
+    assert "paginate" in block
+    assert "get_hermes_home" not in block
+    assert pool.export_telemetry()["inject"]["retrieve_mode"] == "platform_fallback"
+
+
+def test_skill_retrieve_tokens_include_tip_nouns():
+    toks = skill_retrieve_tokens(
+        "appworld-api-interaction",
+        tags=["appworld", "sandbox"],
+        scope="AppWorld sandbox APIs",
+        points=["Venmo search returns unrelated users"],
+    )
+    assert "appworld" in toks
+    assert "venmo" in toks
+    assert "sandbox" in toks
+
+
+def test_platform_retrieve_tokens_include_aliases():
+    toks = platform_retrieve_tokens("appworld-batch")
+    assert "appworld" in toks
+    assert "apis" in toks
+    assert "skillsbench" in platform_retrieve_tokens("skillsbench-batch")
+
+
+def test_admit_domain_gate_omits_distinctive_off_domain_on_appworld(pool_cfg):
+    cfg = {**pool_cfg, "runtime_platform": "appworld-batch"}
+    pool = HotSkillPool(cfg)
+    pool.note_episode_query("Reset friends on venmo to match my phone")
+    pool.record(
+        name="dev-config",
+        content="",
+        description="Configure the local agent install",
+        tags=["setup", "configuration", "cli", "gateway"],
+        key_points=["Use get_hermes_home for profile-safe paths"],
+        turn=1,
+    )
+    pool.record(
+        name="appworld-api-interaction",
+        content="",
+        tags=["appworld", "sandbox", "apis"],
+        key_points=["ALWAYS paginate fully"],
+        turn=1,
+    )
+    assert "dev-config" not in pool._entries
+    assert "appworld-api-interaction" in pool._entries
+    assert pool._telemetry.records_skipped_off_domain == 1
+
+
+def test_admit_domain_gate_keeps_appworld_skill_when_query_misses(pool_cfg):
+    cfg = {**pool_cfg, "runtime_platform": "appworld-batch"}
+    pool = HotSkillPool(cfg)
+    pool.note_episode_query("walk the dog around the block")
+    pool.record(
+        name="appworld-api-interaction",
+        content="",
+        tags=["appworld", "sandbox"],
+        key_points=["ALWAYS paginate fully"],
+        turn=1,
+    )
+    assert "appworld-api-interaction" in pool._entries
+
+
+def test_admit_domain_gate_omits_appworld_skill_on_alfworld(pool_cfg):
+    cfg = {**pool_cfg, "runtime_platform": "alfworld-batch"}
+    pool = HotSkillPool(cfg)
+    pool.note_episode_query("put the apple in the fridge")
+    pool.record(
+        name="appworld-api-interaction",
+        content="",
+        tags=["appworld", "sandbox", "apis"],
+        key_points=["ALWAYS paginate fully"],
+        turn=1,
+    )
+    pool.record(
+        name="nav",
+        content="",
+        key_points=["go to the fridge first", "never open a locked door"],
+        turn=1,
+    )
+    assert "appworld-api-interaction" not in pool._entries
+    assert "nav" in pool._entries
+    pool.record(
+        name="helper",
+        content="",
+        key_points=["ALWAYS look around before you move"],
+        turn=2,
+    )
+    assert "helper" in pool._entries
+
+
+def test_admit_domain_gate_keeps_alfworld_skill_via_tip_overlap(pool_cfg):
+    cfg = {**pool_cfg, "runtime_platform": "alfworld-batch"}
+    pool = HotSkillPool(cfg)
+    pool.note_episode_query("put the apple in the fridge")
+    pool.record(
+        name="heat-apple",
+        content="",
+        key_points=["heat the apple before you put it in the fridge"],
+        turn=1,
+    )
+    assert "heat-apple" in pool._entries
+
+
+def test_admit_domain_gate_skillsbench_fail_open_on_generic_query(pool_cfg):
+    cfg = {**pool_cfg, "runtime_platform": "skillsbench-batch"}
+    pool = HotSkillPool(cfg)
+    pool.note_episode_query("complete the task in the environment")
+    pool.record(
+        name="xlsx-formula-audit",
+        content="",
+        tags=["spreadsheet"],
+        key_points=["ALWAYS use Excel formulas instead of Python values"],
+        turn=1,
+    )
+    assert "xlsx-formula-audit" in pool._entries
+    assert pool._telemetry.records_skipped_off_domain == 0
+
+
+def test_admit_domain_gate_skillsbench_omits_framework_skill(pool_cfg):
+    cfg = {**pool_cfg, "runtime_platform": "skillsbench-batch"}
+    pool = HotSkillPool(cfg)
+    pool.note_episode_query("complete the task in the environment")
+    pool.record(
+        name="claude-code",
+        content="",
+        tags=["claude", "vscode"],
+        key_points=["ALWAYS open the workspace folder first"],
+        turn=1,
+    )
+    assert "claude-code" not in pool._entries
+    assert pool._telemetry.records_skipped_off_domain == 1
+
+
+def test_admit_domain_gate_empty_query_no_platform_admits(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(
+        name="dev-config",
+        content="",
+        tags=["setup", "cli", "gateway"],
+        key_points=["Use get_hermes_home for paths"],
+        turn=1,
+    )
+    assert "dev-config" in pool._entries
+
+
+def test_admit_domain_gate_observation_does_not_replace_episode(pool_cfg):
+    cfg = {**pool_cfg, "runtime_platform": "appworld-batch"}
+    pool = HotSkillPool(cfg)
+    pool.note_episode_query("Reset friends on venmo")
+    pool.record(
+        name="appworld-api-interaction",
+        content="",
+        tags=["appworld"],
+        key_points=["Venmo search returns unrelated users"],
+        user_message="Output:\n```\n[]\n```",
+        turn=2,
+    )
+    assert "appworld-api-interaction" in pool._entries
+
+
+def test_admit_domain_gate_disabled_admits_off_domain(pool_cfg):
+    cfg = {
+        **pool_cfg,
+        "runtime_platform": "appworld-batch",
+        "admit_domain_gate": False,
+    }
+    pool = HotSkillPool(cfg)
+    pool.note_episode_query("Reset friends on venmo")
+    pool.record(
+        name="dev-config",
+        content="",
+        tags=["setup", "cli", "gateway"],
+        key_points=["Use get_hermes_home for paths"],
+        turn=1,
+    )
+    assert "dev-config" in pool._entries
+
+
+def test_set_platform_evicts_foreign_closed_world_not_generic(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(
+        name="appworld-api-interaction",
+        content="",
+        tags=["appworld", "sandbox"],
+        key_points=["ALWAYS paginate fully"],
+        turn=1,
+    )
+    pool.record(
+        name="xlsx-formula-audit",
+        content="",
+        tags=["spreadsheet"],
+        key_points=["ALWAYS use Excel formulas"],
+        turn=2,
+    )
+    pool.set_platform("alfworld-batch")
+    assert "appworld-api-interaction" not in pool._entries
+    assert "xlsx-formula-audit" in pool._entries
+
+
+def test_is_off_session_domain_helpers():
+    assert is_off_session_domain(
+        "github",
+        tags=["git"],
+        points=["ALWAYS open a pull request"],
+        platform="appworld-batch",
+        query_tokens=frozenset({"venmo", "friends"}),
+    )
+    assert not is_off_session_domain(
+        "nav",
+        points=["go to the fridge first"],
+        platform="alfworld-batch",
+        query_tokens=frozenset({"apple", "fridge"}),
+    )
+    assert not is_off_session_domain(
+        "xlsx-formula-audit",
+        tags=["spreadsheet"],
+        points=["ALWAYS use Excel formulas"],
+        platform="skillsbench-batch",
+        query_tokens=frozenset({"complete", "environment"}),
+    )
+
+
+def test_sidechannel_thinking_off_extra_body_qwen_only():
+    qwen = sidechannel_thinking_off_extra_body(model="Qwen/Qwen3.6-27B")
+    assert qwen["chat_template_kwargs"]["enable_thinking"] is False
+    assert qwen["enable_thinking"] is False
+    assert "reasoning" not in qwen
+    openai = sidechannel_thinking_off_extra_body(model="gpt-4o")
+    assert openai == {}
+    router = sidechannel_thinking_off_extra_body(model="gpt-4o", is_openrouter=True)
+    assert router == {"reasoning": {"enabled": False}}
+
+
+def test_recover_json_object_from_think_block():
+    raw = '<think>ok</think>\n{"labels": {"0": "helpful"}}'
+    assert recover_json_object(raw) == '{"labels": {"0": "helpful"}}'
+    inside = '<think>{"labels": {"1": "harmful"}}</think>'
+    assert '"1"' in recover_json_object(inside)
+
+
+def test_note_outcome_judge_meta_in_telemetry(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.note_outcome_judge_meta(
+        {
+            "finish_reason": "length",
+            "raw_chars": 80,
+            "stripped_chars": 0,
+            "raw_preview": "<think>only reasoning</think>",
+            "stripped_preview": "",
+            "max_tokens": 2048,
+            "thinking_off": True,
+            "retries": 1,
+            "recovered_json": False,
+        }
+    )
+    of = pool.export_telemetry()["outcome_feedback"]
+    assert of["judge_finish_reason"] == "length"
+    assert of["judge_raw_chars"] == 80
+    assert of["judge_stripped_chars"] == 0
+    assert of["judge_thinking_off"] is True
+    assert of["judge_retries"] == 1
+    assert of["judge_max_tokens"] == 2048
+    assert "think" in of["judge_raw_preview"]
+
+
+def test_compress_tool_args_drops_observation_blobs():
+    slim = compress_tool_args(
+        json.dumps(
+            {
+                "command": "ls\ncat huge",
+                "stdout": "x" * 5000,
+                "content": "full file",
+                "path": "/tmp/out.txt",
+            }
+        ),
+        max_chars=40,
+    )
+    assert slim["command"] == "ls"
+    assert "stdout" not in slim
+    assert "content" not in slim
+    assert slim["path"] == "/tmp/out.txt"
+
+
+def test_compress_env_code_extracts_appworld_apis():
+    snippets = compress_env_code(
+        "x = 1\napis.venmo.search_users(query='a')\ncomplete_task()\n",
+        max_chars=60,
+    )
+    assert any("apis.venmo.search_users" in s for s in snippets)
+    assert any("complete_task" in s for s in snippets)
+
+
+def test_compressed_episode_log_from_tool_calls_skips_output_user():
+    messages = [
+        {"role": "user", "content": "Reset friends on venmo"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "terminal",
+                        "arguments": json.dumps({"command": "python -c 'print(1)'"}),
+                    }
+                },
+                {"function": {"name": "todo", "arguments": "{}"}},
+            ],
+        },
+        {"role": "user", "content": "Output:\n```\n[]\n```"},
+        {"role": "assistant", "content": "done"},
+    ]
+    log = build_compressed_episode_log(messages=messages, episode_query="")
+    assert log["query"].startswith("Reset friends")
+    assert log["final_response"] == "done"
+    names = [ev["name"] for ev in log["events"]]
+    assert names == ["terminal"]
+    assert "todo" not in names
+    assert not any("Output" in json.dumps(ev) for ev in log["events"])
+
+
+def test_compressed_episode_log_from_alfworld_actions():
+    log = build_compressed_episode_log(
+        episode_query="put the apple in the fridge",
+        env_actions=["go to fridge 1", "take apple 1", "go to fridge 1"],
+        run_result={"final_response": "I put it there"},
+    )
+    assert log["n_events"] == 3
+    assert log["events"][0]["via"] == "env"
+    assert "fridge" in str(log["events"][0]["args"])
+    assert log["tool_counts"]["action"] == 3
+
+
+def test_compressed_episode_log_from_appworld_steps():
+    log = build_compressed_episode_log(
+        episode_query="Reset friends on venmo",
+        run_result={
+            "steps": [
+                {"code": "apis.venmo.search_users(query='Ann')\nprint(x)"},
+                {"code": "complete_task()"},
+            ]
+        },
+    )
+    names = [ev["name"] for ev in log["events"]]
+    assert any("venmo.search_users" in n for n in names)
+    assert any("complete_task" in n for n in names)
+
+
+def test_compressed_episode_log_head_tail_truncation():
+    actions = [f"go to drawer {i}" for i in range(20)]
+    log = build_compressed_episode_log(env_actions=actions, max_events=10)
+    assert log["n_events"] == 20
+    assert log["n_truncated"] == 10
+    assert len(log["events"]) == 10
+    assert "drawer 0" in str(log["events"][0]["args"])
+    assert "drawer 19" in str(log["events"][-1]["args"])
+
+
+def test_collect_outcome_episode_log_respects_config_off(pool_cfg):
+    pool = HotSkillPool({**pool_cfg, "outcome_judge_log": False})
+    log = collect_outcome_episode_log(
+        pool=pool,
+        run_result={"messages": [{"role": "assistant", "tool_calls": []}]},
+    )
+    assert log == {}
+
+
+def test_apply_outcome_feedback_records_episode_log_telemetry(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(name="nav", content="", key_points=["go to fridge first"], turn=1)
+    pool.build_block(user_message="put apple in fridge", turn=1)
+
+    def fake_complete(msgs):
+        body = json.loads(msgs[1]["content"])
+        assert body["episode_log"]["events"]
+        assert body["episode_log"]["query"].startswith("put apple")
+        return json.dumps({"labels": {"0": "helpful"}})
+
+    summary = pool.apply_outcome_feedback(
+        {"success": True, "reward": 1.0, "iterations": 4},
+        complete_fn=fake_complete,
+        episode_log=build_compressed_episode_log(
+            episode_query="put apple in fridge",
+            env_actions=["go to fridge 1", "take apple 1"],
+        ),
+    )
+    assert summary["attribution_source"] == "llm"
+    tel = pool.export_telemetry()["outcome_feedback"]
+    assert tel["judge_log_events"] == 2
+    assert "action" in tel["judge_log_preview"]
 
