@@ -10,8 +10,9 @@ Extracts guardrails from SKILL.md in this order:
 Extract rewrites structural identifiers (paths, emails, UUIDs, hex IDs).
 Transferability is a side-channel LLM judgment (reconcile / outcome), not a
 semantic regex filter. Mechanical extract is followed by deterministic junk
-filters, then ``reconcile_pool`` (LLM keep-set when configured, else oldest
-only on overflow).
+and ritual filters (episode closers / short-answer procedures), then
+``reconcile_pool`` (LLM keep-set when configured, else oldest only on
+overflow).
 
 The pool cap is the store budget (``max_entries`` points). Under policy
 ``llm``, reconcile runs on every material pool update (admit / skill sync /
@@ -51,11 +52,21 @@ _HOT_SKILLS_BLOCK_RE = re.compile(
     re.IGNORECASE,
 )
 _HOT_SKILLS_TAG_RE = re.compile(r"</?\s*hot-skills\s*>", re.IGNORECASE)
+# Matches the current inject preface and older short notes in persisted history.
 _HOT_SKILLS_NOTE_RE = re.compile(
-    r"\[System note:\s*The following are hot skill key points \(guardrails\)\s*"
-    r"from recently used skills,\s*NOT new user input\.\s*"
-    r"Use skill_view\(name\) for full procedures\.\]\s*",
+    r"\[System note:\s*The following are hot skill key points \(guardrails\)"
+    r"[\s\S]*?\]\s*",
     re.IGNORECASE,
+)
+_HOT_SKILLS_SYSTEM_NOTE = (
+    "[System note: The following are hot skill key points (guardrails) "
+    "from recently used skills, NOT new user input. "
+    "ALWAYS/NEVER/MUST bullets are exception handlers for when that "
+    "situation arises — not a first-action checklist. Do not tour "
+    "locations, IDs, files, or APIs because a tip mentions them; use "
+    "the current observation and admissible actions first. Apply a tip "
+    "when its Scope: fits this task; otherwise ignore it. "
+    "Use skill_view(name) for full procedures.]"
 )
 
 _HERMES_HOT_OPEN = re.compile(r"<!--\s*hermes-hot\b[^>]*-->", re.IGNORECASE)
@@ -195,6 +206,52 @@ _JUNK_POINT_SUBSTRING_RES = (
     re.compile(r"read.*expected.*from.*test", re.IGNORECASE),
 )
 
+# Episode / harness procedures — not transferable policy. NEVER/DO NOT about
+# the closer is a constraint (keep); ALWAYS/MUST/bare "call done()" is a ritual.
+_RITUAL_FORBID_PREFIX_RE = re.compile(
+    r"^(?:\*\*)?(?:NEVER|DO\s+NOT|MUST\s+NOT|AVOID)\b(?!\s+forget)",
+    re.IGNORECASE,
+)
+_RITUAL_CLOSER_RES = (
+    re.compile(
+        r"(?i)\b(?:always|must|remember\s+to|don'?t\s+forget\s+to|"
+        r"never\s+forget\s+to|be\s+sure\s+to)\b.{0,48}"
+        r"\b(?:call|invoke|run|use|issue|submit|execute)\b.{0,24}"
+        r"\b(?:done|complete_task)\s*\("
+    ),
+    re.compile(
+        r"(?i)\b(?:always|must)\b.{0,24}\b(?:done|complete_task)\s*\("
+    ),
+    re.compile(
+        r"(?i)\b(?:call|invoke|run|issue|submit)\s+"
+        r"(?:the\s+)?(?:env(?:ironment)?(?:'s)?\s+)?"
+        r"(?:done|complete_task)\s*\("
+    ),
+    re.compile(r"(?i)\bcomplete_task\s*\(\s*answer\s*="),
+    re.compile(
+        r"(?i)\b(?:always|must)\b.{0,32}\b(?:done\s+action|action\s+done)\b"
+    ),
+)
+_RITUAL_SHORT_ANSWER_RES = (
+    re.compile(
+        r"(?i)\b(?:return|give|write|put|pass|include)\b.{0,28}"
+        r"\b(?:a\s+)?(?:short|brief|minimal|concise)\s+"
+        r"(?:answer|response|final(?:\s+answer)?)\b"
+    ),
+    re.compile(
+        r"(?i)\b(?:short|brief|minimal|concise)\s+(?:answer|response)\b.{0,48}"
+        r"\b(?:complete_task|done\s*\(|finalizer|harness|evaluator)\b"
+    ),
+    re.compile(
+        r"(?i)\bkeep\s+(?:the\s+|your\s+)?"
+        r"(?:answer|response|final\s+(?:answer|response)|output)\s+short\b"
+    ),
+    re.compile(
+        r"(?i)\b(?:answer|response)\s+should\s+be\s+"
+        r"(?:short|brief|minimal|concise)\b"
+    ),
+)
+
 _DEFAULT_HOT_POOL = {
     "enabled": True,
     # Store budget (key points). Inject is a separate top-k subset.
@@ -224,6 +281,8 @@ _DEFAULT_HOT_POOL = {
     # Drop template/meta bullets after extract (see filter_junk_key_points).
     "junk_filter": True,
     "junk_min_point_chars": 12,
+    # Drop episode-procedure tips (always call done(), short answer, …).
+    "ritual_filter": True,
     # Extra skill names denied admission (lowercased); merged with built-in denylist.
     "exclude_skills_from_pool": [],
     "inject_on_turn": True,
@@ -239,9 +298,9 @@ _DEFAULT_HOT_POOL = {
     # After a labeled task/episode, attribute exposed tips and update
     # multi-dimensional utilities (default on). Used at admit/evict and inject.
     "outcome_feedback": True,
-    # If the side-channel LLM returns nothing, label from outcome only
-    # (success + low steps). Tip wording is not a signal.
-    "outcome_feedback_heuristic": True,
+    # Opt-in only. Empty/unparseable judge JSON must not write utilities
+    # (cloned win/loss is a broken credit-assignment loop).
+    "outcome_feedback_heuristic": False,
     # Success with env/API steps at or below this counts as "low-step" helpful.
     "outcome_helpful_max_iterations": 12,
     # Side-channel completion budget for per-tip outcome JSON. Thinking
@@ -297,7 +356,8 @@ def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     cfg["skip_if_in_history"] = bool(cfg.get("skip_if_in_history", True))
     cfg["hydrate_from_history"] = bool(cfg.get("hydrate_from_history", True))
     cfg["outcome_feedback"] = bool(cfg.get("outcome_feedback", True))
-    cfg["outcome_feedback_heuristic"] = bool(cfg.get("outcome_feedback_heuristic", True))
+    cfg["outcome_feedback_heuristic"] = bool(cfg.get("outcome_feedback_heuristic", False))
+    cfg["ritual_filter"] = bool(cfg.get("ritual_filter", True))
     cfg["outcome_helpful_max_iterations"] = max(
         1, int(cfg.get("outcome_helpful_max_iterations", 12) or 12)
     )
@@ -396,7 +456,8 @@ def extract_hot_key_points(content: str, config: Optional[dict] = None) -> List[
     if cfg.get("abstract_extract", True):
         points = abstract_hot_key_points(points, cfg)
     points = _normalize_key_points(points, cfg)
-    return filter_junk_key_points(points, cfg)
+    points = filter_junk_key_points(points, cfg)
+    return filter_ritual_key_points(points, cfg)
 
 
 def skill_has_hot_section(content: str) -> bool:
@@ -609,6 +670,53 @@ def filter_junk_key_points(
     for raw in points or []:
         pt = re.sub(r"\s+", " ", (raw or "").strip())
         if not pt or is_junk_key_point(pt, cfg):
+            continue
+        norm = pt.lower()
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(pt)
+    return out
+
+
+def is_ritual_key_point(text: str) -> bool:
+    """True when a tip is an episode closer / verbosity procedure, not policy.
+
+    ALWAYS/MUST/bare ``call done()`` and ``return a short answer`` do not
+    transfer (correct finalizer depends on the task). NEVER/DO NOT about
+    the closer is a constraint and is kept.
+    """
+    pt = re.sub(r"\s+", " ", (text or "").strip())
+    if not pt:
+        return False
+    closerish = bool(
+        re.search(r"(?i)\b(?:done|complete_task)\s*\(", pt)
+        or re.search(r"(?i)\b(?:done\s+action|action\s+done)\b", pt)
+        or re.search(r"(?i)\bcomplete_task\b", pt)
+    )
+    if closerish and _RITUAL_FORBID_PREFIX_RE.match(pt):
+        return False
+    for pat in _RITUAL_CLOSER_RES:
+        if pat.search(pt):
+            return True
+    for pat in _RITUAL_SHORT_ANSWER_RES:
+        if pat.search(pt):
+            return True
+    return False
+
+
+def filter_ritual_key_points(
+    points: List[str], config: Optional[dict] = None
+) -> List[str]:
+    """Drop episode-procedure tips; preserve order."""
+    cfg = config if isinstance(config, dict) else load_hot_skills_config()
+    if not cfg.get("ritual_filter", True):
+        return list(points or [])
+    out: List[str] = []
+    seen: Set[str] = set()
+    for raw in points or []:
+        pt = re.sub(r"\s+", " ", (raw or "").strip())
+        if not pt or is_ritual_key_point(pt):
             continue
         norm = pt.lower()
         if norm in seen:
@@ -1229,6 +1337,7 @@ class HotPoolTelemetry:
     records_skipped_excluded_skill: int = 0
     records_skipped_off_domain: int = 0
     records_junk_filtered: int = 0
+    records_ritual_filtered: int = 0
     records_admit_gate_dropped: int = 0
     evicted_deterministic: int = 0
     persist_path: str = ""
@@ -1244,6 +1353,7 @@ class HotPoolTelemetry:
     points_excluded_in_history: int = 0
     points_omitted_utility: int = 0
     points_omitted_retrieve: int = 0
+    points_omitted_ritual: int = 0
     skills_omitted_retrieve: List[str] = field(default_factory=list)
     retrieve_mode: str = ""
     episode_query_preview: str = ""
@@ -1295,6 +1405,7 @@ class HotPoolTelemetry:
                 "records_skipped_excluded_skill": self.records_skipped_excluded_skill,
                 "records_skipped_off_domain": self.records_skipped_off_domain,
                 "records_junk_filtered": self.records_junk_filtered,
+                "records_ritual_filtered": self.records_ritual_filtered,
                 "records_admit_gate_dropped": self.records_admit_gate_dropped,
                 "persist_path": self.persist_path,
             },
@@ -1309,6 +1420,7 @@ class HotPoolTelemetry:
                 "points_excluded_in_history": self.points_excluded_in_history,
                 "points_omitted_utility": self.points_omitted_utility,
                 "points_omitted_retrieve": self.points_omitted_retrieve,
+                "points_omitted_ritual": self.points_omitted_ritual,
                 "skills_omitted_retrieve": list(self.skills_omitted_retrieve),
                 "retrieve_mode": self.retrieve_mode,
                 "episode_query_preview": self.episode_query_preview,
@@ -2020,8 +2132,9 @@ class HotSkillPool:
             "skip_if_in_history": bool(self._config.get("skip_if_in_history", True)),
             "outcome_feedback": bool(self._config.get("outcome_feedback", True)),
             "outcome_feedback_heuristic": bool(
-                self._config.get("outcome_feedback_heuristic", True)
+                self._config.get("outcome_feedback_heuristic", False)
             ),
+            "ritual_filter": bool(self._config.get("ritual_filter", True)),
             "abstract_extract": bool(self._config.get("abstract_extract", True)),
             "inject_filter_utilities": bool(
                 self._config.get("inject_filter_utilities", True)
@@ -2079,6 +2192,10 @@ class HotSkillPool:
             points = filter_junk_key_points(points, self._config)
             if before > len(points):
                 self._telemetry.records_junk_filtered += before - len(points)
+        before_ritual = len(points)
+        points = filter_ritual_key_points(points, self._config)
+        if before_ritual > len(points):
+            self._telemetry.records_ritual_filtered += before_ritual - len(points)
         if not points:
             logger.debug("hot skill pool: no key points extracted for %r — skipping", key)
             self._telemetry.records_skipped_no_points += 1
@@ -2378,6 +2495,7 @@ class HotSkillPool:
         )
         self._telemetry.points_omitted_utility = 0
         self._telemetry.points_omitted_retrieve = 0
+        self._telemetry.points_omitted_ritual = 0
         self._telemetry.skills_omitted_retrieve = []
         self._telemetry.retrieve_mode = ""
         preview = self._episode_query.replace("\n", " ").strip()
@@ -2385,6 +2503,8 @@ class HotSkillPool:
         # Track exposure for outcome feedback (injected + history-skipped).
         for entry in skipped:
             for text in entry.key_points:
+                if not self._is_injectable_point(text):
+                    continue
                 key = (entry.name, text)
                 self._exposed_tips[key] = {
                     "skill": entry.name,
@@ -2436,54 +2556,76 @@ class HotSkillPool:
             utils.append(empty_point_utility())
         return utils
 
-    def _filter_inject_points(self, entry: HotSkillEntry) -> Tuple[List[str], int]:
+    def _is_injectable_point(self, text: str) -> bool:
+        if self._config.get("ritual_filter", True) and is_ritual_key_point(text):
+            return False
+        return True
+
+    def _filter_inject_points(self, entry: HotSkillEntry) -> Tuple[List[str], int, int]:
         utils = self._aligned_utils(entry)
         scored: List[Tuple[str, float]] = []
         omitted = 0
+        ritual_omitted = 0
         for text, util in zip(entry.key_points, utils):
+            if not self._is_injectable_point(text):
+                ritual_omitted += 1
+                continue
             if _utility_strongly_harmful(util):
                 omitted += 1
                 continue
             scored.append((text, _utility_inject_score(util)))
         scored.sort(key=lambda item: -item[1])
-        return [text for text, _ in scored], omitted
+        return [text for text, _ in scored], omitted, ritual_omitted
 
     def _inject_point_views(
         self, entries: List[HotSkillEntry]
     ) -> List[Tuple[HotSkillEntry, List[str]]]:
         if not self._config.get("inject_filter_utilities", True):
-            ranked = [(entry, list(entry.key_points)) for entry in entries if entry.key_points]
+            ranked: List[Tuple[HotSkillEntry, List[str]]] = []
+            ritual_omitted = 0
+            for entry in entries:
+                kept = [t for t in entry.key_points if self._is_injectable_point(t)]
+                ritual_omitted += len(entry.key_points) - len(kept)
+                if kept:
+                    ranked.append((entry, kept))
             self._telemetry.points_omitted_utility = 0
+            self._telemetry.points_omitted_ritual = ritual_omitted
             return self._select_retrieve_views(ranked)
 
         views: List[Tuple[HotSkillEntry, List[str]]] = []
         omitted = 0
+        ritual_omitted = 0
         for entry in entries:
-            selected, n_omit = self._filter_inject_points(entry)
+            selected, n_omit, n_ritual = self._filter_inject_points(entry)
             omitted += n_omit
+            ritual_omitted += n_ritual
             if selected:
                 views.append((entry, selected))
 
         if not views:
             # All filtered — prefer unlabeled, else dump the store so the
-            # inject block is not empty.
+            # inject block is not empty. Never re-broadcast ritual tips.
             unlabeled: List[Tuple[HotSkillEntry, List[str]]] = []
             for entry in entries:
                 utils = self._aligned_utils(entry)
                 kept = [
                     text
                     for text, util in zip(entry.key_points, utils)
-                    if int(util.get("n_labeled") or 0) <= 0
+                    if self._is_injectable_point(text)
+                    and int(util.get("n_labeled") or 0) <= 0
                 ]
                 if kept:
                     unlabeled.append((entry, kept))
-            views = unlabeled or [
-                (entry, list(entry.key_points))
-                for entry in entries
-                if entry.key_points
-            ]
+            if unlabeled:
+                views = unlabeled
+            else:
+                for entry in entries:
+                    kept = [t for t in entry.key_points if self._is_injectable_point(t)]
+                    if kept:
+                        views.append((entry, kept))
 
         self._telemetry.points_omitted_utility = omitted
+        self._telemetry.points_omitted_ritual = ritual_omitted
         return self._select_retrieve_views(views)
 
     def _select_retrieve_views(
@@ -2670,13 +2812,24 @@ class HotSkillPool:
             except Exception:
                 logger.debug("hot skill admission_judge failed", exc_info=True)
                 admit_ids = None
+        drop_ritual = bool(self._config.get("ritual_filter", True))
+
+        def _keep_point(p: str) -> bool:
+            if is_oracle_style_tip(p):
+                return False
+            if drop_ritual and is_ritual_key_point(p):
+                return False
+            return True
+
         if admit_ids is not None:
             keep = {str(i) for i in admit_ids}
             filtered = [p for i, p in enumerate(points) if str(i) in keep]
         else:
-            filtered = [p for p in points if not is_oracle_style_tip(p)]
+            filtered = [p for p in points if _keep_point(p)]
         if not filtered and points:
-            filtered = [p for p in points if not is_oracle_style_tip(p)]
+            filtered = [p for p in points if _keep_point(p)]
+        if drop_ritual:
+            filtered = [p for p in filtered if not is_ritual_key_point(p)]
         return filtered
 
     def _deterministic_reconcile_drops(self, cap: int) -> int:
@@ -2687,7 +2840,11 @@ class HotSkillPool:
             if entry is None:
                 continue
             for idx in reversed(range(len(entry.key_points))):
-                if is_oracle_style_tip(entry.key_points[idx]):
+                tip = entry.key_points[idx]
+                if is_oracle_style_tip(tip) or (
+                    self._config.get("ritual_filter", True)
+                    and is_ritual_key_point(tip)
+                ):
                     self._drop_point(name, idx)
                     dropped += 1
 
@@ -2870,9 +3027,8 @@ class HotSkillPool:
         """Attribute exposed tips after a labeled task; persist utilities.
 
         Prefers a side-channel LLM (transfer vs episode-local is a prompt
-        judgment).         When that is missing or unparseable, a conservative per-point
-        heuristic labels only injected tips on low-step success as helpful;
-        history-only exposure is irrelevant so utilities can rank inject.
+        judgment). Empty or unparseable JSON does not write utilities unless
+        ``outcome_feedback_heuristic`` is explicitly enabled.
         """
         summary = {
             "applied": False,
@@ -2937,7 +3093,7 @@ class HotSkillPool:
         else:
             summary["skipped_reason"] = "no_complete_fn"
 
-        if not labels and self._config.get("outcome_feedback_heuristic", True):
+        if not labels and self._config.get("outcome_feedback_heuristic", False):
             labels = heuristic_outcome_attributions(
                 items,
                 outcome,
@@ -3155,6 +3311,24 @@ class HotSkillPool:
             entry = self._entry_from_dict(entries_raw.get(name))
             if entry is not None:
                 loaded[name] = entry
+        if self._config.get("ritual_filter", True):
+            for name in list(loaded.keys()):
+                entry = loaded[name]
+                kept: List[str] = []
+                kept_u: List[Dict[str, Any]] = []
+                utils = list(entry.point_utilities or [])
+                while len(utils) < len(entry.key_points):
+                    utils.append(empty_point_utility())
+                for text, util in zip(entry.key_points, utils):
+                    if is_ritual_key_point(text):
+                        continue
+                    kept.append(text)
+                    kept_u.append(util)
+                if not kept:
+                    loaded.pop(name, None)
+                else:
+                    entry.key_points = kept
+                    entry.point_utilities = kept_u
         self._entries = loaded
         self._mark_lexicons_dirty()
         logger.debug(
@@ -3407,7 +3581,7 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "- Encode evaluator-/environment-agnostic process rules (e.g. write "
         "graded artifacts where the harness reads them; prefer admissible "
         "actions; use the provided API surface; verify before long runs) "
-        "rather than a single task's setup recipe\n"
+        "rather than a single task's setup recipe or a default env closer\n"
         "- Add distinct failure-mode coverage — prefer diversity of pitfalls "
         "across skills/topics when candidates are similar\n"
         "- Use each point's natural-language scope (when present) as a soft "
@@ -3445,6 +3619,10 @@ def build_llm_eviction_system_prompt(keep_n: int) -> str:
         "(visit every shelf / drawer / file / message N) rather than a "
         "constraint that applies only after the current observation fails. "
         "Keep a legal-action rule if it can stand without the tour\n"
+        "- Prescribe a termination ritual (always call done()/complete_task, "
+        "always return a short/minimal answer). Those are episode procedures; "
+        "the correct closer depends on the task. A NEVER/DO NOT about a bad "
+        "closer is a constraint — keep that\n"
         "- Have clearly worse utility than alternatives (high harmful count, "
         "or much higher iteration cost for similar success)\n"
         "\n"
@@ -3479,9 +3657,9 @@ def build_admit_transfer_system_prompt() -> str:
         "admitting fewer strong tips over keeping marginal ones.\n"
         "\n"
         "ADMIT tips that:\n"
-        "- State evaluator-/environment-agnostic process rules (write graded outputs "
-        "where the harness reads them; verify on the graded surface; use admissible "
-        "APIs/tools)\n"
+        "- State evaluator-/environment-agnostic process rules (write graded "
+        "artifacts where the harness reads them; verify on the graded surface; "
+        "use admissible APIs/tools). That is not a default env closer call\n"
         "- Describe reusable pitfalls without absolute paths, task IDs, or oracle "
         "shortcuts\n"
         "\n"
@@ -3489,6 +3667,8 @@ def build_admit_transfer_system_prompt() -> str:
         "- Tell the agent to run bundled solution/ scripts, read ground truth from "
         "tests, or skip builds using static expected constants\n"
         "- Encode one episode's Docker/Lean/install recipe rather than a reusable rule\n"
+        "- Prescribe a termination ritual (always call done()/complete_task, "
+        "always return a short/minimal answer). Those are episode procedures\n"
         "- Would mislead on an unrelated later task\n"
     )
 
@@ -3775,15 +3955,7 @@ def build_hot_skills_block(raw_context: str) -> str:
         logger.warning("hot skill pool returned pre-wrapped context; stripped")
     return (
         f"{_HOT_SKILLS_OPEN}\n"
-        "[System note: The following are hot skill key points (guardrails) "
-        "from recently used skills, NOT new user input. "
-        "Each section may include a Scope: line in natural language — apply a "
-        "tip when that scope fits the current task; otherwise ignore it. "
-        "Treat tips as constraints that forbid illegal or wasted actions, "
-        "not as a tour: do not enumerate instance-indexed locations, files, "
-        "or objects as a default plan. Use the current observation and "
-        "admissible set first. "
-        "Use skill_view(name) for full procedures.]\n\n"
+        f"{_HOT_SKILLS_SYSTEM_NOTE}\n\n"
         f"{clean}\n"
         f"{_HOT_SKILLS_CLOSE}"
     )

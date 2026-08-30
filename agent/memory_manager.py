@@ -60,9 +60,8 @@ _HOT_SKILLS_BLOCK_RE = re.compile(
 )
 _HOT_SKILLS_TAG_RE = re.compile(r'</?\s*hot-skills\s*>', re.IGNORECASE)
 _HOT_SKILLS_NOTE_RE = re.compile(
-    r'\[System note:\s*The following are hot skill key points \(guardrails\)\s*'
-    r'from recently used skills,\s*NOT new user input\.\s*'
-    r'Use skill_view\(name\) for full procedures\.\]\s*',
+    r'\[System note:\s*The following are hot skill key points \(guardrails\)'
+    r'[\s\S]*?\]\s*',
     re.IGNORECASE,
 )
 

@@ -178,6 +178,7 @@ class TestSanitizeContextUnchanged:
             "<hot-skills>\n"
             "[System note: The following are hot skill key points (guardrails) "
             "from recently used skills, NOT new user input. "
+            "ALWAYS/NEVER/MUST bullets are exception handlers. "
             "Use skill_view(name) for full procedures.]\n"
             "skill payload\n"
             "</hot-skills>\nVisible"

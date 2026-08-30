@@ -123,10 +123,10 @@ skill_view / skill_manage / recent use
 
 | Stage | Behavior |
 |-------|----------|
-| Populate | After a skill is viewed/created, key points enter the pool if they pass the lexical domain gate (`admit_domain_gate`: closed-world platforms omit distinctive off-domain skills; SkillsBench/CLI fail-open except framework identities) and the transfer tip gate |
-| Inject | Each user turn prepends up to `inject_k` tips as `<hot-skills>`. Selection is lexical retrieve (skill/tip tokens ∩ frozen episode instruction), then utility. Off-domain skills with empty overlap are omitted. Strongly harmful utilities are omitted (`inject_filter_utilities`); irrelevant scores only change order. Unlabeled tips can still inject. With `skip_if_in_history` (default), skills already in recent `skill_view` history are omitted from the block to avoid duplicating the full skill body — that is channel separation, not “hot off.” Telemetry records `inject.skills_excluded_in_history` / `inject.points_excluded_in_history` / `inject.points_omitted_utility` / `inject.points_omitted_retrieve`. |
+| Populate | After a skill is viewed/created, key points enter the pool if they pass the lexical domain gate (`admit_domain_gate`: closed-world platforms omit distinctive off-domain skills; SkillsBench/CLI fail-open except framework identities), the ritual filter (episode closers / short-answer procedures stay out of the transfer pool), and the transfer tip gate |
+| Inject | Each user turn prepends up to `inject_k` tips as `<hot-skills>`. Selection is lexical retrieve (skill/tip tokens ∩ frozen episode instruction), then utility. Off-domain skills with empty overlap are omitted. Ritual tips and strongly harmful utilities are omitted (`ritual_filter`, `inject_filter_utilities`); irrelevant scores only change order. Unlabeled tips can still inject. The inject preface frames ALWAYS/NEVER as exception handlers (not a first-action checklist / location-ID tour). With `skip_if_in_history` (default), skills already in recent `skill_view` history are omitted from the block to avoid duplicating the full skill body — that is channel separation, not “hot off.” Telemetry records `inject.skills_excluded_in_history` / `inject.points_excluded_in_history` / `inject.points_omitted_utility` / `inject.points_omitted_retrieve` / `inject.points_omitted_ritual`. |
 | Evict | Only when a new extract would exceed `max_entries`. Policies: `oldest` (FIFO of extract time on a persisted global clock when the pool is saved across conversations) or `llm` (optional judge at overflow). Model "use" of a point is not observable. |
-| Outcome feedback (default on) | After a labeled task/episode, a side-channel LLM attributes exposed tips (`helpful` / `harmful` / `irrelevant`) using **multi-dimensional** metrics (success, reward, iterations/steps, tests, duration). If the LLM is missing or empty, a heuristic still persists labels (`outcome_feedback_heuristic`). Utilities feed eviction, a conservative admit filter, and inject ranking. Disable with `outcome_feedback: false`. |
+| Outcome feedback (default on) | After a labeled task/episode, a side-channel LLM attributes exposed tips (`helpful` / `harmful` / `irrelevant`) using **multi-dimensional** metrics (success, reward, iterations/steps, tests, duration). Empty or unparseable judge JSON does **not** write utilities (`skipped_reason` stays loud). `outcome_feedback_heuristic` is opt-in only — cloned win/loss is a broken credit-assignment loop. Disable the whole path with `outcome_feedback: false`. |
 | Persist (optional) | Pool JSON can survive across conversations / sequential benchmark tasks |
 
 **Configure** in `~/.hermes/config.yaml`:
@@ -139,11 +139,12 @@ skills:
     inject_k: 4                   # per-turn inject budget; 0 = no cap
     inject_retrieve: true         # lexical skill/tip ∩ frozen episode query
     admit_domain_gate: true       # refuse off-domain skills at admit (no LLM)
+    ritual_filter: true           # drop done()/short-answer episode procedures
     # max_chars: ignored          # legacy; do not use — budget is inject_k
     max_chars_per_point: 240      # truncate individual extracted tips
     eviction_policy: llm          # llm (default) | oldest (fallback / opt-in)
     outcome_feedback: true        # default on; set false to A/B without attribution
-    outcome_feedback_heuristic: true  # persist labels when the LLM is empty
+    outcome_feedback_heuristic: false # off: empty judge JSON does not persist
     outcome_judge_max_tokens: 2048    # side-channel JSON budget (thinking disabled)
     outcome_judge_log: true           # compressed tool/env actions for the judge
     outcome_judge_log_max_events: 48

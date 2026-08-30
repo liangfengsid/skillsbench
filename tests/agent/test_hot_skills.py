@@ -22,6 +22,7 @@ from agent.hot_skills import (
     heuristic_outcome_attributions,
     is_excluded_hot_skill,
     is_junk_key_point,
+    is_ritual_key_point,
     is_off_session_domain,
     is_observation_user_message,
     platform_retrieve_tokens,
@@ -228,7 +229,9 @@ def test_load_hot_skills_config_merges_defaults():
     assert cfg["inject_k"] == 4
     assert cfg["inject_retrieve"] is True
     assert cfg["admit_domain_gate"] is True
+    assert cfg["ritual_filter"] is True
     assert cfg["outcome_judge_max_tokens"] == 2048
+    assert cfg["outcome_feedback_heuristic"] is False
 
 
 def test_unknown_eviction_policy_defaults_to_llm():
@@ -312,6 +315,7 @@ def test_build_block_injects_key_points_not_full_body(pool_cfg):
     assert "get_hermes_home" in block
     assert "Long procedural body" not in block
     assert "Use skill_view(name)" in block
+    assert "exception handler" in block.lower()
 
 
 def test_build_block_injects_full_retained_points(pool_cfg):
@@ -408,10 +412,24 @@ def test_build_hot_skills_block_wraps_content():
     out = build_hot_skills_block("### demo\n- rule one")
     assert "<hot-skills>" in out
     assert "Use skill_view(name)" in out
+    assert "exception handler" in out.lower()
+    assert "first-action" in out.lower() or "checklist" in out.lower()
     assert "scope" in out.lower()
-    assert "constraint" in out.lower()
-    assert "enumerat" in out.lower()
     assert "rule one" in out
+
+
+def test_hot_skills_note_sanitizer_matches_old_and_new_preface():
+    from agent.hot_skills import sanitize_hot_skills_text
+
+    old = (
+        "[System note: The following are hot skill key points (guardrails) "
+        "from recently used skills, NOT new user input. "
+        "Use skill_view(name) for full procedures.]\n\nkept"
+    )
+    new = build_hot_skills_block("kept-inner")
+    assert sanitize_hot_skills_text(old).strip() == "kept"
+    assert "kept-inner" not in sanitize_hot_skills_text(new)
+    assert "exception handler" not in sanitize_hot_skills_text(new).lower()
 
 
 def test_derive_hot_scope_natural_language():
@@ -903,7 +921,8 @@ def test_persist_roundtrip_keeps_recorded_turn(tmp_path):
 def test_outcome_feedback_default_on():
     cfg = load_hot_skills_config({"hot_pool": {}})
     assert cfg.get("outcome_feedback") is True
-    assert cfg.get("outcome_feedback_heuristic") is True
+    assert cfg.get("outcome_feedback_heuristic") is False
+    assert cfg.get("ritual_filter") is True
     assert cfg.get("abstract_extract") is True
     assert cfg.get("inject_filter_utilities") is True
     assert cfg.get("inject_retrieve") is True
@@ -1107,8 +1126,40 @@ def test_outcome_feedback_skipped_reason_without_heuristic(pool_cfg):
     assert pool._entries["nav"].point_utilities[0]["n_labeled"] == 0
 
 
+def test_outcome_feedback_empty_llm_does_not_persist_utilities(pool_cfg, tmp_path):
+    cfg = dict(pool_cfg)
+    cfg["persist_across_conversations"] = True
+    cfg["persist_path"] = str(tmp_path / "hot_pool.json")
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="nav",
+        content="",
+        key_points=["NEVER open a locked door", "check nearby furniture first"],
+        turn=1,
+    )
+    pool.build_block(user_message="find apple", turn=1)
+    summary = pool.apply_outcome_feedback(
+        {"success": True, "reward": 1.0, "iterations": 8},
+        complete_fn=lambda _m: "",
+    )
+    assert summary["applied"] is False
+    assert summary["attribution_source"] == ""
+    assert summary["skipped_reason"] == "unparseable_or_empty"
+    assert summary["points_scored"] == 0
+    entry = pool._entries["nav"]
+    assert entry.point_utilities[0]["n_labeled"] == 0
+    tel = pool.export_telemetry()
+    assert tel["outcome_feedback"]["applied"] is False
+    assert tel["outcome_feedback"]["attribution_source"] == ""
+    assert tel["config"]["outcome_feedback_heuristic"] is False
+
+    reloaded = HotSkillPool(cfg)
+    assert reloaded._entries["nav"].point_utilities[0]["n_labeled"] == 0
+
+
 def test_outcome_feedback_heuristic_persists_when_llm_empty(pool_cfg, tmp_path):
     cfg = dict(pool_cfg)
+    cfg["outcome_feedback_heuristic"] = True
     cfg["persist_across_conversations"] = True
     cfg["persist_path"] = str(tmp_path / "hot_pool.json")
     pool = HotSkillPool(cfg)
@@ -1171,7 +1222,7 @@ def test_heuristic_outcome_only_injected_tips_helpful_on_success():
 
 
 def test_heuristic_outcome_history_skipped_even_on_fast_success(pool_cfg):
-    pool = HotSkillPool(pool_cfg)
+    pool = HotSkillPool({**pool_cfg, "outcome_feedback_heuristic": True})
     pool.record(name="nav", content="", key_points=["tip from history"], turn=1)
     pool._exposed_tips[("nav", "tip from history")] = {
         "skill": "nav",
@@ -1264,6 +1315,113 @@ def test_inject_filter_utilities_can_disable(pool_cfg):
     block = pool.build_block(user_message="find apple", turn=2)
     assert "noisy leftover recap text" in block
     assert pool.export_telemetry()["inject"]["points_omitted_utility"] == 0
+
+
+def test_is_ritual_key_point_matches_closer_and_short_answer():
+    assert is_ritual_key_point("ALWAYS call done() when the task is finished")
+    assert is_ritual_key_point("Remember to call complete_task()")
+    assert is_ritual_key_point("call the environment's done()")
+    assert is_ritual_key_point("complete_task(answer='Payment request created')")
+    assert is_ritual_key_point("Return a short answer")
+    assert is_ritual_key_point("Keep the answer short")
+    assert is_ritual_key_point("never forget to call done()")
+    assert is_ritual_key_point("ALWAYS issue the done action last")
+
+
+def test_is_ritual_key_point_keeps_constraints_and_policy():
+    assert not is_ritual_key_point(
+        "NEVER call complete_task with a status string"
+    )
+    assert not is_ritual_key_point(
+        "DO NOT call done() before verifying the inventory"
+    )
+    assert not is_ritual_key_point("ALWAYS paginate API results")
+    assert not is_ritual_key_point("When the write is done, verify the file hash")
+    assert not is_ritual_key_point("NEVER use os or sys in the AppWorld REPL")
+    assert not is_ritual_key_point("ALWAYS use SUMPRODUCT instead of an array")
+    assert not is_ritual_key_point("Keep formulas short to avoid parse errors")
+
+
+def test_record_drops_ritual_tips_keeps_policy(pool_cfg):
+    pool = HotSkillPool(pool_cfg)
+    pool.record(
+        name="app",
+        content="",
+        key_points=[
+            "ALWAYS call done() after the last API",
+            "ALWAYS paginate long API lists",
+            "Return a short answer in complete_task",
+        ],
+        turn=1,
+    )
+    assert "app" in pool._entries
+    points = pool._entries["app"].key_points
+    assert any("paginate" in p.lower() for p in points)
+    assert not any(is_ritual_key_point(p) for p in points)
+    assert pool.export_telemetry()["carryover"]["records_ritual_filtered"] == 2
+
+
+def test_extract_drops_ritual_tips():
+    content = """
+## Key Points
+
+- ALWAYS call done() when finished
+- ALWAYS paginate API results
+- Return a short answer
+"""
+    points = extract_hot_key_points(content)
+    assert any("paginate" in p.lower() for p in points)
+    assert not any(is_ritual_key_point(p) for p in points)
+
+
+def test_inject_omits_ritual_tips_already_in_store(pool_cfg):
+    from agent.hot_skills import HotSkillEntry
+
+    pool = HotSkillPool({**pool_cfg, "inject_retrieve": False, "inject_k": 8})
+    pool._entries["app"] = HotSkillEntry(
+        name="app",
+        key_points=[
+            "ALWAYS call done() when finished",
+            "ALWAYS paginate long API lists",
+        ],
+        skill_dir=None,
+        skill_md_mtime=0.0,
+        recorded_turn=1,
+        description="",
+        tags=[],
+        scope="",
+        point_utilities=[empty_point_utility(), empty_point_utility()],
+    )
+    block = pool.build_block(user_message="send venmo payment", turn=1)
+    assert "paginate" in block.lower()
+    assert "done()" not in block
+    assert pool.export_telemetry()["inject"]["points_omitted_ritual"] == 1
+
+
+def test_persist_load_strips_ritual_tips(pool_cfg, tmp_path):
+    path = tmp_path / "hot_pool.json"
+    cfg = {
+        **pool_cfg,
+        "persist_across_conversations": True,
+        "persist_path": str(path),
+        "ritual_filter": False,
+    }
+    writer = HotSkillPool(cfg)
+    writer.record(
+        name="app",
+        content="",
+        key_points=[
+            "ALWAYS call done() when finished",
+            "ALWAYS paginate long API lists",
+        ],
+        turn=1,
+    )
+    assert any(is_ritual_key_point(p) for p in writer._entries["app"].key_points)
+
+    reader = HotSkillPool({**cfg, "ritual_filter": True})
+    assert "app" in reader._entries
+    assert not any(is_ritual_key_point(p) for p in reader._entries["app"].key_points)
+    assert any("paginate" in p.lower() for p in reader._entries["app"].key_points)
 
 
 def test_is_junk_key_point_filters_template_bullets():
@@ -1403,11 +1561,30 @@ def test_apply_outcome_feedback_reconciles_after_scoring(pool_cfg):
     pool._telemetry.reconcile_ran = False
     summary = pool.apply_outcome_feedback(
         {"success": False, "benchmark": "skillsbench", "iterations": 30},
-        complete_fn=lambda _m: "",
+        complete_fn=lambda _m: '{"labels": {"0": "harmful", "1": "harmful"}}',
     )
     assert summary["applied"] is True
     assert summary["attributions"]["harmful"] >= 1
     assert pool._entries["good"].point_utilities[0]["harmful"] >= 1
+
+
+def test_admit_gate_drops_ritual_without_judge(pool_cfg):
+    pool = HotSkillPool({**pool_cfg, "admit_transfer_gate": True})
+    filtered = pool._gate_admission_points(
+        "app",
+        ["ALWAYS call done() when finished", "ALWAYS paginate long API lists"],
+        scope="apis",
+        context="send payment",
+    )
+    assert filtered == ["ALWAYS paginate long API lists"]
+
+
+def test_admit_transfer_prompt_rejects_rituals():
+    from agent.hot_skills import build_admit_transfer_system_prompt
+
+    text = build_admit_transfer_system_prompt()
+    assert "done()" in text
+    assert "short" in text.lower() or "minimal" in text.lower()
 
 
 def test_admit_transfer_parse():

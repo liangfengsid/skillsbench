@@ -950,6 +950,8 @@ DEFAULT_CONFIG = {
             "admit_domain_gate": True,
             "junk_filter": True,
             "junk_min_point_chars": 12,
+            # Drop episode-procedure tips (always call done(), short answer).
+            "ritual_filter": True,
             # Extra skill names denied at admit (merged with built-in meta denylist).
             # On ``appworld-batch``, bundled ``skills/media/*`` MCP skills are also denied.
             "exclude_skills_from_pool": [],
@@ -969,9 +971,9 @@ DEFAULT_CONFIG = {
             # Default on: attribute exposed tips after labeled tasks and
             # update multi-dimensional utilities for admit/evict/inject.
             "outcome_feedback": True,
-            # If the side-channel LLM is missing or empty, label from outcome
-            # (success + low steps). Wording is not a signal.
-            "outcome_feedback_heuristic": True,
+            # Off by default: empty/unparseable judge JSON must not write
+            # utilities. Opt in only for debugging the heuristic itself.
+            "outcome_feedback_heuristic": False,
             "outcome_helpful_max_iterations": 12,
             # Side-channel JSON budget for per-tip outcome labels (thinking off).
             "outcome_judge_max_tokens": 2048,
