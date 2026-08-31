@@ -278,9 +278,9 @@ def adapt_verifier_script(content: str, *, host_python: str) -> str:
 def _pytest_targets(tests_dir: Path) -> List[str]:
     preferred = tests_dir / "test_outputs.py"
     if preferred.is_file():
-        return ["tests/test_outputs.py"]
+        return [str(preferred.resolve())]
     found = sorted(p.name for p in tests_dir.glob("test_*.py") if p.is_file())
-    return [f"tests/{name}" for name in found]
+    return [str((tests_dir / name).resolve()) for name in found]
 
 
 def _read_reward(logs_dir: Path) -> Optional[float]:
@@ -447,7 +447,7 @@ def _run_pytest_eval(
     try:
         proc = subprocess.run(
             cmd,
-            cwd=str(stage),
+            cwd=str(host_root),
             capture_output=True,
             text=True,
             timeout=timeout_sec,

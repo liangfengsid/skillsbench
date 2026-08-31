@@ -252,6 +252,23 @@ _RITUAL_SHORT_ANSWER_RES = (
     ),
 )
 
+# ALWAYS/MUST process rituals (doc-first / exploratory API tours) — burn steps
+# without stating a transferable constraint. NEVER/DO NOT about the same
+# action stays a constraint. "ALWAYS paginate" / "ALWAYS use X formula" kept.
+_RITUAL_PROCEDURE_RES = (
+    re.compile(r"(?i)\b(?:always|must)\b.{0,48}\bshow_api_doc\b"),
+    re.compile(r"(?i)\b(?:always|must)\b.{0,48}\bshow_api_descriptions?\b"),
+    re.compile(
+        r"(?i)\b(?:always|must)\b.{0,48}\b(?:check|read|open|consult|look\s+up)\b"
+        r".{0,32}\b(?:api\s+)?(?:docs?|documentation|spec(?:ification)?s?)\b"
+        r".{0,48}\bbefore\b"
+    ),
+    re.compile(
+        r"(?i)\b(?:always|must)\b.{0,32}\b(?:call|invoke|run|use)\b.{0,48}"
+        r"\bshow_api_(?:doc|descriptions?)\b"
+    ),
+)
+
 _DEFAULT_HOT_POOL = {
     "enabled": True,
     # Store budget (key points). Inject is a separate top-k subset.
@@ -281,11 +298,18 @@ _DEFAULT_HOT_POOL = {
     # Drop template/meta bullets after extract (see filter_junk_key_points).
     "junk_filter": True,
     "junk_min_point_chars": 12,
-    # Drop episode-procedure tips (always call done(), short answer, …).
+    # Drop episode-procedure tips (always call done(), short answer,
+    # ALWAYS show_api_doc before every call, …).
     "ritual_filter": True,
     # Extra skill names denied admission (lowercased); merged with built-in denylist.
     "exclude_skills_from_pool": [],
     "inject_on_turn": True,
+    # Pause inject when inject-cohort success lags no-inject cohort.
+    "inject_throttle": True,
+    "inject_throttle_min_episodes": 8,
+    "inject_throttle_margin": 0.05,
+    # While throttled, allow one probe inject every N labeled episodes.
+    "inject_throttle_probe_every": 10,
     "skip_if_in_history": True,
     "history_lookback": 40,
     "hydrate_from_history": True,
@@ -353,6 +377,16 @@ def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     cfg["persist_across_conversations"] = bool(cfg.get("persist_across_conversations", False))
     cfg["persist_path"] = str(cfg.get("persist_path") or "").strip()
     cfg["inject_on_turn"] = bool(cfg.get("inject_on_turn", True))
+    cfg["inject_throttle"] = bool(cfg.get("inject_throttle", True))
+    cfg["inject_throttle_min_episodes"] = max(
+        2, int(cfg.get("inject_throttle_min_episodes", 8) or 8)
+    )
+    cfg["inject_throttle_margin"] = max(
+        0.0, float(cfg.get("inject_throttle_margin", 0.05) or 0.05)
+    )
+    cfg["inject_throttle_probe_every"] = max(
+        1, int(cfg.get("inject_throttle_probe_every", 10) or 10)
+    )
     cfg["skip_if_in_history"] = bool(cfg.get("skip_if_in_history", True))
     cfg["hydrate_from_history"] = bool(cfg.get("hydrate_from_history", True))
     cfg["outcome_feedback"] = bool(cfg.get("outcome_feedback", True))
@@ -527,20 +561,28 @@ def summarize_point_utility(raw: Optional[dict]) -> Dict[str, Any]:
 
 
 def _utility_strongly_harmful(util: dict, *, min_n: int = 3) -> bool:
-    """Conservative admit filter: drop tips with a clear harmful majority."""
+    """Conservative admit/inject filter: clear harmful majority or low success."""
     n = int(util.get("n_labeled") or 0)
     if n < min_n:
         return False
     harmful = int(util.get("harmful") or 0)
     helpful = int(util.get("helpful") or 0)
-    return harmful >= 2 and harmful >= helpful + 2
+    if harmful >= 2 and harmful >= helpful + 2:
+        return True
+    # Empirical success rate — independent of (possibly inflated) helpful labels.
+    if n >= 5:
+        success_rate = float(util.get("success_sum") or 0.0) / n
+        if success_rate <= 0.45 and harmful + int(util.get("irrelevant") or 0) >= helpful:
+            return True
+    return False
 
 
 def _utility_inject_score(util: dict) -> float:
     """Higher is better. Unlabeled tips stay neutral so they still inject.
 
     Successful but slow episodes sink a tip slightly so search-policy noise
-    does not stay tied with a short-path constraint.
+    does not stay tied with a short-path constraint. Low empirical success
+    rate sinks tips even when the judge over-labeled helpful.
     """
     n = int(util.get("n_labeled") or 0)
     if n <= 0:
@@ -549,6 +591,8 @@ def _utility_inject_score(util: dict) -> float:
     harmful = int(util.get("harmful") or 0)
     irrelevant = int(util.get("irrelevant") or 0)
     score = helpful - 1.5 * harmful - 0.75 * irrelevant
+    success_rate = float(util.get("success_sum") or 0.0) / n
+    score += 3.0 * (success_rate - 0.5)
     n_success = int(util.get("n_success") or 0)
     if n_success > 0:
         avg_it = float(util.get("iterations_when_success_sum") or 0.0) / n_success
@@ -680,11 +724,11 @@ def filter_junk_key_points(
 
 
 def is_ritual_key_point(text: str) -> bool:
-    """True when a tip is an episode closer / verbosity procedure, not policy.
+    """True when a tip is an episode closer / verbosity / process ritual.
 
-    ALWAYS/MUST/bare ``call done()`` and ``return a short answer`` do not
-    transfer (correct finalizer depends on the task). NEVER/DO NOT about
-    the closer is a constraint and is kept.
+    ALWAYS/MUST/bare ``call done()``, ``return a short answer``, and
+    ``ALWAYS show_api_doc before…`` do not transfer as broadcast tips.
+    NEVER/DO NOT about the same action is a constraint and is kept.
     """
     pt = re.sub(r"\s+", " ", (text or "").strip())
     if not pt:
@@ -702,6 +746,11 @@ def is_ritual_key_point(text: str) -> bool:
     for pat in _RITUAL_SHORT_ANSWER_RES:
         if pat.search(pt):
             return True
+    # Doc-first / exploratory API tours — forbid-prefix keeps NEVER variants.
+    if not _RITUAL_FORBID_PREFIX_RE.match(pt):
+        for pat in _RITUAL_PROCEDURE_RES:
+            if pat.search(pt):
+                return True
     return False
 
 
@@ -724,6 +773,40 @@ def filter_ritual_key_points(
         seen.add(norm)
         out.append(pt)
     return out
+
+
+def clamp_outcome_attributions(
+    items: List[Dict[str, Any]],
+    labels: Dict[str, str],
+    outcome: dict,
+) -> Tuple[Dict[str, str], int]:
+    """Hard floor: injected tips cannot be helpful on task failure.
+
+    On ``success=False`` or ``claimed_success_mismatch``, every ``via=inject``
+    tip is forced to ``harmful`` (overwriting helpful/irrelevant). History-only
+    exposure stays irrelevant when unlabeled. Returns (labels, n_clamped).
+    """
+    success = bool(outcome.get("success"))
+    claimed_mismatch = bool(outcome.get("claimed_success_mismatch"))
+    if success and not claimed_mismatch:
+        return dict(labels or {}), 0
+    out = dict(labels or {})
+    clamped = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        iid = str(item.get("id") or "")
+        if not iid:
+            continue
+        via = str(item.get("via") or "")
+        if via != "inject":
+            out.setdefault(iid, "irrelevant")
+            continue
+        prev = out.get(iid)
+        if prev != "harmful":
+            clamped += 1
+        out[iid] = "harmful"
+    return out, clamped
 
 
 def heuristic_outcome_attributions(
@@ -1383,6 +1466,13 @@ class HotPoolTelemetry:
     outcome_judge_recovered_json: bool = False
     outcome_judge_log_events: int = 0
     outcome_judge_log_preview: str = ""
+    outcome_labels_clamped: int = 0
+    inject_throttled: bool = False
+    inject_throttle_probe: bool = False
+    inject_cohort_inject_n: int = 0
+    inject_cohort_inject_success: int = 0
+    inject_cohort_no_inject_n: int = 0
+    inject_cohort_no_inject_success: int = 0
     _skill_view_seen: Set[str] = field(default_factory=set, repr=False)
 
     @property
@@ -1427,6 +1517,12 @@ class HotPoolTelemetry:
                 "injections_attempted": self.injections_attempted,
                 "injections_nonempty": self.injections_nonempty,
                 "first_nonempty_inject_iter": self.first_nonempty_inject_iter,
+                "throttled": self.inject_throttled,
+                "throttle_probe": self.inject_throttle_probe,
+                "cohort_inject_n": self.inject_cohort_inject_n,
+                "cohort_inject_success": self.inject_cohort_inject_success,
+                "cohort_no_inject_n": self.inject_cohort_no_inject_n,
+                "cohort_no_inject_success": self.inject_cohort_no_inject_success,
             },
             "skill_view": {
                 "total": self.skill_view_total,
@@ -1449,6 +1545,7 @@ class HotPoolTelemetry:
                 "attributions": dict(self.outcome_attributions),
                 "skipped_reason": self.outcome_feedback_skipped_reason,
                 "attribution_source": self.outcome_feedback_attribution_source,
+                "labels_clamped": self.outcome_labels_clamped,
                 "judge_finish_reason": self.outcome_judge_finish_reason,
                 "judge_raw_chars": self.outcome_judge_raw_chars,
                 "judge_stripped_chars": self.outcome_judge_stripped_chars,
@@ -1902,6 +1999,14 @@ class HotSkillPool:
         self._tip_lexicons: Dict[Tuple[str, int], FrozenSet[str]] = {}
         self._identity_lexicons: Dict[str, FrozenSet[str]] = {}
         self._idf_ignore: FrozenSet[str] = frozenset()
+        # Rolling inject vs no-inject success (persisted when enabled).
+        self._cohort_inject_n: int = 0
+        self._cohort_inject_success: int = 0
+        self._cohort_no_inject_n: int = 0
+        self._cohort_no_inject_success: int = 0
+        self._inject_throttled: bool = False
+        self._episodes_since_inject: int = 0
+        self._last_block_had_inject: bool = False
         if self._persist_enabled():
             self._load_persisted()
 
@@ -2276,6 +2381,10 @@ class HotSkillPool:
         self._mark_lexicons_dirty()
         self.reconcile_pool(new_name=key, context=context or "", material_update=True)
         self._telemetry.new_records_this_task += 1
+        if self._inject_throttled:
+            # New pool material deserves a fresh inject trial window.
+            self._inject_throttled = False
+            self._inject_throttle_probe_countdown = 0
         self._maybe_persist()
 
     def record_from_tool_result(self, result_json: str, turn: int = 0) -> None:
@@ -2475,9 +2584,47 @@ class HotSkillPool:
         """Serialize a retrieve + utility subset of retained tips."""
         if user_message:
             self.set_admission_context(user_message)
+        self._last_block_had_inject = False
+        self._telemetry.inject_throttled = False
+        self._telemetry.inject_throttle_probe = False
+        self._sync_cohort_telemetry()
         if not self.enabled or not self._config.get("inject_on_turn", True):
             return ""
         if not self._entries:
+            return ""
+
+        allow_inject, is_probe = self._inject_allowed_this_turn()
+        self._telemetry.inject_throttled = bool(self._inject_throttled and not allow_inject)
+        self._telemetry.inject_throttle_probe = bool(is_probe)
+        if not allow_inject:
+            # Still record history-skipped exposure for outcome feedback.
+            exclude = set(exclude_names or ())
+            skipped = [
+                entry
+                for entry in self._entries.values()
+                if entry.name in exclude and entry.key_points
+            ]
+            self._telemetry.excluded_skills = sorted(exclude)
+            self._telemetry.skills_excluded_in_history = sorted(e.name for e in skipped)
+            self._telemetry.points_excluded_in_history = sum(
+                len(e.key_points) for e in skipped
+            )
+            for entry in skipped:
+                for text in entry.key_points:
+                    if not self._is_injectable_point(text):
+                        continue
+                    key = (entry.name, text)
+                    self._exposed_tips[key] = {
+                        "skill": entry.name,
+                        "point": text,
+                        "scope": entry.scope or "",
+                        "via": "history",
+                    }
+            self._telemetry.build_block_applied = False
+            self._telemetry.skills_injected = []
+            self._telemetry.points_injected = []
+            self._telemetry.point_count = 0
+            self._telemetry.chars = 0
             return ""
 
         exclude = set(exclude_names or ())
@@ -2548,7 +2695,72 @@ class HotSkillPool:
                     "scope": entry.scope or "",
                     "via": "inject",
                 }
+        self._last_block_had_inject = bool(points)
+        if self._last_block_had_inject:
+            self._episodes_since_inject = 0
         return block
+
+    def _sync_cohort_telemetry(self) -> None:
+        tel = self._telemetry
+        tel.inject_cohort_inject_n = self._cohort_inject_n
+        tel.inject_cohort_inject_success = self._cohort_inject_success
+        tel.inject_cohort_no_inject_n = self._cohort_no_inject_n
+        tel.inject_cohort_no_inject_success = self._cohort_no_inject_success
+        tel.inject_throttled = self._inject_throttled
+
+    def _inject_cohort_rates(self) -> Tuple[Optional[float], Optional[float]]:
+        inj_n = self._cohort_inject_n
+        no_n = self._cohort_no_inject_n
+        inj_rate = (
+            self._cohort_inject_success / inj_n if inj_n > 0 else None
+        )
+        no_rate = (
+            self._cohort_no_inject_success / no_n if no_n > 0 else None
+        )
+        return inj_rate, no_rate
+
+    def _recompute_inject_throttle(self) -> None:
+        if not self._config.get("inject_throttle", True):
+            self._inject_throttled = False
+            return
+        min_n = int(self._config.get("inject_throttle_min_episodes", 8) or 8)
+        margin = float(self._config.get("inject_throttle_margin", 0.05) or 0.05)
+        if self._cohort_inject_n < min_n or self._cohort_no_inject_n < min_n:
+            return
+        inj_rate, no_rate = self._inject_cohort_rates()
+        if inj_rate is None or no_rate is None:
+            return
+        if inj_rate < no_rate - margin:
+            self._inject_throttled = True
+        elif inj_rate >= no_rate:
+            self._inject_throttled = False
+
+    def _inject_allowed_this_turn(self) -> Tuple[bool, bool]:
+        """Return (allow_inject, is_probe)."""
+        if not self._config.get("inject_throttle", True):
+            return True, False
+        self._recompute_inject_throttle()
+        if not self._inject_throttled:
+            return True, False
+        probe_every = int(self._config.get("inject_throttle_probe_every", 10) or 10)
+        if self._episodes_since_inject >= probe_every:
+            return True, True
+        return False, False
+
+    def _note_inject_cohort(self, *, injected: bool, success: bool) -> None:
+        if injected:
+            self._cohort_inject_n += 1
+            if success:
+                self._cohort_inject_success += 1
+            self._episodes_since_inject = 0
+        else:
+            self._cohort_no_inject_n += 1
+            if success:
+                self._cohort_no_inject_success += 1
+            self._episodes_since_inject += 1
+        self._recompute_inject_throttle()
+        self._sync_cohort_telemetry()
+        self._maybe_persist()
 
     def _aligned_utils(self, entry: HotSkillEntry) -> List[Dict[str, Any]]:
         utils = list(entry.point_utilities or [])
@@ -3045,6 +3257,14 @@ class HotSkillPool:
             return self._record_outcome_summary(summary)
         if not self._exposed_tips:
             summary["skipped_reason"] = "no_exposed_tips"
+            # No tips to score, but still update inject vs no-inject cohort so
+            # throttling / probe cadence learn from empty-inject episodes.
+            if isinstance(outcome, dict) and outcome:
+                self._note_inject_cohort(
+                    injected=self._episode_had_inject(),
+                    success=bool(outcome.get("success")),
+                )
+                self._maybe_persist()
             return self._record_outcome_summary(summary)
         self._reset_outcome_judge_meta()
 
@@ -3107,7 +3327,22 @@ class HotSkillPool:
             summary["skipped_reason"] = ""
             summary["attribution_source"] = "llm"
 
+        # Honest failure→harmful floor (also fills labels when the judge is empty).
+        labels, n_clamped = clamp_outcome_attributions(items, labels, outcome)
+        self._telemetry.outcome_labels_clamped = n_clamped
+        if n_clamped and not summary.get("attribution_source"):
+            summary["attribution_source"] = "failure_floor"
+            summary["skipped_reason"] = ""
+        elif n_clamped and summary.get("attribution_source") == "llm":
+            summary["attribution_source"] = "llm+failure_floor"
+
         if not labels:
+            # Still update inject cohort so throttling can learn from unlabeled fails.
+            self._note_inject_cohort(
+                injected=self._episode_had_inject(),
+                success=bool(outcome.get("success")),
+            )
+            self._maybe_persist()
             return self._record_outcome_summary(summary)
 
         success = bool(outcome.get("success"))
@@ -3152,6 +3387,11 @@ class HotSkillPool:
             attr_counts[label] = attr_counts.get(label, 0) + 1
             scored += 1
 
+        self._note_inject_cohort(
+            injected=self._episode_had_inject(),
+            success=success,
+        )
+
         if scored:
             self._maybe_persist()
             if self._config.get("reconcile_on_update", True):
@@ -3162,11 +3402,20 @@ class HotSkillPool:
                 "applied": scored > 0,
                 "points_scored": scored,
                 "attributions": attr_counts,
+                "labels_clamped": n_clamped,
             }
         )
         if scored and not summary.get("attribution_source"):
             summary["attribution_source"] = "llm"
         return self._record_outcome_summary(summary)
+
+    def _episode_had_inject(self) -> bool:
+        if self._last_block_had_inject:
+            return True
+        for tip in self._exposed_tips.values():
+            if str(tip.get("via") or "") == "inject":
+                return True
+        return False
 
     def _reset_outcome_judge_meta(self) -> None:
         self._telemetry.outcome_judge_finish_reason = ""
@@ -3229,6 +3478,12 @@ class HotSkillPool:
         self._telemetry.outcome_feedback_attribution_source = str(
             summary.get("attribution_source") or ""
         )
+        if "labels_clamped" in summary:
+            try:
+                self._telemetry.outcome_labels_clamped = int(summary.get("labels_clamped") or 0)
+            except (TypeError, ValueError):
+                pass
+        self._sync_cohort_telemetry()
         return summary
 
     def _entry_to_dict(self, entry: HotSkillEntry) -> dict:
@@ -3294,6 +3549,22 @@ class HotSkillPool:
             logger.warning("hot skill pool: unsupported persist schema in %s", path)
             return
         self._global_turn = max(0, int(raw.get("global_turn") or 0))
+        cohort = raw.get("inject_cohort")
+        if isinstance(cohort, dict):
+            self._cohort_inject_n = max(0, int(cohort.get("inject_n") or 0))
+            self._cohort_inject_success = max(
+                0, int(cohort.get("inject_success") or 0)
+            )
+            self._cohort_no_inject_n = max(0, int(cohort.get("no_inject_n") or 0))
+            self._cohort_no_inject_success = max(
+                0, int(cohort.get("no_inject_success") or 0)
+            )
+            self._inject_throttled = bool(cohort.get("throttled"))
+            self._episodes_since_inject = max(
+                0, int(cohort.get("episodes_since_inject") or 0)
+            )
+            self._recompute_inject_throttle()
+            self._sync_cohort_telemetry()
         order = raw.get("order")
         if not isinstance(order, list):
             order = raw.get("lru_order")
@@ -3348,6 +3619,14 @@ class HotSkillPool:
             "global_turn": self._global_turn,
             "order": list(self._entries.keys()),
             "entries": {k: self._entry_to_dict(v) for k, v in self._entries.items()},
+            "inject_cohort": {
+                "inject_n": self._cohort_inject_n,
+                "inject_success": self._cohort_inject_success,
+                "no_inject_n": self._cohort_no_inject_n,
+                "no_inject_success": self._cohort_no_inject_success,
+                "throttled": self._inject_throttled,
+                "episodes_since_inject": self._episodes_since_inject,
+            },
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -3669,6 +3948,8 @@ def build_admit_transfer_system_prompt() -> str:
         "- Encode one episode's Docker/Lean/install recipe rather than a reusable rule\n"
         "- Prescribe a termination ritual (always call done()/complete_task, "
         "always return a short/minimal answer). Those are episode procedures\n"
+        "- Prescribe a process ritual (ALWAYS show_api_doc / check docs before "
+        "every call) rather than a reusable constraint\n"
         "- Would mislead on an unrelated later task\n"
     )
 
@@ -3766,6 +4047,11 @@ def build_outcome_attribution_messages(
         "irrelevant even on success. A tip that matches a long enumeration of "
         "lookups or extra env steps is harmful when iterations are high. "
         "Missing log fields are not evidence the tip helped.\n"
+        "\n"
+        "When outcome.success is false OR outcome.claimed_success_mismatch is "
+        "true: you MUST NOT label any via=inject tip as helpful. Prefer harmful "
+        "for injected tips (they were broadcast into a failed episode). "
+        "History-only tips may be irrelevant.\n"
         "\n"
         "When outcome.claimed_success_mismatch is true, the agent asserted "
         "pass/completion in its final response but labeled evaluation failed — "

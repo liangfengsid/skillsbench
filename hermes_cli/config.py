@@ -950,12 +950,18 @@ DEFAULT_CONFIG = {
             "admit_domain_gate": True,
             "junk_filter": True,
             "junk_min_point_chars": 12,
-            # Drop episode-procedure tips (always call done(), short answer).
+            # Drop episode-procedure tips (always call done(), short answer,
+            # ALWAYS show_api_doc before every call).
             "ritual_filter": True,
             # Extra skill names denied at admit (merged with built-in meta denylist).
             # On ``appworld-batch``, bundled ``skills/media/*`` MCP skills are also denied.
             "exclude_skills_from_pool": [],
             "inject_on_turn": True,
+            # Pause inject when inject-cohort success lags no-inject cohort.
+            "inject_throttle": True,
+            "inject_throttle_min_episodes": 8,
+            "inject_throttle_margin": 0.05,
+            "inject_throttle_probe_every": 10,
             # Omit pool skills already opened via skill_view in recent history
             # (avoid duplicating full SKILL.md + hot tips). Telemetry:
             # inject.skills_excluded_in_history / points_excluded_in_history.

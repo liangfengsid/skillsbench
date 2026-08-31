@@ -13,6 +13,7 @@ from agent.hot_skills import (
     build_hot_skills_block,
     build_llm_eviction_messages,
     build_outcome_attribution_messages,
+    clamp_outcome_attributions,
     compute_alignment_hits,
     derive_hot_scope,
     empty_point_utility,
@@ -230,6 +231,10 @@ def test_load_hot_skills_config_merges_defaults():
     assert cfg["inject_retrieve"] is True
     assert cfg["admit_domain_gate"] is True
     assert cfg["ritual_filter"] is True
+    assert cfg["inject_throttle"] is True
+    assert cfg["inject_throttle_min_episodes"] == 8
+    assert cfg["inject_throttle_margin"] == 0.05
+    assert cfg["inject_throttle_probe_every"] == 10
     assert cfg["outcome_judge_max_tokens"] == 2048
     assert cfg["outcome_feedback_heuristic"] is False
 
@@ -1328,6 +1333,19 @@ def test_is_ritual_key_point_matches_closer_and_short_answer():
     assert is_ritual_key_point("ALWAYS issue the done action last")
 
 
+def test_is_ritual_key_point_matches_show_api_doc_process_rituals():
+    assert is_ritual_key_point("ALWAYS show_api_doc before every API call.")
+    assert is_ritual_key_point("ALWAYS call show_api_doc for each endpoint")
+    assert is_ritual_key_point(
+        "ALWAYS check API docs before calling any endpoint"
+    )
+    assert is_ritual_key_point("MUST consult the API documentation before use")
+    # NEVER about the same action is a constraint, not a ritual.
+    assert not is_ritual_key_point(
+        "NEVER call show_api_doc for every endpoint before acting"
+    )
+
+
 def test_is_ritual_key_point_keeps_constraints_and_policy():
     assert not is_ritual_key_point(
         "NEVER call complete_task with a status string"
@@ -1585,6 +1603,188 @@ def test_admit_transfer_prompt_rejects_rituals():
     text = build_admit_transfer_system_prompt()
     assert "done()" in text
     assert "short" in text.lower() or "minimal" in text.lower()
+    assert "show_api_doc" in text
+
+
+def test_clamp_outcome_overwrites_helpful_on_failure():
+    items = [
+        {"id": "0", "via": "inject", "skill": "a", "point": "tip"},
+        {"id": "1", "via": "history", "skill": "a", "point": "other"},
+    ]
+    labels, n = clamp_outcome_attributions(
+        items, {"0": "helpful", "1": "helpful"}, {"success": False}
+    )
+    assert labels == {"0": "harmful", "1": "helpful"}
+    assert n == 1
+
+
+def test_clamp_outcome_fills_empty_llm_on_failure():
+    items = [
+        {"id": "0", "via": "inject", "skill": "a", "point": "tip"},
+        {"id": "1", "via": "history", "skill": "b", "point": "seen"},
+    ]
+    labels, n = clamp_outcome_attributions(items, {}, {"success": False})
+    assert labels == {"0": "harmful", "1": "irrelevant"}
+    assert n == 1
+
+
+def test_failure_floor_persists_when_llm_labels_helpful(pool_cfg):
+    pool = HotSkillPool(
+        {**pool_cfg, "inject_retrieve": False, "outcome_feedback_heuristic": False}
+    )
+    tip = "NEVER invent required parameter values"
+    pool.record(name="app", content="", key_points=[tip], turn=1)
+    pool.build_block(user_message="send payment", turn=1)
+
+    def judge(_msgs):
+        return json.dumps({"labels": {"0": "helpful"}})
+
+    summary = pool.apply_outcome_feedback(
+        {"success": False, "reward": 0.0, "iterations": 40},
+        complete_fn=judge,
+    )
+    assert summary["applied"] is True
+    assert summary["attribution_source"] == "llm+failure_floor"
+    assert summary["attributions"]["harmful"] == 1
+    assert summary.get("labels_clamped", 0) >= 1
+    util = pool._entries["app"].point_utilities[0]
+    assert util["harmful"] == 1
+    assert util["helpful"] == 0
+    assert pool.export_telemetry()["outcome_feedback"]["labels_clamped"] >= 1
+
+
+def test_failure_floor_applies_without_heuristic_on_empty_llm(pool_cfg):
+    pool = HotSkillPool(
+        {**pool_cfg, "inject_retrieve": False, "outcome_feedback_heuristic": False}
+    )
+    tip = "ALWAYS paginate long API lists"
+    pool.record(name="app", content="", key_points=[tip], turn=1)
+    pool.build_block(user_message="list invoices", turn=1)
+    summary = pool.apply_outcome_feedback(
+        {"success": False, "reward": 0.0, "iterations": 30},
+        complete_fn=lambda _m: "",
+    )
+    assert summary["applied"] is True
+    assert summary["attribution_source"] == "failure_floor"
+    assert summary["attributions"]["harmful"] == 1
+    assert pool._entries["app"].point_utilities[0]["harmful"] == 1
+
+
+def test_inject_throttle_when_inject_cohort_underperforms(pool_cfg, tmp_path):
+    cfg = {
+        **pool_cfg,
+        "inject_retrieve": False,
+        "inject_throttle": True,
+        "inject_throttle_min_episodes": 4,
+        "inject_throttle_margin": 0.05,
+        "inject_throttle_probe_every": 100,
+        "persist_across_conversations": True,
+        "persist_path": str(tmp_path / "hot_pool.json"),
+        "outcome_feedback_heuristic": True,
+    }
+    pool = HotSkillPool(cfg)
+    tip = "NEVER invent required parameter values"
+    pool.record(name="app", content="", key_points=[tip], turn=1)
+
+    # 4 inject fails.
+    for i in range(4):
+        pool.clear_exposed_tips()
+        block = pool.build_block(user_message="pay someone", turn=i)
+        assert block, f"expected inject before throttle, episode {i}"
+        pool.apply_outcome_feedback(
+            {"success": False, "reward": 0.0, "iterations": 20},
+            complete_fn=lambda _m: "",
+        )
+
+    # 4 no-inject successes (inject disabled) → throttle.
+    pool._config["inject_on_turn"] = False
+    for i in range(4):
+        pool.clear_exposed_tips()
+        assert pool.build_block(user_message="pay someone", turn=20 + i) == ""
+        pool.apply_outcome_feedback(
+            {"success": True, "reward": 1.0, "iterations": 8},
+            complete_fn=lambda _m: "",
+        )
+    pool._config["inject_on_turn"] = True
+
+    assert pool._inject_throttled is True
+    pool._episodes_since_inject = 0
+    pool.clear_exposed_tips()
+    blocked = pool.build_block(user_message="pay someone", turn=40)
+    assert blocked == ""
+    tel = pool.export_telemetry()["inject"]
+    assert tel["throttled"] is True
+
+    reloaded = HotSkillPool(cfg)
+    assert reloaded._inject_throttled is True
+    assert reloaded._cohort_inject_n >= 4
+    assert reloaded._cohort_no_inject_n >= 4
+
+
+def test_no_exposed_tips_still_updates_inject_cohort(pool_cfg):
+    pool = HotSkillPool({**pool_cfg, "inject_on_turn": False})
+    pool.record(
+        name="app",
+        content="",
+        key_points=["NEVER invent required parameter values"],
+        turn=1,
+    )
+    pool.clear_exposed_tips()
+    pool.build_block(user_message="pay", turn=1)
+    summary = pool.apply_outcome_feedback(
+        {"success": True, "reward": 1.0, "iterations": 5},
+        complete_fn=lambda _m: "",
+    )
+    assert summary["skipped_reason"] == "no_exposed_tips"
+    assert pool._cohort_no_inject_n == 1
+    assert pool._cohort_no_inject_success == 1
+
+
+def test_inject_throttle_probe_every_n_episodes(pool_cfg):
+    cfg = {
+        **pool_cfg,
+        "inject_retrieve": False,
+        "inject_throttle": True,
+        "inject_throttle_min_episodes": 2,
+        "inject_throttle_margin": 0.0,
+        "inject_throttle_probe_every": 2,
+        "outcome_feedback_heuristic": True,
+    }
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="app",
+        content="",
+        key_points=["NEVER invent required parameter values"],
+        turn=1,
+    )
+    pool._cohort_inject_n = 2
+    pool._cohort_inject_success = 0
+    pool._cohort_no_inject_n = 2
+    pool._cohort_no_inject_success = 2
+    pool._inject_throttled = True
+    pool._episodes_since_inject = 0
+
+    assert pool.build_block(user_message="pay", turn=1) == ""
+    pool._note_inject_cohort(injected=False, success=True)
+    assert pool.build_block(user_message="pay", turn=2) == ""
+    pool._note_inject_cohort(injected=False, success=True)
+    # episodes_since_inject == 2 → probe allowed
+    probe = pool.build_block(user_message="pay", turn=3)
+    assert probe
+    assert pool.export_telemetry()["inject"]["throttle_probe"] is True
+
+
+def test_record_clears_inject_throttle_for_new_material(pool_cfg):
+    pool = HotSkillPool({**pool_cfg, "inject_retrieve": False, "inject_throttle": True})
+    pool._inject_throttled = True
+    pool.record(
+        name="app",
+        content="",
+        key_points=["ALWAYS paginate long API lists"],
+        turn=1,
+    )
+    assert pool._inject_throttled is False
+    assert pool.build_block(user_message="list", turn=1)
 
 
 def test_admit_transfer_parse():
