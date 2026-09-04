@@ -53,6 +53,7 @@ def _clean_amem_env(monkeypatch):
         "HERMES_AMEM_ENABLED",
         "HERMES_AMEM_PATH",
         "HERMES_AMEM_K",
+        "HERMES_AMEM_SYNC_EVERY",
         "HERMES_MEMORY_PROVIDER",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -81,7 +82,52 @@ def test_prefetch_empty_when_no_hits(fake_store):
     assert provider.prefetch("unrelated query xyz") == ""
 
 
-def test_sync_turn_stores_compact_note(fake_store):
+def test_sync_turn_buffers_until_episode_flush(fake_store, monkeypatch):
+    """sync_every=0: no add_note until episode flush."""
+    monkeypatch.setenv("HERMES_AMEM_SYNC_EVERY", "0")
+    provider = AMemMemoryProvider()
+    provider.initialize("sess-1")
+    provider.sync_turn("open the fridge", "go to fridge 1")
+    provider.sync_turn("take apple", "take apple 1")
+    assert fake_store.n_notes == 0
+    assert len(provider._pending) == 2
+    provider.flush_pending(reason="session_end")
+    assert fake_store.n_notes == 1
+    body = fake_store.notes[0]["content"]
+    assert "open the fridge" in body
+    assert "take apple" in body
+    assert provider.export_telemetry()["n_syncs"] == 1
+
+
+def test_default_sync_every_is_five(fake_store):
+    provider = AMemMemoryProvider()
+    provider.initialize("sess-1")
+    assert provider._sync_every == 5
+    for i in range(4):
+        provider.sync_turn(f"u{i}", f"a{i}")
+        assert fake_store.n_notes == 0
+    provider.sync_turn("u4", "a4")
+    assert fake_store.n_notes == 1
+    assert provider.export_telemetry()["sync_every"] == 5
+
+
+def test_sync_every_n_flushes_on_interval(fake_store, monkeypatch):
+    monkeypatch.setenv("HERMES_AMEM_SYNC_EVERY", "2")
+    provider = AMemMemoryProvider()
+    provider.initialize("sess-1")
+    provider.sync_turn("u1", "a1")
+    assert fake_store.n_notes == 0
+    provider.sync_turn("u2", "a2")
+    assert fake_store.n_notes == 1
+    provider.sync_turn("u3", "a3")
+    assert fake_store.n_notes == 1
+    provider.on_session_end([])
+    assert fake_store.n_notes == 2
+    assert provider.export_telemetry()["n_syncs"] == 2
+
+
+def test_sync_every_1_is_legacy_per_turn(fake_store, monkeypatch):
+    monkeypatch.setenv("HERMES_AMEM_SYNC_EVERY", "1")
     provider = AMemMemoryProvider()
     provider.initialize("sess-1")
     provider.sync_turn("open the fridge", "go to fridge 1")
@@ -90,11 +136,25 @@ def test_sync_turn_stores_compact_note(fake_store):
     assert provider.export_telemetry()["n_syncs"] == 1
 
 
+def test_export_telemetry_flushes_pending(fake_store, monkeypatch):
+    monkeypatch.setenv("HERMES_AMEM_SYNC_EVERY", "0")
+    provider = AMemMemoryProvider()
+    provider.initialize("sess-1")
+    provider.sync_turn("u", "a")
+    assert fake_store.n_notes == 0
+    tel = provider.export_telemetry()
+    assert fake_store.n_notes == 1
+    assert tel["n_syncs"] == 1
+    assert tel["sync_every"] == 0
+    assert tel["n_turns_buffered"] == 1
+
+
 def test_sync_turn_skips_empty(fake_store):
     provider = AMemMemoryProvider()
     provider.initialize("sess-1")
     provider.sync_turn("  ", "")
     assert fake_store.n_notes == 0
+    assert provider._pending == []
 
 
 def test_no_extra_tools():
@@ -114,8 +174,10 @@ def test_is_available_with_env(monkeypatch):
     assert AMemMemoryProvider().is_available() is True
 
 
-def test_shutdown_persists(fake_store):
+def test_shutdown_flushes_and_persists(fake_store):
     provider = AMemMemoryProvider()
     provider.initialize("sess-1")
+    provider.sync_turn("u", "a")
     provider.shutdown()
+    assert fake_store.n_notes == 1
     assert fake_store.persisted == 1

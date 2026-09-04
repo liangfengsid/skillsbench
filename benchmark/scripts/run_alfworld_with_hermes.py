@@ -217,6 +217,7 @@ def run_one_game(
     amem: bool = False,
     amem_persist: Optional[str] = None,
     amem_k: int = 5,
+    amem_sync_every: int = 5,
     dc: bool = False,
     dc_persist: Optional[str] = None,
     dc_mode: str = "cu",
@@ -243,6 +244,7 @@ def run_one_game(
         enabled=bool(amem),
         persist_dir=amem_persist,
         k=amem_k,
+        sync_every=amem_sync_every,
         llm_model=resolved_model,
         api_key=agent_runtime.get("api_key"),
         base_url=agent_runtime.get("base_url"),
@@ -650,7 +652,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         experiment_dir=experiment_dir,
     )
     if args.amem:
-        print(f"[amem] persist → {amem_persist} k={args.amem_k}", flush=True)
+        print(
+            f"[amem] persist → {amem_persist} k={args.amem_k} "
+            f"sync_every={args.amem_sync_every if args.amem_sync_every > 0 else 'episode'}",
+            flush=True,
+        )
     dc_persist = resolve_dc_persist(
         enabled=bool(args.dc),
         persist=args.dc_persist,
@@ -709,6 +715,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 amem=bool(args.amem),
                 amem_persist=amem_persist,
                 amem_k=int(args.amem_k),
+                amem_sync_every=int(args.amem_sync_every),
                 dc=bool(args.dc),
                 dc_persist=dc_persist,
                 dc_mode=str(args.dc_mode),

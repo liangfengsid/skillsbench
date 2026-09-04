@@ -7,7 +7,7 @@ Works for Hermes, CoEvoSkills, and other baselines that log compatible envelopes
 ``evaluation``, ``pass_at_turn``, ``run_conversation_result``).
 
 Metrics (see ``skillsbench_aggregate_core.py``):
-  - macro / micro success rate at each pass@k turn and at final (max iterations)
+  - macro / micro success rate at each pass@k turn budget (cumulative ≤k) and at final (max iterations)
   - cost to succeed: mean ± std of tokens and user iterations among successes
 
 Usage::

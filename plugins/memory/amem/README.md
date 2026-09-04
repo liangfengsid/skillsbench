@@ -11,7 +11,7 @@ This is **not** a skill factory. Skill tools (`skill_view` / `skill_manage`) sta
 | Hot-skill | on | on | off (benchmarks) | none |
 | A-Mem | on | **off** | **off** | **none** |
 
-Retrieved notes inject via the existing `<memory-context>` fence on the current user message (`prefetch()` once per user turn). After each turn, `sync_turn()` writes a compact note.
+Retrieved notes inject via the existing `<memory-context>` fence on the current user message (`prefetch()` once per user turn). Turns are **buffered**; by default a note is written every **5** turns (`HERMES_AMEM_SYNC_EVERY=5`), not on every `sync_turn`. Set `0` for one note per episode.
 
 ## Enable
 
@@ -45,6 +45,8 @@ Env vars (set by the drivers):
 - `HERMES_AMEM_ENABLED=1`
 - `HERMES_AMEM_PATH` — store directory (default: `$HERMES_HOME/amem`)
 - `HERMES_AMEM_K` — notes per prefetch (default 5)
+- `HERMES_AMEM_SYNC_EVERY` — flush every N buffered turns (default **5**);
+  `0`/`episode` = one write per episode; `1` = legacy per-turn
 - `HERMES_AMEM_LLM_MODEL` / `HERMES_AMEM_API_KEY` / `HERMES_AMEM_API_BASE`
 - `HERMES_AMEM_EMBED_MODEL` (default `all-MiniLM-L6-v2`)
 

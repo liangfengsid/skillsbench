@@ -7,6 +7,7 @@ import pytest
 from agent.hot_skills import (
     HotSkillPool,
     _utility_inject_score,
+    _utility_strongly_harmful,
     abstract_hot_key_point,
     abstract_hot_key_points,
     build_hot_pool_outcome,
@@ -235,6 +236,7 @@ def test_load_hot_skills_config_merges_defaults():
     assert cfg["inject_throttle_min_episodes"] == 8
     assert cfg["inject_throttle_margin"] == 0.05
     assert cfg["inject_throttle_probe_every"] == 10
+    assert cfg["inject_score_min_labeled"] == 5
     assert cfg["outcome_judge_max_tokens"] == 2048
     assert cfg["outcome_feedback_heuristic"] is False
 
@@ -1291,15 +1293,58 @@ def test_inject_keeps_strongly_irrelevant_and_sorts(pool_cfg):
     assert tel["inject"]["point_count"] == 2
 
 
-def test_inject_falls_back_when_all_filtered(pool_cfg):
-    pool = HotSkillPool(pool_cfg)
+def test_inject_stays_silent_when_all_filtered(pool_cfg):
+    """Negatively evidenced tips must not dump back into the inject block."""
+    pool = HotSkillPool({**pool_cfg, "inject_retrieve": False})
     pool.record(name="nav", content="", key_points=["poison leftover tip text"], turn=1)
     entry = pool._entries["nav"]
     util = empty_point_utility()
     util.update({"n_labeled": 4, "helpful": 0, "harmful": 3, "irrelevant": 1})
     entry.point_utilities = [util]
     block = pool.build_block(user_message="find apple", turn=2)
-    assert "poison leftover tip text" in block
+    assert block == ""
+    tel = pool.export_telemetry()["inject"]
+    assert tel["points_omitted_utility"] == 1
+    assert tel["point_count"] == 0
+
+
+def test_inject_omits_negative_score_tips_when_labeled_enough(pool_cfg):
+    pool = HotSkillPool(
+        {
+            **pool_cfg,
+            "inject_retrieve": False,
+            "inject_score_min_labeled": 5,
+            "inject_throttle": False,
+        }
+    )
+    pool.record(
+        name="nav",
+        content="",
+        key_points=["weak tip with negative score", "fresh unlabeled tip"],
+        turn=1,
+    )
+    entry = pool._entries["nav"]
+    weak = empty_point_utility()
+    # Not strongly_harmful (harmful < helpful+2) but score < 0 at n=5.
+    weak.update(
+        {
+            "n_labeled": 5,
+            "helpful": 3,
+            "harmful": 2,
+            "irrelevant": 0,
+            "success_sum": 2.0,
+            "reward_sum": 2.0,
+            "iterations_sum": 100.0,
+            "n_success": 2,
+            "iterations_when_success_sum": 40.0,
+        }
+    )
+    entry.point_utilities = [weak, empty_point_utility()]
+    assert _utility_inject_score(weak) < 0.0
+    assert not _utility_strongly_harmful(weak)
+    block = pool.build_block(user_message="find apple", turn=2)
+    assert "fresh unlabeled tip" in block
+    assert "weak tip with negative score" not in block
     assert pool.export_telemetry()["inject"]["points_omitted_utility"] == 1
 
 
@@ -1678,6 +1723,7 @@ def test_inject_throttle_when_inject_cohort_underperforms(pool_cfg, tmp_path):
         "inject_throttle_min_episodes": 4,
         "inject_throttle_margin": 0.05,
         "inject_throttle_probe_every": 100,
+        "inject_filter_utilities": False,  # isolate throttle from score silence
         "persist_across_conversations": True,
         "persist_path": str(tmp_path / "hot_pool.json"),
         "outcome_feedback_heuristic": True,
@@ -1686,25 +1732,19 @@ def test_inject_throttle_when_inject_cohort_underperforms(pool_cfg, tmp_path):
     tip = "NEVER invent required parameter values"
     pool.record(name="app", content="", key_points=[tip], turn=1)
 
-    # 4 inject fails.
+    # 4 inject fails (cohort counters only — avoid utility silence mid-loop).
     for i in range(4):
         pool.clear_exposed_tips()
         block = pool.build_block(user_message="pay someone", turn=i)
         assert block, f"expected inject before throttle, episode {i}"
-        pool.apply_outcome_feedback(
-            {"success": False, "reward": 0.0, "iterations": 20},
-            complete_fn=lambda _m: "",
-        )
+        pool._note_inject_cohort(injected=True, success=False)
 
-    # 4 no-inject successes (inject disabled) → throttle.
+    # 4 no-inject successes → throttle.
     pool._config["inject_on_turn"] = False
     for i in range(4):
         pool.clear_exposed_tips()
         assert pool.build_block(user_message="pay someone", turn=20 + i) == ""
-        pool.apply_outcome_feedback(
-            {"success": True, "reward": 1.0, "iterations": 8},
-            complete_fn=lambda _m: "",
-        )
+        pool._note_inject_cohort(injected=False, success=True)
     pool._config["inject_on_turn"] = True
 
     assert pool._inject_throttled is True
@@ -1772,6 +1812,46 @@ def test_inject_throttle_probe_every_n_episodes(pool_cfg):
     probe = pool.build_block(user_message="pay", turn=3)
     assert probe
     assert pool.export_telemetry()["inject"]["throttle_probe"] is True
+
+
+def test_pre_throttle_holdout_every_n_labeled_episodes(pool_cfg):
+    """Even before throttle arms, force periodic no-inject to fill control arm."""
+    cfg = {
+        **pool_cfg,
+        "inject_retrieve": False,
+        "inject_throttle": True,
+        "inject_throttle_min_episodes": 50,  # do not arm throttle
+        "inject_throttle_probe_every": 3,
+        "inject_filter_utilities": False,  # isolate holdout from score silence
+        "outcome_feedback_heuristic": True,
+    }
+    pool = HotSkillPool(cfg)
+    pool.record(
+        name="app",
+        content="",
+        key_points=["NEVER invent required parameter values"],
+        turn=1,
+    )
+    for i in range(3):
+        pool.clear_exposed_tips()
+        block = pool.build_block(user_message="pay someone", turn=i)
+        assert block, f"expected inject on episode {i}"
+        pool._note_inject_cohort(injected=True, success=True)
+    assert pool._cohort_inject_n == 3
+    assert pool._cohort_no_inject_n == 0
+    # labeled % 3 == 0 → next build is a holdout
+    pool.clear_exposed_tips()
+    holdout = pool.build_block(user_message="pay someone", turn=10)
+    assert holdout == ""
+    tel = pool.export_telemetry()["inject"]
+    assert tel["throttle_probe"] is True
+    assert tel["throttled"] is False
+    pool._note_inject_cohort(injected=False, success=True)
+    assert pool._cohort_no_inject_n == 1
+    # After holdout, inject resumes
+    pool.clear_exposed_tips()
+    resumed = pool.build_block(user_message="pay someone", turn=11)
+    assert resumed
 
 
 def test_record_clears_inject_throttle_for_new_material(pool_cfg):

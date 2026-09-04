@@ -33,6 +33,7 @@ def test_apply_amem_cli_overrides_sets_and_clears(tmp_path, monkeypatch):
         enabled=True,
         persist_dir=str(persist),
         k=7,
+        sync_every=5,
         llm_model="Qwen/Qwen3.6-27B",
         api_key="sk-test",
         base_url="http://localhost:8000/v1",
@@ -42,6 +43,7 @@ def test_apply_amem_cli_overrides_sets_and_clears(tmp_path, monkeypatch):
     assert os.environ["HERMES_AMEM_PATH"] == str(persist.resolve())
     assert persist.is_dir()
     assert os.environ["HERMES_AMEM_K"] == "7"
+    assert os.environ["HERMES_AMEM_SYNC_EVERY"] == "5"
     assert os.environ["HERMES_AMEM_LLM_MODEL"] == "Qwen/Qwen3.6-27B"
     assert os.environ["HERMES_AMEM_API_KEY"] == "sk-test"
     assert os.environ["HERMES_AMEM_API_BASE"] == "http://localhost:8000/v1"
@@ -110,10 +112,13 @@ def test_add_amem_cli_flags_on_parser():
     mod = _load_module()
     parser = argparse.ArgumentParser()
     mod.add_amem_cli_flags(parser)
-    ns = parser.parse_args(["--amem", "--amem-k", "3", "--amem-persist", "/tmp/x"])
+    ns = parser.parse_args(
+        ["--amem", "--amem-k", "3", "--amem-persist", "/tmp/x", "--amem-sync-every", "5"]
+    )
     assert ns.amem is True
     assert ns.amem_k == 3
     assert ns.amem_persist == "/tmp/x"
+    assert ns.amem_sync_every == 5
 
 
 def test_skillsbench_driver_wires_amem_flags():

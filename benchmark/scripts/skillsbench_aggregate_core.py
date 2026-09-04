@@ -7,13 +7,26 @@ share one aggregator.
 
 Headline metrics
 ----------------
-- **macro success rate@k** — fraction of tasks with ``task_success`` at conversation
-  turn *k* (and at final / max user iterations).
-- **micro success rate@k** — fraction of pytest cases passed / total across tasks
-  at turn *k* (and at final).
+- **macro success rate@k** — fraction of tasks that succeeded at *any*
+  ``pass_at_turn`` checkpoint with turn ≤ *k*, **or** at final evaluation
+  when ``user_iterations ≤ k``. This is cumulative within a single
+  trajectory budget, so rates are monotonic in *k*. Snapshot-at-exact-*k*
+  is wrong: tasks that finish early omit later keys, workspace state can
+  regress after an earlier pass, and success can land between sparse
+  checkpoint turns (e.g. final pass at 15 API calls with keys only at
+  1/5/10).
+- **micro success rate@k** — fraction of pytest cases passed / total across
+  tasks at the **terminal** in-budget observation: final evaluation when
+  ``user_iterations ≤ k``, otherwise the latest ``pass_at_turn`` ≤ *k*.
+  Macro stays cumulative (any prior success); micro does not take the best
+  mid-run pytest score, so pass@*k* micro matches final micro once every
+  task has finished within *k* turns.
 - **cost to succeed** — among tasks that eventually succeed, mean ± std of
   cumulative tokens and user iterations (API turns) at the *first* successful
   checkpoint (earliest ``pass_at_turn`` with success, else final usage).
+
+Token / iteration stats reported under ``pass_k[k]`` use that same **terminal**
+in-budget observation.
 
 A **user iteration** is one completed agent API turn (same as Hermes ``api_calls`` /
 ``pass_at_turn`` turn index).
@@ -114,6 +127,26 @@ def _turn_block(record: dict, turn: int) -> Optional[dict]:
     return None
 
 
+def _turn_blocks_upto(record: dict, turn: int) -> List[Tuple[int, dict]]:
+    """Return ``(t, block)`` for every recorded checkpoint with ``t <= turn``."""
+    pat = record.get("pass_at_turn")
+    if not isinstance(pat, dict):
+        pat = {}
+    metrics_pat = ((record.get("metrics") or {}).get("pass_at_turn") or {}) if isinstance(
+        record.get("metrics"), dict
+    ) else {}
+    out: List[Tuple[int, dict]] = []
+    for key in set(list(pat.keys()) + list(metrics_pat.keys())):
+        t = _to_int(key)
+        if t is None or t > turn:
+            continue
+        block = _turn_block(record, t)
+        if block is not None:
+            out.append((t, block))
+    out.sort(key=lambda item: item[0])
+    return out
+
+
 def _eval_from_block(block: dict) -> dict:
     ev = block.get("evaluation")
     if isinstance(ev, dict):
@@ -212,10 +245,63 @@ def first_success_checkpoint(record: dict) -> Optional[Dict[str, Any]]:
     }
 
 
+def _observations_upto(record: dict, turn: int) -> List[Tuple[int, dict, str]]:
+    """Checkpoints and in-budget final eval as ``(t, block, source)``.
+
+    Final evaluation is included when ``user_iterations ≤ turn``. That covers
+    tasks that succeed between sparse ``pass_at_turn`` keys (e.g. pass only at
+    final after 15 API calls while checkpoints exist only at 1/5/10).
+    """
+    out: List[Tuple[int, dict, str]] = []
+    for t, block in _turn_blocks_upto(record, turn):
+        out.append((t, block, "pass_at_turn"))
+
+    final_ev = _final_eval(record)
+    usage = _final_usage(record)
+    ui = usage.get("user_iterations")
+    if final_ev and ui is not None and ui <= turn:
+        synthetic = {
+            "evaluation": final_ev,
+            "total_tokens": usage.get("tokens"),
+            "api_calls": ui,
+            "estimated_cost_usd": usage.get("estimated_cost_usd"),
+            "reward": final_ev.get("reward"),
+        }
+        out.append((int(ui), synthetic, "final"))
+
+    # Prefer final after a same-turn checkpoint so "latest" reflects end state.
+    out.sort(key=lambda item: (item[0], 0 if item[2] == "pass_at_turn" else 1))
+    return out
+
+
+def _terminal_observation(
+    obs: List[Tuple[int, dict, str]],
+) -> Tuple[int, dict, str]:
+    """Prefer in-budget final eval over a later sparse checkpoint.
+
+    Mid-run ``pass_at_turn`` keys can outrank final ``user_iterations`` (e.g.
+    a turn-60 snapshot after the agent stopped at 56) and may count pytest
+    cases differently than final. Micro / usage should follow the true
+    end-of-run eval whenever it is within budget.
+    """
+    for item in reversed(obs):
+        if item[2] == "final":
+            return item
+    return obs[-1]
+
+
 def _pass_k_slice(
     by_task: Dict[str, dict],
     turn: int,
 ) -> Dict[str, Any]:
+    """Aggregate pass@k as cumulative success within a turn budget.
+
+    A task contributes if it has any ``pass_at_turn`` checkpoint ≤ ``turn``,
+    or a final evaluation whose ``user_iterations`` are ≤ ``turn``.
+    Macro success is true if *any* such observation has ``task_success``.
+    Micro and usage use the **terminal** in-budget observation (final when
+    within budget, else latest checkpoint) — not the best mid-run score.
+    """
     tasks_with_data = 0
     tasks_passed = 0
     tests_passed_sum = 0
@@ -226,36 +312,46 @@ def _pass_k_slice(
     costs_at_turn: List[float] = []
 
     for tid in sorted(by_task):
-        block = _turn_block(by_task[tid], turn)
-        if block is None:
+        obs = _observations_upto(by_task[tid], turn)
+        if not obs:
             continue
-        ev = _eval_from_block(block)
         tasks_with_data += 1
-        if ev.get("task_success"):
+
+        any_success = False
+        for _t, block, _src in obs:
+            if _eval_from_block(block).get("task_success"):
+                any_success = True
+                break
+        if any_success:
             tasks_passed += 1
+
+        _t, terminal, _src = _terminal_observation(obs)
+        ev = _eval_from_block(terminal)
         p = _to_int(ev.get("tests_passed"))
-        t = _to_int(ev.get("tests_total"))
-        if p is not None and t is not None and t > 0:
+        tot = _to_int(ev.get("tests_total"))
+        if p is not None and tot is not None and tot > 0:
             tests_passed_sum += p
-            tests_total_sum += t
+            tests_total_sum += tot
         reward = ev.get("reward")
         if reward is None:
-            reward = block.get("reward")
+            reward = terminal.get("reward")
         rf = _to_float(reward)
         if rf is not None:
             rewards.append(rf)
-        tok = _tokens_from_block(block)
+
+        tok = _tokens_from_block(terminal)
         if tok is not None:
             tokens_at_turn.append(tok)
-        calls = _api_calls_from_block(block)
+        calls = _api_calls_from_block(terminal)
         if calls is not None:
             api_calls_at_turn.append(calls)
-        cost = _cost_from_block(block)
+        cost = _cost_from_block(terminal)
         if cost is not None:
             costs_at_turn.append(cost)
 
     return {
         "k": turn,
+        "cumulative": True,
         "macro_success_rate": (tasks_passed / tasks_with_data) if tasks_with_data else None,
         "macro_task_pass_rate": (tasks_passed / tasks_with_data) if tasks_with_data else None,
         "tasks_with_turn_data": tasks_with_data,

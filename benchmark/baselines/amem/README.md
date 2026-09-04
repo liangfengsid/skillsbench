@@ -7,6 +7,10 @@
 - **Hot-skill pool off** (`--amem` forces `--no-hot-pool`)
 - **MEMORY.md off** (`skip_memory=True`; A-Mem still loads via `HERMES_AMEM_ENABLED`)
 - **No extra A-Mem tools** — notes inject automatically in `<memory-context>`
+- **Writes are batched** — default `--amem-sync-every 5` flushes every 5
+  buffered turns (~3 notes on a typical ~15-step AppWorld task). Use `0` for
+  one note per episode/task; `1` for legacy per-turn writes (expensive: MiniLM
+  embed + LLM evolution each step).
 
 CoEvoSkills remains a *skill factory* baseline (different research question). A-Mem is the right row for “does structured episode memory match hot key-points?”
 
@@ -56,6 +60,8 @@ DIR/amem/amem_notes.json  # note snapshot (required for AppWorld subprocesses)
 Use `--isolate-hermes-home` so skills are a copy of repo `skills/`, not `~/.hermes/skills`.
 
 `--amem` + `--hot-pool` is rejected. `--amem-k` (default 5) is how many notes to inject per turn.
+`--amem-sync-every` (default **5**) controls write cadence: `N` = flush every N
+buffered turns, `0` = one note per episode, `1` = legacy per-turn.
 
 ## SkillsBench
 

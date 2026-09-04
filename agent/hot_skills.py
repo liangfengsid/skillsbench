@@ -308,8 +308,12 @@ _DEFAULT_HOT_POOL = {
     "inject_throttle": True,
     "inject_throttle_min_episodes": 8,
     "inject_throttle_margin": 0.05,
-    # While throttled, allow one probe inject every N labeled episodes.
+    # Cadence for control-arm holdout (pre-throttle) and inject probes
+    # (while throttled), in labeled episodes.
     "inject_throttle_probe_every": 10,
+    # Once a tip has this many labels, omit it at inject when score < 0.
+    # Unlabeled tips stay eligible; silence when nothing viable remains.
+    "inject_score_min_labeled": 5,
     "skip_if_in_history": True,
     "history_lookback": 40,
     "hydrate_from_history": True,
@@ -386,6 +390,9 @@ def _normalize_hot_pool_cfg(cfg: dict) -> dict:
     )
     cfg["inject_throttle_probe_every"] = max(
         1, int(cfg.get("inject_throttle_probe_every", 10) or 10)
+    )
+    cfg["inject_score_min_labeled"] = max(
+        1, int(cfg.get("inject_score_min_labeled", 5) or 5)
     )
     cfg["skip_if_in_history"] = bool(cfg.get("skip_if_in_history", True))
     cfg["hydrate_from_history"] = bool(cfg.get("hydrate_from_history", True))
@@ -2246,6 +2253,13 @@ class HotSkillPool:
             ),
             "inject_k": int(self._config.get("inject_k", 4) or 0),
             "inject_retrieve": bool(self._config.get("inject_retrieve", True)),
+            "inject_throttle": bool(self._config.get("inject_throttle", True)),
+            "inject_throttle_probe_every": int(
+                self._config.get("inject_throttle_probe_every", 10) or 10
+            ),
+            "inject_score_min_labeled": int(
+                self._config.get("inject_score_min_labeled", 5) or 5
+            ),
             "outcome_judge_max_tokens": int(
                 self._config.get("outcome_judge_max_tokens", 2048) or 2048
             ),
@@ -2384,7 +2398,6 @@ class HotSkillPool:
         if self._inject_throttled:
             # New pool material deserves a fresh inject trial window.
             self._inject_throttled = False
-            self._inject_throttle_probe_countdown = 0
         self._maybe_persist()
 
     def record_from_tool_result(self, result_json: str, turn: int = 0) -> None:
@@ -2736,16 +2749,27 @@ class HotSkillPool:
             self._inject_throttled = False
 
     def _inject_allowed_this_turn(self) -> Tuple[bool, bool]:
-        """Return (allow_inject, is_probe)."""
+        """Return (allow_inject, is_probe).
+
+        While throttled: skip inject except an inject probe every N no-inject
+        episodes. While not throttled: mostly inject, but force a no-inject
+        holdout every N labeled episodes so the control arm can fill and
+        throttling can actually arm.
+        """
         if not self._config.get("inject_throttle", True):
             return True, False
         self._recompute_inject_throttle()
-        if not self._inject_throttled:
-            return True, False
         probe_every = int(self._config.get("inject_throttle_probe_every", 10) or 10)
-        if self._episodes_since_inject >= probe_every:
-            return True, True
-        return False, False
+        if self._inject_throttled:
+            if self._episodes_since_inject >= probe_every:
+                return True, True
+            return False, False
+        # Pre-throttle holdout: after every N completed labeled episodes,
+        # skip inject once to observe the no-inject cohort.
+        labeled = self._cohort_inject_n + self._cohort_no_inject_n
+        if probe_every > 0 and labeled > 0 and labeled % probe_every == 0:
+            return False, True
+        return True, False
 
     def _note_inject_cohort(self, *, injected: bool, success: bool) -> None:
         if injected:
@@ -2778,6 +2802,7 @@ class HotSkillPool:
         scored: List[Tuple[str, float]] = []
         omitted = 0
         ritual_omitted = 0
+        min_labeled = int(self._config.get("inject_score_min_labeled", 5) or 5)
         for text, util in zip(entry.key_points, utils):
             if not self._is_injectable_point(text):
                 ritual_omitted += 1
@@ -2785,7 +2810,13 @@ class HotSkillPool:
             if _utility_strongly_harmful(util):
                 omitted += 1
                 continue
-            scored.append((text, _utility_inject_score(util)))
+            score = _utility_inject_score(util)
+            n_labeled = int(util.get("n_labeled") or 0)
+            # Silence over broadcast: enough evidence + negative score → omit.
+            if n_labeled >= min_labeled and score < 0.0:
+                omitted += 1
+                continue
+            scored.append((text, score))
         scored.sort(key=lambda item: -item[1])
         return [text for text, _ in scored], omitted, ritual_omitted
 
@@ -2815,8 +2846,9 @@ class HotSkillPool:
                 views.append((entry, selected))
 
         if not views:
-            # All filtered — prefer unlabeled, else dump the store so the
-            # inject block is not empty. Never re-broadcast ritual tips.
+            # All labeled tips filtered — still allow unlabeled exploration
+            # tips. Do NOT dump negatively scored / strongly harmful tips back
+            # into the inject block; empty inject is first-class silence.
             unlabeled: List[Tuple[HotSkillEntry, List[str]]] = []
             for entry in entries:
                 utils = self._aligned_utils(entry)
@@ -2828,13 +2860,7 @@ class HotSkillPool:
                 ]
                 if kept:
                     unlabeled.append((entry, kept))
-            if unlabeled:
-                views = unlabeled
-            else:
-                for entry in entries:
-                    kept = [t for t in entry.key_points if self._is_injectable_point(t)]
-                    if kept:
-                        views.append((entry, kept))
+            views = unlabeled
 
         self._telemetry.points_omitted_utility = omitted
         self._telemetry.points_omitted_ritual = ritual_omitted

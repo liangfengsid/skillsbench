@@ -961,7 +961,11 @@ DEFAULT_CONFIG = {
             "inject_throttle": True,
             "inject_throttle_min_episodes": 8,
             "inject_throttle_margin": 0.05,
+            # Holdout every N labeled episodes (pre-throttle) + inject probe
+            # every N while throttled.
             "inject_throttle_probe_every": 10,
+            # Omit tips with inject score < 0 once labeled this many times.
+            "inject_score_min_labeled": 5,
             # Omit pool skills already opened via skill_view in recent history
             # (avoid duplicating full SKILL.md + hot tips). Telemetry:
             # inject.skills_excluded_in_history / points_excluded_in_history.

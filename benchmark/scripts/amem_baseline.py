@@ -23,6 +23,7 @@ def apply_amem_cli_overrides(
     enabled: bool,
     persist_dir: Optional[str] = None,
     k: Optional[int] = None,
+    sync_every: Optional[int] = None,
     llm_model: Optional[str] = None,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
@@ -32,6 +33,7 @@ def apply_amem_cli_overrides(
         "HERMES_AMEM_ENABLED",
         "HERMES_AMEM_PATH",
         "HERMES_AMEM_K",
+        "HERMES_AMEM_SYNC_EVERY",
         "HERMES_AMEM_LLM_MODEL",
         "HERMES_AMEM_API_KEY",
         "HERMES_AMEM_API_BASE",
@@ -48,6 +50,9 @@ def apply_amem_cli_overrides(
         os.environ["HERMES_AMEM_PATH"] = str(path)
     if k is not None:
         os.environ["HERMES_AMEM_K"] = str(int(k))
+    if sync_every is not None:
+        # 0 = one note per episode; N = flush every N buffered turns.
+        os.environ["HERMES_AMEM_SYNC_EVERY"] = str(max(0, int(sync_every)))
     if llm_model:
         os.environ["HERMES_AMEM_LLM_MODEL"] = str(llm_model)
     if api_key:
@@ -95,6 +100,17 @@ def add_amem_cli_flags(parser) -> None:
         default=5,
         metavar="K",
         help="How many A-Mem notes to inject per turn (default: 5).",
+    )
+    parser.add_argument(
+        "--amem-sync-every",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "Flush buffered turns into A-Mem every N sync_turn calls "
+            "(default: 5). Use 0 for one note per episode/task; 1 for "
+            "legacy per-turn writes (expensive: embed + LLM evolve each step)."
+        ),
     )
 
 
