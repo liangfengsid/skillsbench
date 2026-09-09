@@ -30,24 +30,38 @@ def test_build_skillsbench_skill_review_prompt_includes_batch_rules():
     assert "skillsbench-batch" in prompt
     assert "skill_manage" in prompt
     assert "prefer saving" in prompt.lower()
-    assert "skillsbench-host-verification" not in prompt
+    assert "skillsbench-host-grading" in prompt
     assert "mega-skill" in prompt.lower() or "catch-all" in prompt.lower()
     assert "held-out" in prompt.lower() or "abstract" in prompt.lower()
     assert "pre-existing solution" in prompt.lower() or "solution/" in prompt
     combined = mod.build_skillsbench_combined_review_prompt("BASE")
     assert "skillsbench" in combined.lower()
-    assert len(mod.SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX) < 1100
+    assert "skillsbench-host-grading" in combined
+    assert len(mod.SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX) < 1200
 
 
-def test_build_user_message_includes_host_verification_when_eval_on():
+def test_build_user_message_includes_host_grading_meta_when_eval_on():
     mod = _load_module()
     msg = mod.build_user_message("/tmp/tasks", "foo", evaluate_after_run=True)
     assert "foo" in msg
-    assert "Host verification" in msg
-    assert "Do NOT claim" in msg
-    assert "solution/" in msg
+    assert "Driver grading" in msg
+    assert "discover & encode" in msg
+    assert "skill_manage" in msg
+    assert "skillsbench-host-grading" in msg
+    assert "## Common Pitfalls" in msg
+    assert "## Best Practices" in msg
+    assert "hot skill pool" in msg.lower() or "hot-pool" in msg.lower()
+    assert "short bullet" in msg.lower() or "short bullets" in msg.lower()
+    assert "NEVER" in msg and "ALWAYS" in msg
+    # Must not spoil the old privileged appendix wording.
+    assert "Do NOT claim the task is complete" not in msg
+    assert "a host-side pytest verifier runs after your turn" not in msg
     short = mod.build_user_message("/tmp/tasks", "foo", evaluate_after_run=False)
-    assert "Host verification" not in short
+    assert "Driver grading" not in short
+    # Alias still points at the meta appendix for older callers.
+    assert mod.SKILLSBENCH_HOST_VERIFICATION_APPENDIX is (
+        mod.SKILLSBENCH_HOST_GRADING_META_APPENDIX
+    )
 
 
 def test_build_host_eval_feedback_message_summarizes_failure():
@@ -119,6 +133,62 @@ def test_resolve_model_id_falls_back_to_config(monkeypatch):
     monkeypatch.setattr("hermes_cli.config.load_config", _fake_load_config)
     assert mod.resolve_model_id("") == "Qwen/Qwen3.6-27B"
     assert mod.resolve_model_id(None) == "Qwen/Qwen3.6-27B"
+
+
+def test_resolve_provider_name_for_model_explicit_and_catalog():
+    mod = _load_module()
+    cfg = {
+        "model": {"default": "Qwen/Qwen3.6-27B", "provider": "qwen-local"},
+        "providers": {
+            "qwen-31": {
+                "base_url": "http://10.50.0.31:8090/v1",
+                "default_model": "Qwen/Qwen3.6-27B-n31",
+                "models": {"Qwen/Qwen3.6-27B-n31": {"context_length": 131072}},
+            },
+            "qwen-local": {
+                "base_url": "http://127.0.0.1:8090/v1",
+                "default_model": "Qwen/Qwen3.6-27B",
+                "models": {"Qwen/Qwen3.6-27B": {"context_length": 131072}},
+            },
+        },
+    }
+    assert (
+        mod.resolve_provider_name_for_model(
+            "Qwen/Qwen3.6-27B-n31", provider="qwen-31", config=cfg
+        )
+        == "qwen-31"
+    )
+    # Unique catalog match auto-selects without rewriting model.provider.
+    assert (
+        mod.resolve_provider_name_for_model("Qwen/Qwen3.6-27B-n31", config=cfg)
+        == "qwen-31"
+    )
+    # Default model stays on default provider.
+    assert (
+        mod.resolve_provider_name_for_model("Qwen/Qwen3.6-27B", config=cfg)
+        == "qwen-local"
+    )
+    # Unknown model falls back to model.provider.
+    assert (
+        mod.resolve_provider_name_for_model("some/other-model", config=cfg)
+        == "qwen-local"
+    )
+
+
+def test_resolve_provider_name_for_model_ambiguous_requires_flag():
+    mod = _load_module()
+    cfg = {
+        "model": {"provider": "primary"},
+        "providers": {
+            "a": {"models": {"shared/model": {}}},
+            "b": {"models": {"shared/model": {}}},
+        },
+    }
+    try:
+        mod.resolve_provider_name_for_model("shared/model", config=cfg)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "--provider" in str(exc)
 
 
 def test_apply_hot_pool_cli_overrides_disable(monkeypatch):

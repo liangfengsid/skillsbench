@@ -41,6 +41,12 @@ Examples (from Hermes repo root):
       --model Qwen/Qwen3.6-27B --dc --tools \\
       --experiment-dir benchmark/runs/alfworld_dc_unseen \\
       --isolate-hermes-home --resume --print-summary
+
+  # Alternate providers.<name> without changing model.provider in config.yaml:
+  python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen \\
+      --model Qwen/Qwen3.6-27B-n31 --provider qwen-31 --dc --tools \\
+      --experiment-dir benchmark/runs/alfworld_dc_unseen \\
+      --isolate-hermes-home --resume --print-summary
 """
 
 from __future__ import annotations
@@ -493,6 +499,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Hermes repo root (for run_agent import).",
     )
     parser.add_argument("--model", default="", help="Model id (else config default).")
+    parser.add_argument(
+        "--provider",
+        default="",
+        help=(
+            "Named providers.<name> from ~/.hermes/config.yaml (e.g. qwen-31). "
+            "Overrides model.provider for this run only. If omitted, auto-selects "
+            "when --model uniquely matches a providers.*.models / default_model entry."
+        ),
+    )
     parser.add_argument("--max-steps", type=int, default=50, help="Env steps per game (paper default 50).")
     parser.add_argument(
         "--max-iterations",
@@ -686,7 +701,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if remaining:
         runtime = resolve_agent_runtime(
             model=resolved_model or args.model,
+            provider=(args.provider or None),
             config_hermes_home=config_hermes_home,
+        )
+        print(
+            f"[provider] {runtime.get('provider')!r} "
+            f"model={(resolved_model or args.model)!r} "
+            f"base_url={runtime.get('base_url')!r}",
+            flush=True,
         )
     ok = 0
     fail = 0

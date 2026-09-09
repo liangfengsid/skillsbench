@@ -83,7 +83,7 @@ import traceback
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 # Feishu optional deps (lark_oapi) emit setuptools pkg_resources noise on import.
 warnings.filterwarnings(
@@ -156,31 +156,54 @@ SKILLSBENCH_BATCH_SKILL_REVIEW_APPENDIX = (
     "No user to confirm — call skill_manage yourself when warranted. "
     "Bar is slightly lower than interactive: after non-trivial trial-and-error, "
     "prefer saving a class-level skill over 'Nothing to save.' "
-    "Name by task genre (not task id; no catch-all skillsbench-host/verification "
-    "or skillsbench-task-runner mega-skills). Include short '## Common Pitfalls' "
-    "or '## Best Practices' bullets that stay abstract (no absolute paths, "
-    "solution/oracle peeking, running bundled solution/ scripts, reading ground "
-    "truth from tests, or temp-dir remaps of graded outputs) so hot-pool tips "
-    "transfer to held-out tasks."
+    "Name by task genre or platform grading protocol "
+    "(e.g. skillsbench-host-grading), not by task id; avoid catch-all "
+    "mega-skills that dump oracle recipes. Include short "
+    "'## Common Pitfalls' or '## Best Practices' bullets that stay abstract "
+    "(no absolute paths, solution/oracle peeking, running bundled solution/ "
+    "scripts, reading ground truth from tests, or temp-dir remaps of graded "
+    "outputs) so hot-pool tips transfer to held-out tasks."
 )
 
 SKILLSBENCH_BATCH_COMBINED_REVIEW_APPENDIX = (
     "\n\n**SkillsBench batch:** for skills, same rules — no confirmation; "
-    "prefer a class-level save after real trial-and-error; no catch-all "
-    "skillsbench mega-skills; abstract pitfalls only (no oracle/path recipes, "
-    "no 'test pre-existing solution first')."
+    "prefer a class-level save after real trial-and-error; platform grading "
+    "skills (e.g. skillsbench-host-grading) are encouraged; no catch-all "
+    "mega-skills with oracle/path recipes; short '## Common Pitfalls' / "
+    "'## Best Practices' bullets only (no 'test pre-existing solution first')."
 )
 
-SKILLSBENCH_HOST_VERIFICATION_APPENDIX = (
-    "\n\n**Host verification (SkillsBench batch):** When this driver is used, "
-    "a host-side pytest verifier runs after your turn on outputs staged from "
-    "this task directory — not from an ephemeral container. Do NOT claim the "
-    "task is complete or that all tests passed until deliverables exist where "
-    "the graded tests expect them under the task tree. In-container or "
-    "Docker-only pytest is not sufficient. Do NOT treat running bundled "
-    "`solution/` scripts as completing the task — write your own outputs in the "
-    "graded workspace."
+# Meta-prompt: ask the agent to *infer and persist* host grading protocol
+# rather than spoiling it as privileged eval knowledge every turn.
+# Format constraints match hot-skill extract (short Pitfalls/Best Practices
+# bullets) so discovered tips can enter the hot pool.
+SKILLSBENCH_HOST_GRADING_META_APPENDIX = (
+    "\n\n**Driver grading (discover & encode — do not treat this as the "
+    "solution):** This batch grades by running host-side tests on your task "
+    "directory after you stop. Infer the grading protocol from verification "
+    "outcomes (and from the task tree: instruction.md, tests/, environment/), "
+    "then persist it via skill_manage so later tasks reuse the guardrails.\n"
+    "\n"
+    "**Required skill shape (hot-pool extractable):**\n"
+    "- Create or patch a class-level skill named for platform behavior "
+    "(e.g. skillsbench-host-grading), not the task id.\n"
+    "- MUST include a ``## Common Pitfalls`` or ``## Best Practices`` section.\n"
+    "- Put each guardrail as its own short bullet or numbered item "
+    "(one idea, ≤2 sentences, prefer NEVER / DO NOT / ALWAYS / MUST). "
+    "Do NOT dump long prose paragraphs — only short bullets are admitted "
+    "to the hot skill pool.\n"
+    "- Cover at least: (1) where graded deliverables must live relative to "
+    "the task tree; (2) what does *not* count as done (e.g. container-only "
+    "pytest, running bundled reference scripts under solution/).\n"
+    "- Keep tips abstract and transferable — no oracle answers, no "
+    "task-specific paths, no copying from tests/ground truth, no "
+    "'test pre-existing solution first'.\n"
+    "- Update the same skill when verification feedback contradicts it.\n"
+    "Then continue fixing *this* task under that protocol."
 )
+
+# Backward-compatible alias for older imports/tests.
+SKILLSBENCH_HOST_VERIFICATION_APPENDIX = SKILLSBENCH_HOST_GRADING_META_APPENDIX
 
 
 def build_skillsbench_skill_review_prompt(base_prompt: str) -> str:
@@ -236,7 +259,7 @@ def build_user_message(
         f"complete task in {base}/{task_id}, following instruction.md and verify the result."
     )
     if evaluate_after_run:
-        msg += SKILLSBENCH_HOST_VERIFICATION_APPENDIX
+        msg += SKILLSBENCH_HOST_GRADING_META_APPENDIX
     return msg
 
 
@@ -312,9 +335,83 @@ def resolve_model_id(model: Optional[str] = None) -> str:
     return ""
 
 
+def resolve_provider_name_for_model(
+    model: str,
+    *,
+    provider: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Pick which ``providers.<name>`` to use without rewriting ``model.provider``.
+
+    Precedence:
+    1. Explicit ``provider`` (CLI ``--provider``)
+    2. Unique match of ``model`` in ``providers.*.models`` or ``default_model``
+    3. ``model.provider`` from config (unchanged default)
+
+    If the model is catalogued under multiple providers and the default is not
+    among them, raise so the caller can require ``--provider``.
+    """
+    if isinstance(provider, str) and provider.strip():
+        return provider.strip()
+
+    cfg = config
+    if cfg is None:
+        try:
+            from hermes_cli.config import load_config
+
+            cfg = load_config()
+        except Exception:
+            cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+
+    cfg_model = cfg.get("model") or {}
+    default_provider: Optional[str] = None
+    if isinstance(cfg_model, dict):
+        raw = cfg_model.get("provider")
+        if isinstance(raw, str) and raw.strip():
+            default_provider = raw.strip()
+
+    model_id = (model or "").strip()
+    providers = cfg.get("providers") or {}
+    if not model_id or not isinstance(providers, dict):
+        return default_provider
+
+    matches: List[str] = []
+    seen: Set[str] = set()
+    for name, pcfg in providers.items():
+        if not isinstance(pcfg, dict):
+            continue
+        hit = False
+        models = pcfg.get("models") or {}
+        if isinstance(models, dict) and model_id in models:
+            hit = True
+        elif str(pcfg.get("default_model") or "").strip() == model_id:
+            hit = True
+        if not hit:
+            continue
+        key = str(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append(key)
+
+    if len(matches) == 1:
+        return matches[0]
+    if default_provider and default_provider in matches:
+        return default_provider
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"Model {model_id!r} is listed under multiple providers {matches}; "
+            "pass --provider <name> to disambiguate (leaves model.provider unchanged)."
+        )
+    return default_provider
+
+
 def resolve_agent_runtime(
     *,
     model: str,
+    provider: Optional[str] = None,
     config_hermes_home: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Resolve provider/base_url/api_key the same way the interactive CLI does.
@@ -324,6 +421,9 @@ def resolve_agent_runtime(
     ``resolve_runtime_provider()``. Without that, local vLLM (``qwen-local``) and
     ``--experiment-dir`` isolated ``HERMES_HOME`` trees often fail with
     ``No LLM provider configured``.
+
+    ``provider`` (or a unique ``providers.*`` catalog match for ``model``) overrides
+    ``model.provider`` for this process only — the config file is not rewritten.
 
     When ``config_hermes_home`` is set, temporarily point ``HERMES_HOME`` there so
     resolution still reads the user's real ``~/.hermes`` even after the driver
@@ -336,15 +436,19 @@ def resolve_agent_runtime(
         os.environ["HERMES_HOME"] = str(host_expand_path(config_hermes_home))
 
     try:
-        requested = None
+        cfg: Dict[str, Any] = {}
         try:
             from hermes_cli.config import load_config
 
-            cfg_model = load_config().get("model") or {}
-            if isinstance(cfg_model, dict):
-                requested = cfg_model.get("provider") or None
+            loaded = load_config()
+            if isinstance(loaded, dict):
+                cfg = loaded
         except Exception:
-            requested = None
+            cfg = {}
+
+        requested = resolve_provider_name_for_model(
+            model, provider=provider, config=cfg
+        )
 
         runtime = resolve_runtime_provider(
             requested=requested,
@@ -807,6 +911,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--provider",
+        type=str,
+        default="",
+        help=(
+            "Named providers.<name> from ~/.hermes/config.yaml (e.g. qwen-31). "
+            "Overrides model.provider for this run only. If omitted, auto-selects "
+            "when --model uniquely matches a providers.*.models / default_model entry."
+        ),
+    )
+    parser.add_argument(
         "--max-iterations",
         type=int,
         default=90,
@@ -900,7 +1014,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help=(
             "Use the default Hermes skill/memory review prompts instead of the "
-            "SkillsBench batch appendix (host/container pitfalls, verification thrashing)."
+            "SkillsBench batch appendix (class-level skill saves, abstract "
+            "pitfalls, host-grading skill encouragement)."
         ),
     )
     parser.add_argument(
@@ -1169,6 +1284,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             shared_runtime = resolve_agent_runtime(
                 model=resolved_model_for_runtime,
+                provider=(args.provider or None),
                 config_hermes_home=config_hermes_home,
             )
         except RuntimeError as exc:

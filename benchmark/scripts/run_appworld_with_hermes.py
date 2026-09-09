@@ -1303,6 +1303,16 @@ def main() -> int:
         help="Hermes model id; empty uses Hermes config default.",
     )
     parser.add_argument(
+        "--provider",
+        type=str,
+        default="",
+        help=(
+            "Named providers.<name> from ~/.hermes/config.yaml (e.g. qwen-31). "
+            "Overrides model.provider for this run only. If omitted, auto-selects "
+            "when --model uniquely matches a providers.*.models / default_model entry."
+        ),
+    )
+    parser.add_argument(
         "--max-steps",
         type=int,
         default=40,
@@ -1663,7 +1673,14 @@ def main() -> int:
             )
         shared_runtime = resolve_agent_runtime(
             model=resolved_model,
+            provider=(args.provider or None),
             config_hermes_home=config_hermes_home,
+        )
+        print(
+            f"[provider] {shared_runtime.get('provider')!r} "
+            f"model={resolved_model!r} "
+            f"base_url={shared_runtime.get('base_url')!r}",
+            flush=True,
         )
         apply_amem_cli_overrides(
             enabled=bool(args.amem),

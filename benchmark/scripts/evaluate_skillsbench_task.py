@@ -42,6 +42,7 @@ _PYTEST_SUMMARY_RE = re.compile(
 
 # Container workspace mounts used by SkillsBench tests.
 _WORKSPACE_PREFIXES: Tuple[str, ...] = ("/root", "/app")
+_DATA_PREFIX = "/data"
 _TESTS_PREFIX = "/tests"
 _LOGS_PREFIX = "/logs"
 _OUTPUT_PREFIX = "/output"
@@ -104,6 +105,8 @@ def adapt_container_paths(
         text = _remap_abs_prefix(text, _LOGS_PREFIX, logs_dir)
     output_dir = Path(host_root) / "output"
     text = _remap_abs_prefix(text, _OUTPUT_PREFIX, output_dir)
+    data_dir = Path(host_root) / "data"
+    text = _remap_abs_prefix(text, _DATA_PREFIX, data_dir)
     return text
 
 
