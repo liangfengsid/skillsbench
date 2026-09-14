@@ -66,6 +66,19 @@ def _env_k(default: int = 3) -> int:
         return default
 
 
+def _readonly_from_env() -> bool:
+    return os.getenv("HERMES_DC_READONLY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+        "freeze",
+        "frozen",
+        "readonly",
+        "read-only",
+    )
+
+
 def _load_prompt(name: str) -> str:
     path = _PROMPTS_DIR / name
     return path.read_text(encoding="utf-8")
@@ -135,16 +148,22 @@ class HermesDCStore:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         ep_tmp.replace(self._episodes_path)
 
-    def inject_text(self, *, query: str = "") -> str:
-        """Cheatsheet (and optional retrieved examples) for ``<memory-context>``."""
+    def inject_text(self, *, query: str = "", readonly: Optional[bool] = None) -> str:
+        """Cheatsheet (and optional retrieved examples) for ``<memory-context>``.
+
+        When ``readonly`` (or ``HERMES_DC_READONLY``) is set, DC-RS skips the
+        curator LLM and injects the frozen sheet (+ retrieved examples for
+        ``curetr``).
+        """
         mode = _env_mode()
+        frozen = _readonly_from_env() if readonly is None else bool(readonly)
         retrieved = ""
         n_ret = 0
         if mode in ("rs", "curetr") and query.strip() and self.episodes:
             pairs = self._retrieve(query, k=_env_k())
             n_ret = len(pairs)
             retrieved = _format_retrieved(pairs)
-        if mode == "rs":
+        if mode == "rs" and not frozen:
             sheet = self._curate_rs(query, retrieved)
         else:
             sheet = self.cheatsheet
@@ -153,6 +172,7 @@ class HermesDCStore:
             "sheet_chars": len(sheet),
             "n_episodes": len(self.episodes),
             "n_retrieved": n_ret,
+            "readonly": frozen,
         }
         parts = []
         if sheet.strip():
@@ -161,21 +181,47 @@ class HermesDCStore:
             parts.append(_EMPTY)
         if mode == "curetr" and retrieved:
             parts.append(retrieved)
+        if mode == "rs" and frozen and retrieved and not sheet.strip():
+            parts.append(retrieved)
         text = "\n\n".join(p for p in parts if p).strip()
         if len(text) > _MAX_SHEET_CHARS:
             text = text[: _MAX_SHEET_CHARS]
         return text
 
     def sync_turn(self, query: str, answer: str) -> None:
-        q = _clip(query, _MAX_TURN_CHARS)
-        a = _clip(answer, _MAX_TURN_CHARS)
-        if not q and not a:
+        """Legacy single-turn append + curate (also used by ``flush_turns``)."""
+        self.flush_turns([(query, answer)])
+
+    def flush_turns(self, turns: List[Tuple[str, str]]) -> None:
+        """Append one or more turns, then run at most one CU curator update."""
+        if _readonly_from_env():
+            return
+        cleaned: List[Tuple[str, str]] = []
+        for query, answer in turns:
+            q = _clip(query, _MAX_TURN_CHARS)
+            a = _clip(answer, _MAX_TURN_CHARS)
+            if q or a:
+                cleaned.append((q, a))
+        if not cleaned:
             return
         mode = _env_mode()
         with self._lock:
-            self.episodes.append({"query": q, "answer": a})
+            for q, a in cleaned:
+                self.episodes.append({"query": q, "answer": a})
             if mode in ("cu", "curetr"):
-                self._curate_cu(q, a)
+                if len(cleaned) == 1:
+                    q_cur, a_cur = cleaned[0]
+                else:
+                    n = len(cleaned)
+                    q_parts = [
+                        f"Turn {i}/{n}:\n{q}" for i, (q, _) in enumerate(cleaned, start=1)
+                    ]
+                    a_parts = [
+                        f"Turn {i}/{n}:\n{a}" for i, (_, a) in enumerate(cleaned, start=1)
+                    ]
+                    q_cur = _clip("\n".join(q_parts), _MAX_TURN_CHARS)
+                    a_cur = _clip("\n".join(a_parts), _MAX_TURN_CHARS)
+                self._curate_cu(q_cur, a_cur)
             try:
                 self.persist()
             except OSError:

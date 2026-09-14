@@ -11,11 +11,11 @@ This is **not** a skill factory and does **not** wrap the official DC generator.
 | Hot-skill | on | on | off (benchmarks) | none |
 | Dynamic Cheatsheet | on | **off** | **off** | **none** |
 
-The current cheatsheet injects via the existing `<memory-context>` fence on the current user message (`prefetch()`). After each turn, `sync_turn()` appends the episode and (DC-Cu) runs the official curator prompt.
+The current cheatsheet injects via the existing `<memory-context>` fence on the current user message (`prefetch()`). Turns are **buffered**; by default the curator runs every **5** turns (`HERMES_DC_SYNC_EVERY=5`), not on every `sync_turn`. Set `0` for one curation per episode.
 
 ## Enable
 
-Benchmarks: `--dc` on the SkillsBench / ALFWorld / AppWorld drivers (sets `HERMES_DC_ENABLED=1`).
+Benchmarks: `--dc` on the SkillsBench / ALFWorld / AppWorld drivers (sets `HERMES_DC_ENABLED=1`). Held-out eval: `--dc --dc-freeze --dc-persist <train_store>`.
 
 No extra pip extra is required for the default **DC-Cu** mode. `--dc-mode rs` / `curetr` use MiniLM if `sentence-transformers` is installed (same prefetch as A-Mem); otherwise retrieval falls back to recency.
 
@@ -36,7 +36,11 @@ Env vars (set by the drivers):
 - `HERMES_DC_PATH` — store directory (default: `$HERMES_HOME/dcheatsheet`)
 - `HERMES_DC_MODE` — `cu` (default), `rs`, or `curetr`
 - `HERMES_DC_K` — retrieved episodes for `rs` / `curetr` (default 3)
+- `HERMES_DC_SYNC_EVERY` — flush every N buffered turns (default **5**);
+  `0`/`episode` = one write per episode; `1` = legacy per-turn
+- `HERMES_DC_READONLY=1` — frozen eval (prefetch only; no curator). Drivers:
+  `--dc-freeze`
 - `HERMES_DC_LLM_MODEL` / `HERMES_DC_API_KEY` / `HERMES_DC_API_BASE` — curator LLM (same as the agent by default)
 - `HERMES_DC_EMBED_MODEL` — retrieval encoder (default `all-MiniLM-L6-v2`)
 
-See [`benchmark/baselines/dcheatsheet/README.md`](../../../benchmark/baselines/dcheatsheet/README.md) for train → eval commands.
+See [`benchmark/baselines/dcheatsheet/README.md`](../../../benchmark/baselines/dcheatsheet/README.md) for train → freeze → eval commands.

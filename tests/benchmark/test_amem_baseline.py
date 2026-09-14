@@ -108,17 +108,58 @@ def test_amem_telemetry_from_agent_reads_provider():
     assert mod.amem_telemetry_from_agent(SimpleNamespace()) == {}
 
 
+def test_apply_amem_cli_overrides_freeze_sets_readonly(tmp_path, monkeypatch):
+    mod = _load_module()
+    persist = tmp_path / "amem"
+    mod.apply_amem_cli_overrides(
+        enabled=True,
+        persist_dir=str(persist),
+        k=5,
+        sync_every=5,
+        freeze=True,
+    )
+    assert os.environ["HERMES_AMEM_READONLY"] == "1"
+    assert "HERMES_AMEM_SYNC_EVERY" not in os.environ
+
+    mod.apply_amem_cli_overrides(
+        enabled=True,
+        persist_dir=str(persist),
+        freeze=False,
+        sync_every=3,
+    )
+    assert "HERMES_AMEM_READONLY" not in os.environ
+    assert os.environ["HERMES_AMEM_SYNC_EVERY"] == "3"
+
+
+def test_apply_amem_argparse_policy_rejects_freeze_without_amem():
+    mod = _load_module()
+    parser = argparse.ArgumentParser()
+    args = argparse.Namespace(amem=False, amem_freeze=True, hot_pool=None)
+    with pytest.raises(SystemExit):
+        mod.apply_amem_argparse_policy(parser, args)
+
+
 def test_add_amem_cli_flags_on_parser():
     mod = _load_module()
     parser = argparse.ArgumentParser()
     mod.add_amem_cli_flags(parser)
     ns = parser.parse_args(
-        ["--amem", "--amem-k", "3", "--amem-persist", "/tmp/x", "--amem-sync-every", "5"]
+        [
+            "--amem",
+            "--amem-k",
+            "3",
+            "--amem-persist",
+            "/tmp/x",
+            "--amem-sync-every",
+            "5",
+            "--amem-freeze",
+        ]
     )
     assert ns.amem is True
     assert ns.amem_k == 3
     assert ns.amem_persist == "/tmp/x"
     assert ns.amem_sync_every == 5
+    assert ns.amem_freeze is True
 
 
 def test_skillsbench_driver_wires_amem_flags():
@@ -131,6 +172,7 @@ def test_skillsbench_driver_wires_amem_flags():
     assert "add_amem_cli_flags" in text
     assert "apply_amem_cli_overrides" in text
     assert "amem_telemetry" in text
+    assert "amem_freeze" in text
 
 
 def test_alfworld_and_appworld_drivers_wire_amem_flags():
@@ -141,3 +183,5 @@ def test_alfworld_and_appworld_drivers_wire_amem_flags():
         assert "apply_amem_cli_overrides" in text
         assert '"amem":' in text or "amem=bool" in text or "amem=bool(" in text
         assert "amem_telemetry" in text
+        assert "amem_freeze" in text
+        assert "freeze=bool(amem_freeze)" in text or "freeze=bool(args.amem_freeze)" in text

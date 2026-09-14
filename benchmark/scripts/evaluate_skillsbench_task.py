@@ -74,8 +74,11 @@ def _remap_abs_prefix(text: str, container_prefix: str, host_path: str) -> str:
     # Exact mount: "/app" or '/app'
     text = re.sub(rf'(["\']){esc}\1', rf"\1{host}\1", text)
     # Bare paths in shell commands: cd /app/workspace && ...
-    text = re.sub(rf"(?<![A-Za-z0-9_]){esc}/", f"{host}/", text)
-    text = re.sub(rf"(?<![A-Za-z0-9_]){esc}(?![A-Za-z0-9_/])", host, text)
+    # Exclude ``}`` so container-prefixed suffixes inside f-strings
+    # (e.g. ``f"{OUTPUT_DIR}/data"``) are NOT rewritten to an absolute host
+    # path at import time -- the interpolated variable is remapped instead.
+    text = re.sub(rf"(?<![A-Za-z0-9_}}]){esc}/", f"{host}/", text)
+    text = re.sub(rf"(?<![A-Za-z0-9_}}]){esc}(?![A-Za-z0-9_/])", host, text)
     text = text.replace(f"sys.path.insert(0, '{pref}')", f"sys.path.insert(0, '{host}')")
     text = text.replace(f'sys.path.insert(0, "{pref}")', f'sys.path.insert(0, "{host}")')
     return text
@@ -93,12 +96,16 @@ def adapt_container_paths(
     Rewrite container absolute paths in test sources for host staging.
 
     - ``/root`` and ``/app`` → ``host_root`` (agent workspace)
+    - ``/workspace`` → ``host_root/workspace`` (environment/workspace staging)
     - ``/tests`` → ``tests_dir`` (verifier inputs next to pytest)
     - ``/logs`` → ``logs_dir`` (verifier logs; created by the host runner)
     """
     text = content
     for prefix in workspace_prefixes:
         text = _remap_abs_prefix(text, prefix, host_root)
+    # /workspace maps to host_root/workspace because staging copies
+    # environment/workspace/* → host_root/workspace/*
+    text = _remap_abs_prefix(text, "/workspace", host_root / "workspace")
     if tests_dir is not None:
         text = _remap_abs_prefix(text, _TESTS_PREFIX, tests_dir)
     if logs_dir is not None:

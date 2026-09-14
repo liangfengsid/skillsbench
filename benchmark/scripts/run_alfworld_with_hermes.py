@@ -224,10 +224,13 @@ def run_one_game(
     amem_persist: Optional[str] = None,
     amem_k: int = 5,
     amem_sync_every: int = 5,
+    amem_freeze: bool = False,
     dc: bool = False,
     dc_persist: Optional[str] = None,
     dc_mode: str = "cu",
     dc_k: int = 3,
+    dc_sync_every: int = 5,
+    dc_freeze: bool = False,
     runtime: Optional[Dict[str, Any]] = None,
     config_hermes_home: Optional[Path] = None,
 ) -> Dict[str, Any]:
@@ -251,6 +254,7 @@ def run_one_game(
         persist_dir=amem_persist,
         k=amem_k,
         sync_every=amem_sync_every,
+        freeze=bool(amem_freeze),
         llm_model=resolved_model,
         api_key=agent_runtime.get("api_key"),
         base_url=agent_runtime.get("base_url"),
@@ -260,6 +264,8 @@ def run_one_game(
         persist_dir=dc_persist,
         mode=dc_mode,
         k=dc_k,
+        sync_every=dc_sync_every,
+        freeze=bool(dc_freeze),
         llm_model=resolved_model,
         api_key=agent_runtime.get("api_key"),
         base_url=agent_runtime.get("base_url"),
@@ -669,7 +675,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.amem:
         print(
             f"[amem] persist → {amem_persist} k={args.amem_k} "
-            f"sync_every={args.amem_sync_every if args.amem_sync_every > 0 else 'episode'}",
+            f"sync_every={'frozen' if args.amem_freeze else (args.amem_sync_every if args.amem_sync_every > 0 else 'episode')}"
+            f"{' readonly' if args.amem_freeze else ''}",
             flush=True,
         )
     dc_persist = resolve_dc_persist(
@@ -679,7 +686,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     if args.dc:
         print(
-            f"[dc] persist → {dc_persist} mode={args.dc_mode} k={args.dc_k}",
+            f"[dc] persist → {dc_persist} mode={args.dc_mode} k={args.dc_k} "
+            f"sync_every={'frozen' if args.dc_freeze else (args.dc_sync_every if args.dc_sync_every > 0 else 'episode')}"
+            f"{' readonly' if args.dc_freeze else ''}",
             flush=True,
         )
 
@@ -738,10 +747,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 amem_persist=amem_persist,
                 amem_k=int(args.amem_k),
                 amem_sync_every=int(args.amem_sync_every),
+                amem_freeze=bool(args.amem_freeze),
                 dc=bool(args.dc),
                 dc_persist=dc_persist,
                 dc_mode=str(args.dc_mode),
                 dc_k=int(args.dc_k),
+                dc_sync_every=int(args.dc_sync_every),
+                dc_freeze=bool(args.dc_freeze),
                 runtime=runtime,
                 config_hermes_home=config_hermes_home,
             )

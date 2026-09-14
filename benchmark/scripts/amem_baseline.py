@@ -24,6 +24,7 @@ def apply_amem_cli_overrides(
     persist_dir: Optional[str] = None,
     k: Optional[int] = None,
     sync_every: Optional[int] = None,
+    freeze: bool = False,
     llm_model: Optional[str] = None,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
@@ -34,6 +35,7 @@ def apply_amem_cli_overrides(
         "HERMES_AMEM_PATH",
         "HERMES_AMEM_K",
         "HERMES_AMEM_SYNC_EVERY",
+        "HERMES_AMEM_READONLY",
         "HERMES_AMEM_LLM_MODEL",
         "HERMES_AMEM_API_KEY",
         "HERMES_AMEM_API_BASE",
@@ -50,7 +52,9 @@ def apply_amem_cli_overrides(
         os.environ["HERMES_AMEM_PATH"] = str(path)
     if k is not None:
         os.environ["HERMES_AMEM_K"] = str(int(k))
-    if sync_every is not None:
+    if freeze:
+        os.environ["HERMES_AMEM_READONLY"] = "1"
+    elif sync_every is not None:
         # 0 = one note per episode; N = flush every N buffered turns.
         os.environ["HERMES_AMEM_SYNC_EVERY"] = str(max(0, int(sync_every)))
     if llm_model:
@@ -78,7 +82,7 @@ def amem_telemetry_from_agent(agent: Any) -> Dict[str, Any]:
 
 
 def add_amem_cli_flags(parser) -> None:
-    """``--amem`` / ``--amem-persist`` / ``--amem-k`` for Hermes benchmark drivers."""
+    """``--amem`` / ``--amem-persist`` / ``--amem-k`` / ``--amem-freeze``."""
     parser.add_argument(
         "--amem",
         action="store_true",
@@ -109,13 +113,25 @@ def add_amem_cli_flags(parser) -> None:
         help=(
             "Flush buffered turns into A-Mem every N sync_turn calls "
             "(default: 5). Use 0 for one note per episode/task; 1 for "
-            "legacy per-turn writes (expensive: embed + LLM evolve each step)."
+            "legacy per-turn writes (expensive: embed + LLM evolve each step). "
+            "Ignored with --amem-freeze."
+        ),
+    )
+    parser.add_argument(
+        "--amem-freeze",
+        action="store_true",
+        help=(
+            "Frozen A-Mem eval: prefetch/retrieve only — no note writes "
+            "(no embed/evolve). Sets HERMES_AMEM_READONLY=1. Use on held-out "
+            "splits with --amem-persist pointing at a train snapshot."
         ),
     )
 
 
 def apply_amem_argparse_policy(parser, args) -> None:
     """``--amem`` cannot share a run with ``--hot-pool`` or ``--dc``."""
+    if getattr(args, "amem_freeze", False) and not getattr(args, "amem", False):
+        parser.error("--amem-freeze requires --amem")
     if not getattr(args, "amem", False):
         return
     if getattr(args, "dc", False):

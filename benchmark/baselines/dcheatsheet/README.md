@@ -41,6 +41,15 @@ Use `--isolate-hermes-home` so skills are a copy of repo `skills/`, not `~/.herm
 
 `--dc` + `--hot-pool` and `--dc` + `--amem` are rejected.
 
+Curator writes are batched like A-Mem: `--dc-sync-every` (default **5**)
+flushes every N buffered turns; `0` = one curation per episode; `1` = legacy
+per-turn curator calls.
+
+**Held-out eval must use `--dc-freeze`** (sets `HERMES_DC_READONLY=1`):
+inject the train cheatsheet only — no curator writes. Point `--dc-persist`
+at the train snapshot (or a copy). Without freeze, eval keeps curating and
+pays the curator LLM tax.
+
 ## SkillsBench
 
 ```bash
@@ -54,7 +63,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 
 # Test — frozen cheatsheet from train
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --dc --dc-persist benchmark/runs/exp_dc_train/dcheatsheet \
+  --dc --dc-freeze --dc-persist benchmark/runs/exp_dc_train/dcheatsheet \
   --experiment-dir benchmark/runs/exp_dc_test \
   --isolate-hermes-home \
   --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part test \
@@ -77,9 +86,9 @@ python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split train \
   --experiment-dir benchmark/runs/alfworld_dc_train \
   --isolate-hermes-home --resume --print-summary
 
-# Unseen eval (reuse train cheatsheet)
+# Unseen eval (frozen train cheatsheet)
 python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen \
-  --model Qwen/Qwen3.6-27B --dc --tools --max-steps 50 \
+  --model Qwen/Qwen3.6-27B --dc --dc-freeze --tools --max-steps 50 \
   --dc-persist benchmark/runs/alfworld_dc_train/dcheatsheet \
   --experiment-dir benchmark/runs/alfworld_dc_unseen \
   --isolate-hermes-home --resume --print-summary
@@ -100,7 +109,7 @@ python3 benchmark/scripts/run_appworld_with_hermes.py \
 
 # test_normal — frozen train store
 python3 benchmark/scripts/run_appworld_with_hermes.py \
-  --dataset test_normal --all --model Qwen/Qwen3.6-27B --dc \
+  --dataset test_normal --all --model Qwen/Qwen3.6-27B --dc --dc-freeze \
   --dc-persist benchmark/runs/appworld_dc_train/dcheatsheet \
   --experiment-dir benchmark/runs/appworld_dc_test \
   --isolate-hermes-home --experiment-name hermes-dc-test \
@@ -110,4 +119,7 @@ python3 benchmark/scripts/run_appworld_with_hermes.py \
 
 ## JSONL
 
-Rows include `dc_enabled`, `dc_persist`, `dc_mode`, and optional `dc_telemetry` (`sheet_chars`, `n_episodes`, `n_curations`, `last_prefetch`). Aggregate with the same SkillsBench aggregator (`evaluation.task_success`).
+Rows include `dc_enabled`, `dc_persist`, `dc_mode`, and optional `dc_telemetry`
+(`sheet_chars`, `n_episodes`, `n_curations`, `readonly`, `sync_every`,
+`last_prefetch`). Aggregate with the same SkillsBench aggregator
+(`evaluation.task_success`).

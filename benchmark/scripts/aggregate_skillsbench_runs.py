@@ -15,6 +15,7 @@ Usage::
   python3 benchmark/scripts/aggregate_skillsbench_runs.py \\
     benchmark/runs/batch.jsonl \\
     --pass-k 1,5,10,70 \\
+    --pass-k-checkpoints-only \\
     --max-user-iterations 90 \\
     -o benchmark/runs/batch_summary.json \\
     --print-summary
@@ -48,6 +49,7 @@ def aggregate_records(
     method: Optional[str] = None,
     phase: Optional[str] = None,
     max_user_iterations: Optional[int] = None,
+    include_final_in_pass_k: bool = True,
 ) -> Dict[str, Any]:
     """Build summary dict from JSONL run records (shared schema)."""
     return aggregate_skillsbench_metrics(
@@ -57,6 +59,7 @@ def aggregate_records(
         method=method,
         phase=phase,
         max_user_iterations=max_user_iterations,
+        include_final_in_pass_k=include_final_in_pass_k,
     )
 
 
@@ -86,7 +89,21 @@ def main() -> int:
         "--max-user-iterations",
         type=int,
         default=None,
-        help="Annotate final metrics as measured within this max iteration budget.",
+        help=(
+            "Turn budget for cost_to_succeed (and a label on final_*). "
+            "Only tasks whose first success is at or before this turn are "
+            "included in cost_to_succeed_*. With --pass-k-checkpoints-only "
+            "and this omitted, the budget is max(--pass-k)."
+        ),
+    )
+    parser.add_argument(
+        "--pass-k-checkpoints-only",
+        action="store_true",
+        help=(
+            "Score pass@k macro/micro from pass_at_turn snapshots only. "
+            "Do not credit post-conversation host eval or verification retries "
+            "when user_iterations ≤ k. final_* rates are unchanged."
+        ),
     )
     parser.add_argument(
         "--split-part",
@@ -138,6 +155,7 @@ def main() -> int:
         method=args.method,
         phase=args.phase,
         max_user_iterations=args.max_user_iterations,
+        include_final_in_pass_k=not args.pass_k_checkpoints_only,
     )
 
     if args.output:

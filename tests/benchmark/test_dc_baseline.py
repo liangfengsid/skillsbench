@@ -34,6 +34,7 @@ def test_apply_dc_cli_overrides_sets_and_clears(tmp_path, monkeypatch):
         persist_dir=str(persist),
         mode="rs",
         k=4,
+        sync_every=5,
         llm_model="Qwen/Qwen3.6-27B",
         api_key="sk-test",
         base_url="http://localhost:8000/v1",
@@ -44,6 +45,7 @@ def test_apply_dc_cli_overrides_sets_and_clears(tmp_path, monkeypatch):
     assert persist.is_dir()
     assert os.environ["HERMES_DC_MODE"] == "rs"
     assert os.environ["HERMES_DC_K"] == "4"
+    assert os.environ["HERMES_DC_SYNC_EVERY"] == "5"
     assert os.environ["HERMES_DC_LLM_MODEL"] == "Qwen/Qwen3.6-27B"
     assert os.environ["HERMES_DC_API_KEY"] == "sk-test"
     assert os.environ["HERMES_DC_API_BASE"] == "http://localhost:8000/v1"
@@ -52,6 +54,38 @@ def test_apply_dc_cli_overrides_sets_and_clears(tmp_path, monkeypatch):
     assert "HERMES_DC_ENABLED" not in os.environ
     assert "HERMES_MEMORY_PROVIDER" not in os.environ
     assert "HERMES_DC_PATH" not in os.environ
+    assert "HERMES_DC_SYNC_EVERY" not in os.environ
+
+
+def test_apply_dc_cli_overrides_freeze_sets_readonly(tmp_path, monkeypatch):
+    mod = _load_module()
+    persist = tmp_path / "dcheatsheet"
+    mod.apply_dc_cli_overrides(
+        enabled=True,
+        persist_dir=str(persist),
+        k=3,
+        sync_every=5,
+        freeze=True,
+    )
+    assert os.environ["HERMES_DC_READONLY"] == "1"
+    assert "HERMES_DC_SYNC_EVERY" not in os.environ
+
+    mod.apply_dc_cli_overrides(
+        enabled=True,
+        persist_dir=str(persist),
+        freeze=False,
+        sync_every=3,
+    )
+    assert "HERMES_DC_READONLY" not in os.environ
+    assert os.environ["HERMES_DC_SYNC_EVERY"] == "3"
+
+
+def test_apply_dc_argparse_policy_rejects_freeze_without_dc():
+    mod = _load_module()
+    parser = argparse.ArgumentParser()
+    args = argparse.Namespace(dc=False, dc_freeze=True, amem=False, hot_pool=None)
+    with pytest.raises(SystemExit):
+        mod.apply_dc_argparse_policy(parser, args)
 
 
 def test_apply_dc_cli_overrides_does_not_wipe_amem_provider(monkeypatch):
@@ -120,12 +154,25 @@ def test_add_dc_cli_flags_on_parser():
     parser = argparse.ArgumentParser()
     mod.add_dc_cli_flags(parser)
     ns = parser.parse_args(
-        ["--dc", "--dc-k", "2", "--dc-persist", "/tmp/x", "--dc-mode", "rs"]
+        [
+            "--dc",
+            "--dc-k",
+            "2",
+            "--dc-persist",
+            "/tmp/x",
+            "--dc-mode",
+            "rs",
+            "--dc-sync-every",
+            "5",
+            "--dc-freeze",
+        ]
     )
     assert ns.dc is True
     assert ns.dc_k == 2
     assert ns.dc_persist == "/tmp/x"
     assert ns.dc_mode == "rs"
+    assert ns.dc_sync_every == 5
+    assert ns.dc_freeze is True
 
 
 def test_skillsbench_driver_wires_dc_flags():
@@ -138,6 +185,8 @@ def test_skillsbench_driver_wires_dc_flags():
     assert "add_dc_cli_flags" in text
     assert "apply_dc_cli_overrides" in text
     assert "dc_telemetry" in text
+    assert "dc_freeze" in text
+    assert "dc_sync_every" in text
 
 
 def test_alfworld_and_appworld_drivers_wire_dc_flags():
@@ -148,3 +197,5 @@ def test_alfworld_and_appworld_drivers_wire_dc_flags():
         assert "apply_dc_cli_overrides" in text
         assert "dc_telemetry" in text
         assert "dc=bool" in text or '"dc":' in text
+        assert "dc_freeze" in text
+        assert "freeze=bool(dc_freeze)" in text or "freeze=bool(args.dc_freeze)" in text

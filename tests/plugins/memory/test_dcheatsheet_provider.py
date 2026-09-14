@@ -17,8 +17,12 @@ def _clean_dc_env(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_DC_PATH", str(persist))
     monkeypatch.setenv("HERMES_DC_MODE", "cu")
     monkeypatch.setenv("HERMES_DC_K", "3")
+    # Legacy per-turn curation unless a test overrides — keeps existing
+    # single-sync_turn assertions stable.
+    monkeypatch.setenv("HERMES_DC_SYNC_EVERY", "1")
     for key in (
         "HERMES_DC_ENABLED",
+        "HERMES_DC_READONLY",
         "HERMES_DC_LLM_MODEL",
         "HERMES_DC_API_KEY",
         "HERMES_DC_API_BASE",
@@ -72,6 +76,59 @@ def test_sync_turn_skips_empty():
     provider.sync_turn("  ", "")
     assert provider.export_telemetry()["n_episodes"] == 0
     assert provider.export_telemetry()["n_curations"] == 0
+
+
+def test_readonly_skips_writes_but_prefetch_works(monkeypatch):
+    monkeypatch.setenv("HERMES_DC_READONLY", "1")
+    # Seed a sheet without going through sync_turn.
+    store = dc_store.get_store()
+    store.cheatsheet = "Tip: go to fridge then take apple."
+    store.persist()
+    dc_store.reset_store_for_tests()
+
+    provider = DCMemoryProvider()
+    provider.initialize("sess-1")
+    assert provider._readonly is True
+    provider.sync_turn("get the apple", "go to fridge")
+    assert provider._pending == []
+    tel = provider.export_telemetry()
+    assert tel["readonly"] is True
+    assert tel["n_episodes"] == 0
+    assert tel["n_curations"] == 0
+    text = provider.prefetch("How do I get the apple from the fridge?")
+    assert "go to fridge" in text
+    provider.shutdown()
+    assert provider._store.n_curations == 0
+
+
+def test_sync_every_n_flushes_on_interval(monkeypatch):
+    monkeypatch.setenv("HERMES_DC_SYNC_EVERY", "3")
+    provider = DCMemoryProvider()
+    provider.initialize("sess-1")
+    assert provider._sync_every == 3
+    provider.sync_turn("q1", "a1")
+    provider.sync_turn("q2", "a2")
+    assert provider._store.n_curations == 0
+    assert len(provider._pending) == 2
+    provider.sync_turn("q3", "a3")
+    assert provider._store.n_curations == 1
+    assert provider._pending == []
+    assert provider._store.n_curations == 1
+    assert len(provider._store.episodes) == 3
+
+
+def test_sync_every_0_flushes_on_telemetry(monkeypatch):
+    monkeypatch.setenv("HERMES_DC_SYNC_EVERY", "0")
+    provider = DCMemoryProvider()
+    provider.initialize("sess-1")
+    provider.sync_turn("q1", "a1")
+    assert provider._store.n_curations == 0
+    assert len(provider._pending) == 1
+    tel = provider.export_telemetry()
+    assert tel["sync_every"] == 0
+    assert tel["n_curations"] == 1
+    assert tel["n_episodes"] == 1
+    assert provider._pending == []
 
 
 def test_failed_curator_keeps_previous_sheet(monkeypatch):

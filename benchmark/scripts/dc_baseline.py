@@ -26,6 +26,8 @@ def apply_dc_cli_overrides(
     persist_dir: Optional[str] = None,
     mode: Optional[str] = None,
     k: Optional[int] = None,
+    sync_every: Optional[int] = None,
+    freeze: bool = False,
     llm_model: Optional[str] = None,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
@@ -41,6 +43,8 @@ def apply_dc_cli_overrides(
         "HERMES_DC_PATH",
         "HERMES_DC_MODE",
         "HERMES_DC_K",
+        "HERMES_DC_SYNC_EVERY",
+        "HERMES_DC_READONLY",
         "HERMES_DC_LLM_MODEL",
         "HERMES_DC_API_KEY",
         "HERMES_DC_API_BASE",
@@ -60,6 +64,11 @@ def apply_dc_cli_overrides(
         os.environ["HERMES_DC_MODE"] = str(mode).strip().lower()
     if k is not None:
         os.environ["HERMES_DC_K"] = str(int(k))
+    if freeze:
+        os.environ["HERMES_DC_READONLY"] = "1"
+    elif sync_every is not None:
+        # 0 = one curation per episode; N = flush every N buffered turns.
+        os.environ["HERMES_DC_SYNC_EVERY"] = str(max(0, int(sync_every)))
     if llm_model:
         os.environ["HERMES_DC_LLM_MODEL"] = str(llm_model)
     if api_key:
@@ -86,7 +95,7 @@ def dc_telemetry_from_agent(agent: Any) -> Dict[str, Any]:
 
 
 def add_dc_cli_flags(parser) -> None:
-    """``--dc`` / ``--dc-persist`` / ``--dc-mode`` / ``--dc-k`` for Hermes drivers."""
+    """``--dc`` / ``--dc-persist`` / ``--dc-mode`` / ``--dc-k`` / ``--dc-freeze``."""
     parser.add_argument(
         "--dc",
         action="store_true",
@@ -119,10 +128,32 @@ def add_dc_cli_flags(parser) -> None:
         metavar="K",
         help="Retrieved prior episodes for --dc-mode rs/curetr (default: 3).",
     )
+    parser.add_argument(
+        "--dc-sync-every",
+        type=int,
+        default=5,
+        metavar="N",
+        help=(
+            "Flush buffered turns into the cheatsheet every N sync_turn calls "
+            "(default: 5). Use 0 for one curation per episode/task; 1 for "
+            "legacy per-turn curator calls (expensive). Ignored with --dc-freeze."
+        ),
+    )
+    parser.add_argument(
+        "--dc-freeze",
+        action="store_true",
+        help=(
+            "Frozen DC eval: prefetch/inject only — no curator writes "
+            "(no episode appends). Sets HERMES_DC_READONLY=1. Use on held-out "
+            "splits with --dc-persist pointing at a train snapshot."
+        ),
+    )
 
 
 def apply_dc_argparse_policy(parser, args) -> None:
     """``--dc`` cannot share a run with ``--hot-pool`` or ``--amem``."""
+    if getattr(args, "dc_freeze", False) and not getattr(args, "dc", False):
+        parser.error("--dc-freeze requires --dc")
     if not getattr(args, "dc", False):
         return
     if getattr(args, "amem", False):

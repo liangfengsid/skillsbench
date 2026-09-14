@@ -47,7 +47,9 @@ Env vars (set by the drivers):
 - `HERMES_AMEM_K` — notes per prefetch (default 5)
 - `HERMES_AMEM_SYNC_EVERY` — flush every N buffered turns (default **5**);
   `0`/`episode` = one write per episode; `1` = legacy per-turn
+- `HERMES_AMEM_READONLY=1` — frozen eval (prefetch only; no writes). Drivers:
+  `--amem-freeze`
 - `HERMES_AMEM_LLM_MODEL` / `HERMES_AMEM_API_KEY` / `HERMES_AMEM_API_BASE`
 - `HERMES_AMEM_EMBED_MODEL` (default `all-MiniLM-L6-v2`)
 
-See [`benchmark/baselines/amem/README.md`](../../../benchmark/baselines/amem/README.md) for train → eval commands.
+See [`benchmark/baselines/amem/README.md`](../../../benchmark/baselines/amem/README.md) for train → freeze → eval commands.

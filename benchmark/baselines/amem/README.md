@@ -63,6 +63,11 @@ Use `--isolate-hermes-home` so skills are a copy of repo `skills/`, not `~/.herm
 `--amem-sync-every` (default **5**) controls write cadence: `N` = flush every N
 buffered turns, `0` = one note per episode, `1` = legacy per-turn.
 
+**Held-out eval must use `--amem-freeze`** (sets `HERMES_AMEM_READONLY=1`):
+prefetch/retrieve only — no note writes, no embed/evolve. Point
+`--amem-persist` at the train snapshot (or a copied store). Without freeze,
+eval continues growing the store and pays write latency.
+
 ## SkillsBench
 
 ```bash
@@ -76,7 +81,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 
 # Test — frozen notes from train
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --amem --amem-persist benchmark/runs/exp_amem_train/amem \
+  --amem --amem-freeze --amem-persist benchmark/runs/exp_amem_train/amem \
   --experiment-dir benchmark/runs/exp_amem_test \
   --isolate-hermes-home \
   --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part test \
@@ -99,9 +104,9 @@ python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split train \
   --experiment-dir benchmark/runs/alfworld_amem_train \
   --isolate-hermes-home --resume --print-summary
 
-# Unseen eval (reuse train notes)
+# Unseen eval (frozen train notes)
 python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen \
-  --model Qwen/Qwen3.6-27B --amem --tools --max-steps 50 \
+  --model Qwen/Qwen3.6-27B --amem --amem-freeze --tools --max-steps 50 \
   --amem-persist benchmark/runs/alfworld_amem_train/amem \
   --experiment-dir benchmark/runs/alfworld_amem_unseen \
   --isolate-hermes-home --resume --print-summary
@@ -122,7 +127,7 @@ python3 benchmark/scripts/run_appworld_with_hermes.py \
 
 # test_normal — frozen train store
 python3 benchmark/scripts/run_appworld_with_hermes.py \
-  --dataset test_normal --all --model Qwen/Qwen3.6-27B --amem \
+  --dataset test_normal --all --model Qwen/Qwen3.6-27B --amem --amem-freeze \
   --amem-persist benchmark/runs/appworld_amem_train/amem \
   --experiment-dir benchmark/runs/appworld_amem_test \
   --isolate-hermes-home --experiment-name hermes-amem-test \
@@ -132,4 +137,6 @@ python3 benchmark/scripts/run_appworld_with_hermes.py \
 
 ## JSONL
 
-Rows include `amem_enabled`, `amem_persist`, and optional `amem_telemetry` (`n_notes`, `n_syncs`, `last_prefetch`). Aggregate with the same SkillsBench aggregator (`evaluation.task_success`).
+Rows include `amem_enabled`, `amem_persist`, and optional `amem_telemetry`
+(`n_notes`, `n_syncs`, `readonly`, `last_prefetch`). Aggregate with the same
+SkillsBench aggregator (`evaluation.task_success`).

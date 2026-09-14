@@ -54,6 +54,7 @@ def _clean_amem_env(monkeypatch):
         "HERMES_AMEM_PATH",
         "HERMES_AMEM_K",
         "HERMES_AMEM_SYNC_EVERY",
+        "HERMES_AMEM_READONLY",
         "HERMES_MEMORY_PROVIDER",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -155,6 +156,25 @@ def test_sync_turn_skips_empty(fake_store):
     provider.sync_turn("  ", "")
     assert fake_store.n_notes == 0
     assert provider._pending == []
+
+
+def test_readonly_skips_writes_but_prefetch_works(fake_store, monkeypatch):
+    monkeypatch.setenv("HERMES_AMEM_ENABLED", "1")
+    monkeypatch.setenv("HERMES_AMEM_READONLY", "1")
+    provider = AMemMemoryProvider()
+    provider.initialize("sess-1")
+    assert provider._readonly is True
+    provider.sync_turn("user turn", "assistant turn")
+    assert provider._pending == []
+    assert fake_store.n_notes == 0
+    text = provider.prefetch("How do I get the apple from the fridge?")
+    assert "go to fridge" in text
+    tel = provider.export_telemetry()
+    assert tel["readonly"] is True
+    assert tel["n_syncs"] == 0
+    assert fake_store.n_notes == 0
+    provider.shutdown()
+    assert fake_store.persisted == 0
 
 
 def test_no_extra_tools():

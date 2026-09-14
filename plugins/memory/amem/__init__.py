@@ -15,6 +15,9 @@ Design for a fair comparison with hot-skill:
   (``HERMES_AMEM_SYNC_EVERY=5``), not one expensive ``add_note`` (embed + LLM
   evolve) per agent step. Use ``0`` for one note per episode, ``1`` for legacy
   per-turn writes.
+- **Frozen eval**: ``HERMES_AMEM_READONLY=1`` / ``--amem-freeze`` skips all
+  writes (prefetch/retrieve only) — fair train→test transfer matching a
+  frozen hot pool.
 """
 
 from __future__ import annotations
@@ -41,13 +44,27 @@ def _amem_enabled_env() -> bool:
     )
 
 
+def _readonly_from_env() -> bool:
+    """True when A-Mem must not write (held-out / frozen-store eval)."""
+    return os.getenv("HERMES_AMEM_READONLY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+        "freeze",
+        "frozen",
+        "readonly",
+        "read-only",
+    )
+
+
 def _sync_every_from_env(default: int = 5) -> int:
     """How often to flush buffered turns into A-Mem.
 
     ``N >= 1`` — flush every N buffered turns (default **5**: ~3 writes on a
     typical ~15-step AppWorld task). ``0`` / ``episode`` / ``end`` — once per
     episode (session end / shutdown / telemetry flush). ``1`` restores legacy
-    per-``sync_turn`` writes.
+    per-``sync_turn`` writes. Ignored when ``HERMES_AMEM_READONLY`` is set.
     """
     raw = (os.getenv("HERMES_AMEM_SYNC_EVERY") or "").strip().lower()
     if not raw:
@@ -77,6 +94,7 @@ class AMemMemoryProvider(MemoryProvider):
         self._n_turns_buffered = 0
         self._pending: List[Tuple[str, str]] = []
         self._sync_every = _sync_every_from_env(5)
+        self._readonly = _readonly_from_env()
 
     @property
     def name(self) -> str:
@@ -97,13 +115,18 @@ class AMemMemoryProvider(MemoryProvider):
 
         self._store = get_store()
         self._sync_every = _sync_every_from_env(5)
+        self._readonly = _readonly_from_env()
         self._pending.clear()
         logger.info(
-            "A-Mem store ready persist_dir=%s n_notes=%s session=%s sync_every=%s",
+            "A-Mem store ready persist_dir=%s n_notes=%s session=%s "
+            "sync_every=%s readonly=%s",
             self._store.persist_dir,
             self._store.n_notes,
             session_id,
-            self._sync_every if self._sync_every > 0 else "episode",
+            "frozen" if self._readonly else (
+                self._sync_every if self._sync_every > 0 else "episode"
+            ),
+            self._readonly,
         )
 
     def system_prompt_block(self) -> str:
@@ -152,8 +175,9 @@ class AMemMemoryProvider(MemoryProvider):
         Upstream ``add_note`` runs MiniLM embed + LLM evolution — calling it
         once per AppWorld/ALFWorld step dominates wall-clock. Default is to
         buffer until episode flush (see ``flush_pending`` / ``on_session_end``).
+        No-ops when ``HERMES_AMEM_READONLY`` / ``--amem-freeze`` is set.
         """
-        if self._store is None:
+        if self._store is None or self._readonly:
             return
         user = (user_content or "").strip()
         asst = (assistant_content or "").strip()
@@ -166,6 +190,9 @@ class AMemMemoryProvider(MemoryProvider):
 
     def flush_pending(self, *, reason: str = "manual") -> Optional[str]:
         """Write one A-Mem note for all buffered turns (if any)."""
+        if self._readonly:
+            self._pending.clear()
+            return None
         if self._store is None or not self._pending:
             return None
         parts: List[str] = []
@@ -208,17 +235,19 @@ class AMemMemoryProvider(MemoryProvider):
 
     def shutdown(self) -> None:
         self.flush_pending(reason="shutdown")
-        if self._store is not None:
-            try:
-                self._store.persist()
-            except Exception:
-                pass
+        if self._readonly or self._store is None:
+            return
+        try:
+            self._store.persist()
+        except Exception:
+            pass
 
     def export_telemetry(self) -> Dict[str, Any]:
         # Benchmark drivers often never call on_session_end/shutdown; flush
         # here so episode-mode notes are persisted when telemetry is sampled
-        # at task end.
-        self.flush_pending(reason="telemetry")
+        # at task end. Readonly eval skips the flush.
+        if not self._readonly:
+            self.flush_pending(reason="telemetry")
         n_notes = self._store.n_notes if self._store is not None else 0
         persist = str(self._store.persist_dir) if self._store is not None else ""
         return {
@@ -227,6 +256,7 @@ class AMemMemoryProvider(MemoryProvider):
             "n_turns_buffered": self._n_turns_buffered,
             "pending_turns": len(self._pending),
             "sync_every": self._sync_every,
+            "readonly": self._readonly,
             "persist_dir": persist,
             "last_prefetch": dict(self._last_prefetch),
         }
