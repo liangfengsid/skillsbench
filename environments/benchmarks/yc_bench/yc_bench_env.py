@@ -7,9 +7,9 @@ The agent manages cash flow, employees, tasks, and prestige across 4 domains,
 interacting exclusively via CLI subprocess calls against a SQLite-backed
 discrete-event simulation.
 
-Unlike TerminalBench2 (per-task binary pass/fail), YC-Bench measures sustained
-multi-turn strategic coherence -- whether an agent can manage compounding
-decisions over hundreds of turns without going bankrupt.
+YC-Bench measures sustained multi-turn strategic coherence -- whether an
+agent can manage compounding decisions over hundreds of turns without
+going bankrupt.
 
 This is an eval-only environment. Run via:
 
@@ -662,7 +662,7 @@ class YCBenchEvalEnv(HermesAgentBaseEnv):
         start_time = time.time()
         from tqdm import tqdm
 
-        # --- tqdm-compatible logging handler (TB2 pattern) ---
+        # --- tqdm-compatible logging handler ---
         class _TqdmHandler(logging.Handler):
             def emit(self, record):
                 try:
@@ -813,7 +813,7 @@ class YCBenchEvalEnv(HermesAgentBaseEnv):
         except Exception as e:
             print(f"Error logging results: {e}")
 
-        # --- Cleanup (TB2 pattern) ---
+        # --- Cleanup ---
         if hasattr(self, "_streaming_file") and not self._streaming_file.closed:
             self._streaming_file.close()
             print(f"Results saved to: {self._streaming_path}")

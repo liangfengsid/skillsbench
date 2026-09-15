@@ -266,7 +266,7 @@ class HermesAgentBaseEnv(BaseEnv):
 
         # Resize the agent loop's thread pool for tool execution.
         # This must be large enough for the number of concurrent tasks
-        # (e.g., 89 parallel TB2 eval tasks each need a thread for tool calls).
+        # (e.g., many parallel eval tasks each need a thread for tool calls).
         from environments.agent_loop import resize_tool_pool
         resize_tool_pool(config.tool_pool_size)
 

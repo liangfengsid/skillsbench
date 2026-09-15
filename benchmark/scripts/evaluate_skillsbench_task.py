@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Host-side Harbor-style verifier for Hermes SkillsBench batch runs.
+Host-side container-path verifier for Hermes SkillsBench batch runs.
 
 Maps container paths (``/root/...``, ``/app/...``, ``/tests/...``, ``/logs/...``)
 to a staged task tree and returns macro (task) + micro (test-case) metrics.
@@ -10,8 +10,7 @@ Evaluation order:
   2. any other ``tests/test_*.py`` via pytest
   3. adapted ``tests/test.sh`` when no pytest files exist
 
-This is a **host approximation** for repeatable JSONL logging. Terminal-Bench
-uses Harbor (``run_terminalbench_with_harbor.py``), not this module.
+This is a **host approximation** for repeatable JSONL logging.
 Set ``eval_mode: host`` on envelopes.
 """
 

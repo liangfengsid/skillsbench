@@ -2,7 +2,7 @@
 
 [YC-Bench](https://github.com/collinear-ai/yc-bench) by [Collinear AI](https://collinear.ai/) is a deterministic, long-horizon benchmark that tests LLM agents' ability to act as a tech startup CEO. The agent manages a simulated company over 1-3 years, making compounding decisions about resource allocation, cash flow, task management, and prestige specialisation across 4 skill domains.
 
-Unlike TerminalBench2 (which evaluates per-task coding ability with binary pass/fail), YC-Bench measures **long-term strategic coherence** — whether an agent can maintain consistent strategy, manage compounding consequences, and adapt plans over hundreds of turns.
+YC-Bench measures **long-term strategic coherence** — whether an agent can maintain consistent strategy, manage compounding consequences, and adapt plans over hundreds of turns.
 
 ## Setup
 
@@ -112,4 +112,3 @@ Full default eval (9 runs): ~3-6 hours, $50-200 depending on model.
 
 - [collinear-ai/yc-bench](https://github.com/collinear-ai/yc-bench) — Official repository
 - [Collinear AI](https://collinear.ai/) — Company behind yc-bench
-- [TerminalBench2](../terminalbench_2/) — Per-task coding benchmark (complementary)

@@ -12,7 +12,7 @@
   one note per episode/task; `1` for legacy per-turn writes (expensive: MiniLM
   embed + LLM evolution each step).
 
-CoEvoSkills remains a *skill factory* baseline (different research question). A-Mem is the right row for “does structured episode memory match hot key-points?”
+A-Mem is the right row for “does structured episode memory match hot key-points?”
 
 Plugin: [`plugins/memory/amem/`](../../../plugins/memory/amem/).
 

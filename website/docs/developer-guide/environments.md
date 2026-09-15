@@ -52,14 +52,6 @@ classDiagram
       SWE training
     }
 
-    class TerminalBench2EvalEnv {
-      Benchmark evaluation
-    }
-
-    class TBLiteEvalEnv {
-      Fast benchmark
-    }
-
     class YCBenchEvalEnv {
       Long-horizon benchmark
     }
@@ -67,9 +59,7 @@ classDiagram
     BaseEnv <|-- HermesAgentBaseEnv
     HermesAgentBaseEnv <|-- TerminalTestEnv
     HermesAgentBaseEnv <|-- HermesSweEnv
-    HermesAgentBaseEnv <|-- TerminalBench2EvalEnv
-    TerminalBench2EvalEnv <|-- TBLiteEvalEnv
-    TerminalBench2EvalEnv <|-- YCBenchEvalEnv
+    HermesAgentBaseEnv <|-- YCBenchEvalEnv
 ```
 
 ### BaseEnv (Atropos)
@@ -178,53 +168,6 @@ In Phase 1 (OpenAI server type), parsers are not needed — the server handles t
 
 ## Available Benchmarks
 
-### TerminalBench2
-
-**89 challenging terminal tasks** with per-task Docker sandbox environments.
-
-| | |
-|---|---|
-| **What it tests** | Single-task coding/sysadmin ability |
-| **Scoring** | Binary pass/fail (test suite verification) |
-| **Sandbox** | Modal cloud sandboxes (per-task Docker images) |
-| **Tools** | `terminal` + `file` |
-| **Tasks** | 89 tasks across multiple categories |
-| **Cost** | ~$50–200 for full eval (parallel execution) |
-| **Time** | ~2–4 hours |
-
-```bash
-python environments/benchmarks/terminalbench_2/terminalbench2_env.py evaluate \
-    --config environments/benchmarks/terminalbench_2/default.yaml
-
-# Run specific tasks
-python environments/benchmarks/terminalbench_2/terminalbench2_env.py evaluate \
-    --config environments/benchmarks/terminalbench_2/default.yaml \
-    --env.task_filter fix-git,git-multibranch
-```
-
-Dataset: [NousResearch/terminal-bench-2](https://huggingface.co/datasets/NousResearch/terminal-bench-2) on HuggingFace.
-
-### TBLite (OpenThoughts Terminal Bench Lite)
-
-**100 difficulty-calibrated tasks** — a faster proxy for TerminalBench2.
-
-| | |
-|---|---|
-| **What it tests** | Same as TB2 (coding/sysadmin), calibrated difficulty tiers |
-| **Scoring** | Binary pass/fail |
-| **Sandbox** | Modal cloud sandboxes |
-| **Tools** | `terminal` + `file` |
-| **Tasks** | 100 tasks: Easy (40), Medium (26), Hard (26), Extreme (8) |
-| **Correlation** | r=0.911 with full TB2 |
-| **Speed** | 2.6–8× faster than TB2 |
-
-```bash
-python environments/benchmarks/tblite/tblite_env.py evaluate \
-    --config environments/benchmarks/tblite/default.yaml
-```
-
-TBLite is a thin subclass of TerminalBench2 — only the dataset and timeouts differ. Created by the OpenThoughts Agent team (Snorkel AI + Bespoke Labs). Dataset: [NousResearch/openthoughts-tblite](https://huggingface.co/datasets/NousResearch/openthoughts-tblite).
-
 ### YC-Bench
 
 **Long-horizon strategic benchmark** — the agent plays CEO of an AI startup.
@@ -256,7 +199,7 @@ python environments/benchmarks/yc_bench/yc_bench_env.py evaluate \
     --env.presets '["fast_test"]' --env.seeds '[1]'
 ```
 
-YC-Bench uses [collinear-ai/yc-bench](https://github.com/collinear-ai/yc-bench) — a deterministic simulation with 4 skill domains (research, inference, data_environment, training), prestige system, employee management, and financial pressure. Unlike TB2's per-task binary scoring, YC-Bench measures whether an agent can maintain coherent strategy over hundreds of compounding decisions.
+YC-Bench uses [collinear-ai/yc-bench](https://github.com/collinear-ai/yc-bench) — a deterministic simulation with 4 skill domains (research, inference, data_environment, training), prestige system, employee management, and financial pressure. It measures whether an agent can maintain coherent strategy over hundreds of compounding decisions.
 
 ## Training Environments
 
@@ -293,8 +236,8 @@ Every environment is a standalone Python script with three CLI subcommands:
 For eval-only environments (benchmarks). Runs all items, computes metrics, logs to wandb.
 
 ```bash
-python environments/benchmarks/tblite/tblite_env.py evaluate \
-    --config environments/benchmarks/tblite/default.yaml \
+python environments/benchmarks/yc_bench/yc_bench_env.py evaluate \
+    --config environments/benchmarks/yc_bench/default.yaml \
     --openai.model_name anthropic/claude-sonnet-4.6
 ```
 
@@ -401,7 +344,7 @@ if __name__ == "__main__":
 
 ### Eval-Only Benchmark
 
-For benchmarks, follow the pattern used by TerminalBench2, TBLite, and YC-Bench:
+For benchmarks, follow the pattern used by YC-Bench:
 
 1. **Create under** `environments/benchmarks/your-benchmark/`
 2. **Set eval-only config**: `eval_handling=STOP_TRAIN`, `steps_per_eval=1`, `total_steps=1`
@@ -475,7 +418,7 @@ python my_env.py evaluate \
 - `atroposlib`: `pip install git+https://github.com/NousResearch/atropos.git`
 - An LLM API key (OpenRouter, OpenAI, or self-hosted VLLM/SGLang)
 
-### For Modal-sandboxed benchmarks (TB2, TBLite)
+### For Modal-sandboxed environments (e.g. HermesSweEnv)
 
 - [Modal](https://modal.com) account and CLI: `pip install "hermes-agent[modal]"`
 - `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` environment variables
@@ -514,7 +457,5 @@ environments/
 ├── hermes_swe_env/             # SWE-bench training environment
 │
 └── benchmarks/                 # Evaluation benchmarks
-    ├── terminalbench_2/        # 89 terminal tasks, Modal sandboxes
-    ├── tblite/                 # 100 calibrated tasks (fast TB2 proxy)
     └── yc_bench/               # Long-horizon strategic benchmark
 ```

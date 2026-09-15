@@ -15,7 +15,7 @@ Concrete environments:
     - hermes_swe_env/: SWE-bench style tasks with Modal sandboxes
 
 Benchmarks (eval-only):
-    - benchmarks/terminalbench_2/: Terminal-Bench 2.0 evaluation
+    - benchmarks/yc_bench/: Long-horizon strategic benchmark
 """
 
 try:

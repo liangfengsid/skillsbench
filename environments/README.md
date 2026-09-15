@@ -26,8 +26,8 @@ This directory contains the integration layer between **hermes-agent's** tool-ca
                                 │ inherits
               ┌─────────────────┼─────────────────┐
               │                 │                  │
-     TerminalTestEnv     HermesSweEnv    TerminalBench2EvalEnv
-     (stack testing)     (SWE training)   (TB2 benchmark eval)
+     TerminalTestEnv     HermesSweEnv    YCBenchEvalEnv
+     (stack testing)     (SWE training)  (YC-Bench eval)
 ```
 
 ### Inheritance Chain
@@ -185,10 +185,6 @@ environments/
 │   └── hermes_swe_env.py
 │
 └── benchmarks/                   # Evaluation benchmarks
-    ├── terminalbench_2/          # 89 terminal tasks, Modal sandboxes
-    │   └── terminalbench2_env.py
-    ├── tblite/                   # 100 calibrated tasks (fast TB2 proxy)
-    │   └── tblite_env.py
     └── yc_bench/                 # Long-horizon strategic benchmark
         └── yc_bench_env.py
 ```
@@ -220,31 +216,10 @@ python environments/hermes_swe_env/hermes_swe_env.py serve \
     --env.terminal_backend modal
 ```
 
-### TerminalBench2EvalEnv (`benchmarks/terminalbench_2/`)
+### YCBenchEvalEnv (`benchmarks/yc_bench/`)
 
-**Eval-only** environment for the Terminal-Bench 2.0 benchmark (89 tasks). Each task gets a pre-built Docker Hub image, a natural language instruction, and a test suite. The agent uses terminal + file tools to solve the task, then the test suite verifies correctness.
-
-Follows the standard Atropos eval pattern (like GPQA, MMLU, etc.):
-- Run via `evaluate` subcommand (no `run-api` needed)
-- `setup()` loads the dataset, `evaluate()` runs all tasks
-- `rollout_and_score_eval()` handles per-task agent loop + test verification
-- Downloads verifier output locally for reliable reward checking (Harbor pattern)
-
-```bash
-# Run full benchmark
-python environments/benchmarks/terminalbench_2/terminalbench2_env.py evaluate \
-    --openai.model_name anthropic/claude-opus-4.6
-
-# Run subset of tasks
-python environments/benchmarks/terminalbench_2/terminalbench2_env.py evaluate \
-    --openai.model_name anthropic/claude-opus-4.6 \
-    --env.task_filter fix-git,git-multibranch
-
-# Skip specific tasks
-python environments/benchmarks/terminalbench_2/terminalbench2_env.py evaluate \
-    --openai.model_name anthropic/claude-opus-4.6 \
-    --env.skip_tasks heavy-task,slow-task
-```
+**Eval-only** long-horizon strategic benchmark (YC-Bench). See
+[`benchmarks/yc_bench/README.md`](benchmarks/yc_bench/README.md) for setup and run commands.
 
 ## Creating a New Environment
 
@@ -301,7 +276,7 @@ if __name__ == "__main__":
 
 ### Eval-Only Environment (Benchmark)
 
-For eval benchmarks, follow the pattern in `terminalbench2_env.py`:
+For eval benchmarks, follow the pattern in `yc_bench_env.py`:
 1. Create under `environments/benchmarks/your-benchmark/`
 2. Inherit from `HermesAgentBaseEnv`
 3. Set eval-only config: `eval_handling=STOP_TRAIN`, `steps_per_eval=1`, `total_steps=1`

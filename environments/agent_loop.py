@@ -27,8 +27,8 @@ from tools.tool_result_storage import maybe_persist_tool_result, enforce_turn_bu
 # Thread pool for running sync tool calls that internally use asyncio.run()
 # (e.g., the Modal/Docker/Daytona terminal backends). Running them in a separate
 # thread gives them a clean event loop so they don't deadlock inside Atropos's loop.
-# Size must be large enough for concurrent eval tasks (e.g., 89 TB2 tasks all
-# making tool calls). Too small = thread pool starvation, tasks queue for minutes.
+# Size must be large enough for concurrent eval tasks (many parallel tasks
+# all making tool calls). Too small = thread pool starvation, tasks queue for minutes.
 # Resized at runtime by HermesAgentBaseEnv.__init__ via resize_tool_pool().
 _tool_executor = concurrent.futures.ThreadPoolExecutor(max_workers=128)
 

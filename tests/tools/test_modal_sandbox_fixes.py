@@ -1,6 +1,6 @@
-"""Tests for Modal sandbox infrastructure fixes (TBLite baseline).
+"""Tests for Modal sandbox infrastructure fixes.
 
-Covers the bugs discovered while setting up TBLite evaluation:
+Covers bugs found while hardening Modal-backed terminal sandboxes:
 1. Tool resolution — terminal + file tools load correctly
 2. CWD fix — host paths get replaced with /root for container backends
 3. ephemeral_disk version check

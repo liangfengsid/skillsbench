@@ -28,18 +28,3 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 ```
 
 `--split-part` is one of `train`, `test`, or `all`.
-
-## Use with CoEvoSkills baseline
-
-```bash
-# Evolve on train, then frozen eval on test — see baselines/coevoskills/README.md
-python -m benchmark.baselines.coevoskills.run_split_protocol \
-  --evolve --split-part train \
-  --split-file benchmark/skillsbench_splits/stratified_v1.json
-
-python -m benchmark.baselines.coevoskills.run_split_protocol \
-  --build-library --library-source-part train \
-  --frozen-eval --split-part test \
-  --pass-k 1,5,10,70 --max-iterations 90 \
-  --log-jsonl benchmark/runs/coevo_frozen_test.jsonl
-```
