@@ -1,0 +1,138 @@
+{
+  "schema": "skillsbench.metrics_summary.v1",
+  "tasks": 134,
+  "records": 134,
+  "errors": 0,
+  "filters": {
+    "split_part": null,
+    "method": null,
+    "phase": null,
+    "max_user_iterations": 50
+  },
+  "pass_k": {
+    "1": {
+      "k": 1,
+      "cumulative": true,
+      "macro_success_rate": null,
+      "macro_task_pass_rate": null,
+      "tasks_with_turn_data": 0,
+      "tasks_passed_at_turn": 0,
+      "micro_success_rate": null,
+      "micro_test_pass_rate": null,
+      "tests_passed_sum": 0,
+      "tests_total_sum": 0,
+      "reward_mean": null,
+      "tokens": {
+        "n": 0,
+        "mean": null,
+        "std": null,
+        "min": null,
+        "max": null
+      },
+      "tokens_mean_at_turn": null,
+      "tokens_median_at_turn": null,
+      "user_iterations": {
+        "n": 0,
+        "mean": null,
+        "std": null,
+        "min": null,
+        "max": null
+      },
+      "api_calls_mean_at_turn": null,
+      "estimated_cost_usd": {
+        "n": 0,
+        "mean": null,
+        "std": null,
+        "min": null,
+        "max": null
+      },
+      "estimated_cost_usd_mean_at_turn": null
+    }
+  },
+  "final": {
+    "label": "max_user_iterations",
+    "max_user_iterations": 50,
+    "macro_success_rate": 0.9776119402985075,
+    "macro_task_pass_rate": 0.9776119402985075,
+    "tasks_with_evaluation": 134,
+    "tasks_passed": 131,
+    "micro_success_rate": null,
+    "micro_test_pass_rate": null,
+    "tests_passed_sum": 0,
+    "tests_total_sum": 0,
+    "reward_mean": 0.9776119402985075,
+    "completion_rate": 1.0,
+    "interrupted_tasks": 0,
+    "tokens": {
+      "n": 134,
+      "mean": 3872670.5895522386,
+      "std": 5489404.944951576,
+      "min": 153370.0,
+      "max": 25607601.0
+    },
+    "tokens_mean": 3872670.5895522386,
+    "tokens_median": 1243646.5,
+    "user_iterations": {
+      "n": 134,
+      "mean": 16.65671641791045,
+      "std": 11.762118676223388,
+      "min": 4.0,
+      "max": 51.0
+    },
+    "api_calls_mean": 16.65671641791045,
+    "estimated_cost_usd": {
+      "n": 134,
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "estimated_cost_usd_mean": 0.0,
+    "estimated_cost_usd_sum": 0.0,
+    "duration_sec": {
+      "n": 134,
+      "mean": 490.31248592537315,
+      "std": 640.7210167214363,
+      "min": 45.053186,
+      "max": 4099.025183
+    },
+    "duration_sec_mean": 490.31248592537315,
+    "duration_sec_sum": 65701.873114,
+    "duration_sec_std": 640.7210167214363
+  },
+  "cost_to_succeed": {
+    "n_succeeded": 131,
+    "sources": {
+      "final": 131
+    },
+    "tokens": {
+      "n": 131,
+      "mean": 3389625.106870229,
+      "std": 4507230.999166857,
+      "min": 153370.0,
+      "max": 25114068.0
+    },
+    "user_iterations": {
+      "n": 131,
+      "mean": 15.877862595419847,
+      "std": 10.68789603009898,
+      "min": 4.0,
+      "max": 50.0
+    },
+    "estimated_cost_usd": {
+      "n": 131,
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "duration_sec": {
+      "n": 131,
+      "mean": 427.49940013740456,
+      "std": 480.18697310701526,
+      "min": 45.053186,
+      "max": 3515.10644
+    },
+    "note": "Mean±std among tasks that succeed, measured at first successful pass@k checkpoint when available, else at final usage. duration_sec is wall-clock for the full task run among successes."
+  }
+}

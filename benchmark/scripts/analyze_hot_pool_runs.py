@@ -329,6 +329,15 @@ def main() -> int:
         help="Turns for shared macro/micro success@k (skillsbench_aggregate_core).",
     )
     parser.add_argument(
+        "--pass-k-checkpoints-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Score pass@k / AUC from pass_at_turn snapshots only (default: on). "
+            "Use --no-pass-k-checkpoints-only to also credit in-budget finals."
+        ),
+    )
+    parser.add_argument(
         "--max-user-iterations",
         type=int,
         default=None,
@@ -373,6 +382,7 @@ def main() -> int:
             pass_k_values=pass_k_values,
             split_part=args.split_part,
             max_user_iterations=args.max_user_iterations,
+            include_final_in_pass_k=not bool(args.pass_k_checkpoints_only),
         )
 
     if len(paths) == 1:

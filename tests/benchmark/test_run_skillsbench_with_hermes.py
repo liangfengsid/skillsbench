@@ -214,3 +214,102 @@ def test_apply_hot_pool_cli_overrides_enable_with_persist(monkeypatch):
     assert os.environ.get("HERMES_HOT_POOL_ENABLED") == "1"
     assert os.environ.get("HERMES_HOT_POOL_PERSIST") == "1"
     assert os.environ["HERMES_HOT_POOL_PATH"].endswith("skillsbench_hot_pool.json")
+
+
+def test_build_batch_metrics_summary_matches_aggregator(tmp_path):
+    """Batch summary uses full JSONL + same kwargs as aggregate_skillsbench_runs."""
+    import json
+
+    mod = _load_module()
+    from aggregate_skillsbench_runs import aggregate_records, format_summary_text
+
+    older = {
+        "schema": "skillsbench.hermes_run.v1",
+        "skillsbench_task_id": "task-a",
+        "split_part": "test",
+        "ts_end_iso": "2026-01-01T00:00:00Z",
+        "pass_at_turn": {
+            "1": {
+                "turn": 1,
+                "evaluation": {
+                    "task_success": True,
+                    "tests_passed": 2,
+                    "tests_total": 2,
+                },
+                "total_tokens": 10,
+                "api_calls": 1,
+            }
+        },
+        "evaluation": {
+            "task_success": True,
+            "tests_passed": 2,
+            "tests_total": 2,
+        },
+        "run_conversation_result": {"api_calls": 5, "total_tokens": 100},
+        "duration_sec": 12.0,
+    }
+    newer = {
+        "schema": "skillsbench.hermes_run.v1",
+        "skillsbench_task_id": "task-b",
+        "split_part": "test",
+        "ts_end_iso": "2026-01-01T01:00:00Z",
+        "pass_at_turn": {
+            "1": {
+                "turn": 1,
+                "evaluation": {
+                    "task_success": False,
+                    "tests_passed": 0,
+                    "tests_total": 2,
+                },
+                "total_tokens": 20,
+                "api_calls": 1,
+            }
+        },
+        "evaluation": {
+            "task_success": True,
+            "tests_passed": 2,
+            "tests_total": 2,
+        },
+        "run_conversation_result": {"api_calls": 8, "total_tokens": 200},
+        "duration_sec": 30.0,
+    }
+    jsonl = tmp_path / "runs.jsonl"
+    jsonl.write_text(
+        "\n".join(json.dumps(r) for r in (older, newer)) + "\n",
+        encoding="utf-8",
+    )
+
+    # This-run envelopes omit the resume-skipped task-a; full log must still count it.
+    summary = mod.build_batch_metrics_summary(
+        batch_envelopes=[newer],
+        log_path=jsonl,
+        pass_k_values=[1, 60],
+        split_part="test",
+        max_user_iterations=60,
+        include_final_in_pass_k=False,
+        auc_max_k=60,
+    )
+    assert summary is not None
+    assert summary["tasks"] == 2
+    assert summary["pass_k"]["1"]["tasks_passed_at_turn"] == 1
+    assert summary["final"]["tasks_passed"] == 2
+    assert summary["filters"]["include_final_in_pass_k"] is False
+    assert summary["filters"]["auc_max_k"] == 60
+    assert summary["auc"]["k_max"] == 60
+
+    expected = aggregate_records(
+        [older, newer],
+        pass_k_values=[1, 60],
+        split_part="test",
+        max_user_iterations=60,
+        include_final_in_pass_k=False,
+        auc_max_k=60,
+    )
+    text = format_summary_text({k: v for k, v in summary.items() if k != "_summary_source"})
+    assert text == format_summary_text(expected)
+    assert "pass@1_macro=" in text
+    assert "auc_macro@1-60=" in text
+    i1 = text.index("pass@1_macro=")
+    iauc = text.index("auc_macro@1-60=")
+    ifinal = text.index("final_macro=")
+    assert i1 < iauc < ifinal

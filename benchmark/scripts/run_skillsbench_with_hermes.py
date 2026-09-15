@@ -60,9 +60,10 @@ Examples (from Hermes repo root):
       --pass-k 1,5,10,70 \\
       --log-jsonl benchmark/hermes_skillsbench_runs.jsonl --print-summary
 
-  # Aggregate pass@k across tasks from JSONL (macro/micro rates at each turn):
+  # Aggregate pass@k across tasks from JSONL (same metrics as --print-batch-summary):
   python3 benchmark/scripts/aggregate_skillsbench_runs.py \\
-      benchmark/runs/batch.jsonl --pass-k 1,5,10,70 --print-summary
+      benchmark/runs/batch.jsonl --pass-k 1,5,10,60 --auc-max-k 60 \\
+      --max-user-iterations 60 --print-summary
 
   # Re-score task outputs without re-running the agent:
   python3 benchmark/scripts/run_skillsbench_with_hermes.py \\
@@ -113,6 +114,7 @@ from dc_baseline import (  # noqa: E402
     resolve_dc_persist,
 )
 from hermes_hot_pool_outcome import apply_benchmark_hot_pool_outcome_feedback  # noqa: E402
+from read_skillsbench_jsonl import load_skillsbench_run_records  # noqa: E402
 from skillsbench_metrics import build_envelope_metrics  # noqa: E402
 
 
@@ -858,6 +860,65 @@ def format_run_summary(envelope: Dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+def build_batch_metrics_summary(
+    *,
+    batch_envelopes: List[Dict[str, Any]],
+    log_path: Optional[Path],
+    pass_k_values: List[int],
+    split_part: Optional[str],
+    max_user_iterations: Optional[int],
+    include_final_in_pass_k: bool,
+    auc_max_k: int,
+) -> Optional[Dict[str, Any]]:
+    """Aggregate batch metrics the same way as ``aggregate_skillsbench_runs.py``.
+
+    Prefer the full ``--log-jsonl`` (so ``--resume`` summaries cover the whole
+    suite). Fall back to envelopes collected this process when no log exists.
+    """
+    records: List[Dict[str, Any]] = list(batch_envelopes)
+    source = "this_run"
+    if log_path is not None and log_path.is_file():
+        try:
+            records = load_skillsbench_run_records(log_path)
+            source = str(log_path)
+        except Exception as exc:
+            print(
+                f"[hermes] warning: failed to load {log_path} for batch summary "
+                f"({exc}); falling back to this-run envelopes",
+                file=sys.stderr,
+                flush=True,
+            )
+    if not records:
+        return None
+    summary = aggregate_records(
+        records,
+        pass_k_values=pass_k_values or [1],
+        split_part=split_part,
+        max_user_iterations=max_user_iterations,
+        include_final_in_pass_k=include_final_in_pass_k,
+        auc_max_k=int(auc_max_k),
+    )
+    summary["_summary_source"] = source
+    return summary
+
+
+def print_batch_metrics_summary(
+    summary: Dict[str, Any],
+    *,
+    label: str,
+    n_this_run: int,
+    n_skipped: int,
+) -> None:
+    """Print the shared aggregator one-liner (pass@k → AUC → final → cost)."""
+    source = summary.pop("_summary_source", "this_run")
+    print(
+        f"\n=== {label} batch summary "
+        f"(this_run={n_this_run}; skipped_resume={n_skipped}; source={source}) ===",
+        flush=True,
+    )
+    print(format_summary_text(summary), flush=True)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run Hermes AIAgent on SkillsBench tasks (host pytest eval).",
@@ -1108,8 +1169,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "After --all, print aggregate pass@k / token / cost metrics across tasks "
-            "(default: on when --all)."
+            "After --all, print aggregate pass@k / AUC / final / cost metrics "
+            "(same schema as aggregate_skillsbench_runs.py; default: on when --all). "
+            "With --log-jsonl, scores the full log (including --resume skips)."
+        ),
+    )
+    parser.add_argument(
+        "--pass-k-checkpoints-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "For batch summary: score pass@k / AUC from pass_at_turn snapshots only "
+            "(default: on; same as aggregate_skillsbench_runs.py). "
+            "Do not credit post-conversation host eval when user_iterations ≤ k. "
+            "Use --no-pass-k-checkpoints-only to also credit in-budget finals."
+        ),
+    )
+    parser.add_argument(
+        "--auc-max-k",
+        type=int,
+        default=60,
+        metavar="K",
+        help=(
+            "For batch summary: normalized AUC of macro/micro pass@k over "
+            "continuous k=1..K (default 60; same as aggregate_skillsbench_runs.py). "
+            "Set 0 to disable."
+        ),
+    )
+    parser.add_argument(
+        "--summary-output",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write the batch metrics JSON summary (skillsbench.metrics_summary.v1) "
+            "to PATH — same payload as aggregate_skillsbench_runs.py -o."
         ),
     )
     parser.add_argument(
@@ -1630,19 +1724,36 @@ def main(argv: Optional[List[str]] = None) -> int:
             ),
         )
 
-    if print_batch_summary and len(batch_envelopes) > 1:
-        pass_k_for_agg = pass_k_turns or [1]
-        summary = aggregate_records(
-            batch_envelopes,
-            pass_k_values=pass_k_for_agg,
+    if print_batch_summary or args.summary_output:
+        summary = build_batch_metrics_summary(
+            batch_envelopes=batch_envelopes,
+            log_path=log_path,
+            pass_k_values=pass_k_turns or [1],
             split_part=args.split_part if split_file_path else None,
+            max_user_iterations=int(args.max_iterations)
+            if args.max_iterations is not None
+            else None,
+            include_final_in_pass_k=not bool(args.pass_k_checkpoints_only),
+            auc_max_k=int(args.auc_max_k),
         )
-        print(
-            f"\n=== {preset['label']} batch summary ({len(batch_envelopes)} tasks this run; "
-            f"{len(skipped)} skipped via --resume) ===",
-            flush=True,
-        )
-        print(format_summary_text(summary), flush=True)
+        if summary is not None:
+            if args.summary_output:
+                out = Path(args.summary_output).expanduser()
+                out.parent.mkdir(parents=True, exist_ok=True)
+                # Do not persist the internal source hint.
+                payload = {k: v for k, v in summary.items() if k != "_summary_source"}
+                out.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                print(f"[hermes] wrote batch summary → {out}", flush=True)
+            if print_batch_summary:
+                print_batch_metrics_summary(
+                    summary,
+                    label=preset["label"],
+                    n_this_run=len(batch_envelopes),
+                    n_skipped=len(skipped),
+                )
 
     if console_win is not None:
         console_win.close()

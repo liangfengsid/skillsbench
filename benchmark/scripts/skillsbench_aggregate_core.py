@@ -8,11 +8,12 @@ share one aggregator.
 Headline metrics
 ----------------
 - **macro success rate@k** — fraction of **all** tasks that succeeded at *any*
-  ``pass_at_turn`` checkpoint with turn ≤ *k*, **or** (by default) at final
-  evaluation when ``user_iterations ≤ k``. With
-  ``include_final_in_pass_k=False`` / ``--pass-k-checkpoints-only``, only
+  ``pass_at_turn`` checkpoint with turn ≤ *k*. By default
+  (``include_final_in_pass_k=False`` / ``--pass-k-checkpoints-only``), only
   ``pass_at_turn`` keys count — post-conversation host eval and verification
-  retries do not. Tasks with no in-budget observation (still running past
+  retries do not. Pass ``include_final_in_pass_k=True`` /
+  ``--no-pass-k-checkpoints-only`` to also credit final evaluation when
+  ``user_iterations ≤ k``. Tasks with no in-budget observation (still running past
   *k*, or missing checkpoints) count as **not** succeeded — denominator is
   the suite size, not only early finishers. This is cumulative within a
   single trajectory budget, so rates are monotonic in *k*.
@@ -23,7 +24,8 @@ Headline metrics
 - **micro success rate@k** — fraction of pytest cases passed within budget *k*
   out of **all** known test cases in the suite. For each task, if there is an
   in-budget observation, use that terminal score (final when
-  ``user_iterations ≤ k``, else latest ``pass_at_turn`` ≤ *k*). If there is
+  ``include_final_in_pass_k`` and ``user_iterations ≤ k``, else latest
+  ``pass_at_turn`` ≤ *k*). If there is
   no in-budget observation, contribute ``0 / final_tests_total`` (still
   running past *k*, or missing checkpoints). Macro stays cumulative over the
   full task suite; micro does not take the best mid-run pytest score.
@@ -550,7 +552,7 @@ def aggregate_skillsbench_metrics(
     method: Optional[str] = None,
     phase: Optional[str] = None,
     max_user_iterations: Optional[int] = None,
-    include_final_in_pass_k: bool = True,
+    include_final_in_pass_k: bool = False,
     auc_max_k: int = 60,
 ) -> Dict[str, Any]:
     """

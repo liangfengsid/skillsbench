@@ -68,16 +68,16 @@ All drivers should log JSONL with `evaluation`, optional `pass_at_turn`, and
 
 ```bash
 python benchmark/scripts/aggregate_skillsbench_runs.py RUN.jsonl \
-  --pass-k 1,5,10,70 --pass-k-checkpoints-only --max-user-iterations 90 \
+  --pass-k 1,5,10,70 --max-user-iterations 90 \
   -o RUN_summary.json --print-summary
 ```
 
 Reports **macro/micro success@k** from `pass_at_turn` snapshots only
-(`--pass-k-checkpoints-only`), **final** rates within max iterations, and
-**cost-to-succeed** mean±std among tasks that first succeed within
-`--max-user-iterations` (or `max(--pass-k)` when that flag is omitted
-under checkpoints-only). Omit `--pass-k-checkpoints-only` to also credit
-post-conversation host eval when `api_calls ≤ k` (including verification
+(**default**; opt out with `--no-pass-k-checkpoints-only`), **final** rates
+within max iterations, and **cost-to-succeed** mean±std among tasks that first
+succeed within `--max-user-iterations` (or `max(--pass-k)` when that flag is
+omitted under checkpoints-only). Use `--no-pass-k-checkpoints-only` to also
+credit post-conversation host eval when `api_calls ≤ k` (including verification
 retries). See
 [`scripts/skillsbench_aggregate_core.py`](scripts/skillsbench_aggregate_core.py).
 
@@ -235,7 +235,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 # Aggregate the same JSONL later (or combine multiple run files)
 python3 benchmark/scripts/aggregate_skillsbench_runs.py \
   benchmark/runs/stratified_train.jsonl \
-  --pass-k 1,5,10,70 --pass-k-checkpoints-only \
+  --pass-k 1,5,10,70 \
   --split-part train \
   --print-summary \
   -o benchmark/runs/stratified_train_summary.json
@@ -293,10 +293,10 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --model Qwen/Qwen3.6-27B \
   --log-jsonl benchmark/runs/stratified_test.jsonl
 
-# Aggregate across tasks: macro/micro from pass_at_turn checkpoints only
+# Aggregate across tasks: macro/micro from pass_at_turn checkpoints only (default)
 python3 benchmark/scripts/aggregate_skillsbench_runs.py \
   benchmark/runs/stratified_test.jsonl \
-  --pass-k 1,5,10,70 --pass-k-checkpoints-only \
+  --pass-k 1,5,10,70 \
   --print-summary \
   -o benchmark/runs/stratified_test_summary.json
 
@@ -313,7 +313,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py \
 
 **Aggregate output** (`aggregate_skillsbench_runs.py`):
 
-- `pass_k.<turn>.macro_task_pass_rate` — fraction of tasks with a successful `pass_at_turn` checkpoint ≤ *k* (examples use `--pass-k-checkpoints-only`; without it, in-budget final eval also counts)
+- `pass_k.<turn>.macro_task_pass_rate` — fraction of tasks with a successful `pass_at_turn` checkpoint ≤ *k* (default checkpoints-only; use `--no-pass-k-checkpoints-only` to also credit in-budget final eval)
 - `pass_k.<turn>.micro_test_pass_rate` — Σ passed test cases / Σ total at the terminal in-budget observation
 - `pass_k.<turn>.tokens_mean_at_turn` / `input_tokens_mean_at_turn` / `api_calls_mean_at_turn`
 - `pass_k.<turn>.estimated_cost_usd_mean_at_turn` / `reward_mean`

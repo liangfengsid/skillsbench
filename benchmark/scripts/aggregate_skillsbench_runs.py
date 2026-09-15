@@ -7,7 +7,8 @@ Works for Hermes, CoEvoSkills, and other baselines that log compatible envelopes
 ``evaluation``, ``pass_at_turn``, ``run_conversation_result``).
 
 Metrics (see ``skillsbench_aggregate_core.py``):
-  - macro / micro success rate at each pass@k turn budget (cumulative ≤k)
+  - macro / micro success rate at each pass@k turn budget (cumulative ≤k;
+    checkpoints-only by default; ``--no-pass-k-checkpoints-only`` to include finals)
   - AUC of macro/micro pass@k over continuous k=1..60 (default; ``--auc-max-k``)
   - final rates after pass@k / AUC, with mean±std success turn (verification included)
   - cost to succeed: mean ± std of tokens and user iterations among successes
@@ -18,10 +19,13 @@ Usage::
     benchmark/runs/batch.jsonl \\
     --pass-k 1,5,10,60 \\
     --auc-max-k 60 \\
-    --pass-k-checkpoints-only \\
     --max-user-iterations 90 \\
     -o benchmark/runs/batch_summary.json \\
     --print-summary
+
+  # Opt into crediting in-budget final / verification-retry eval for pass@k:
+  python3 benchmark/scripts/aggregate_skillsbench_runs.py RUN.jsonl \\
+    --pass-k 1,5,10,60 --no-pass-k-checkpoints-only --print-summary
 """
 
 from __future__ import annotations
@@ -52,7 +56,7 @@ def aggregate_records(
     method: Optional[str] = None,
     phase: Optional[str] = None,
     max_user_iterations: Optional[int] = None,
-    include_final_in_pass_k: bool = True,
+    include_final_in_pass_k: bool = False,
     auc_max_k: int = 60,
 ) -> Dict[str, Any]:
     """Build summary dict from JSONL run records (shared schema)."""
@@ -112,11 +116,13 @@ def main() -> int:
     )
     parser.add_argument(
         "--pass-k-checkpoints-only",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "Score pass@k macro/micro from pass_at_turn snapshots only. "
+            "Score pass@k / AUC from pass_at_turn snapshots only (default: on). "
             "Do not credit post-conversation host eval or verification retries "
-            "when user_iterations ≤ k. final_* rates are unchanged."
+            "when user_iterations ≤ k. final_* rates are unchanged. "
+            "Use --no-pass-k-checkpoints-only to also credit in-budget finals."
         ),
     )
     parser.add_argument(

@@ -120,7 +120,9 @@ def test_pass_k_cumulative_keeps_early_success_when_later_missing_or_fails():
             },
         ),
     ]
-    summary = mod.aggregate_records(records, pass_k_values=[10, 30])
+    summary = mod.aggregate_records(
+        records, pass_k_values=[10, 30], include_final_in_pass_k=True
+    )
     assert summary["pass_k"]["10"]["macro_success_rate"] == 1.0
     # Both tasks still count at 30: early-finish has no @30 key; regress failed
     # at 30 but already passed at 10.
@@ -175,7 +177,9 @@ def test_pass_k_includes_final_success_between_sparse_checkpoints():
             "run_conversation_result": {"total_tokens": 200, "api_calls": 15},
         }
     ]
-    summary = mod.aggregate_records(records, pass_k_values=[10, 15, 60])
+    summary = mod.aggregate_records(
+        records, pass_k_values=[10, 15, 60], include_final_in_pass_k=True
+    )
     # Still failing at the last sparse checkpoint.
     assert summary["pass_k"]["10"]["macro_success_rate"] == 0.0
     assert summary["pass_k"]["10"]["micro_success_rate"] == 0.0
@@ -218,7 +222,6 @@ def test_pass_k_checkpoints_only_ignores_final_eval():
     summary = mod.aggregate_records(
         records,
         pass_k_values=[10, 15, 60],
-        include_final_in_pass_k=False,
     )
     assert summary["filters"]["include_final_in_pass_k"] is False
     assert summary["pass_k"]["10"]["include_final"] is False
@@ -229,6 +232,38 @@ def test_pass_k_checkpoints_only_ignores_final_eval():
     assert summary["pass_k"]["60"]["tasks_passed_at_turn"] == 0
     # Latest checkpoint ≤60 is still the failing @10 snapshot.
     assert summary["pass_k"]["60"]["micro_success_rate"] == 0.25
+    assert summary["final"]["macro_success_rate"] == 1.0
+
+
+def test_pass_k_default_is_checkpoints_only():
+    """Default aggregation matches --pass-k-checkpoints-only."""
+    mod = _load_module()
+    records = [
+        {
+            "schema": "skillsbench.hermes_run.v1",
+            "skillsbench_task_id": "final-only",
+            "ts_end_iso": "2026-01-01T00:00:00Z",
+            "pass_at_turn": {
+                "1": {
+                    "turn": 1,
+                    "evaluation": {
+                        "task_success": False,
+                        "tests_passed": 0,
+                        "tests_total": 2,
+                    },
+                }
+            },
+            "evaluation": {
+                "task_success": True,
+                "tests_passed": 2,
+                "tests_total": 2,
+            },
+            "run_conversation_result": {"total_tokens": 50, "api_calls": 5},
+        }
+    ]
+    summary = mod.aggregate_records(records, pass_k_values=[5, 60])
+    assert summary["filters"]["include_final_in_pass_k"] is False
+    assert summary["pass_k"]["5"]["macro_success_rate"] == 0.0
     assert summary["final"]["macro_success_rate"] == 1.0
 
 
@@ -271,7 +306,9 @@ def test_pass_k_micro_prefers_final_over_inflated_later_checkpoint():
             "run_conversation_result": {"total_tokens": 4000, "api_calls": 56},
         }
     ]
-    summary = mod.aggregate_records(records, pass_k_values=[30, 60])
+    summary = mod.aggregate_records(
+        records, pass_k_values=[30, 60], include_final_in_pass_k=True
+    )
     assert summary["pass_k"]["30"]["micro_success_rate"] == 0.5  # 4/8 checkpoint
     # Prefer final 0/2 over the turn-60 9/10 snapshot.
     assert summary["pass_k"]["60"]["micro_success_rate"] == 0.0
@@ -333,7 +370,10 @@ def test_cost_to_succeed_respects_max_user_iterations():
     records[2]["duration_sec"] = 200.0
 
     capped = mod.aggregate_records(
-        records, pass_k_values=[10, 60], max_user_iterations=60
+        records,
+        pass_k_values=[10, 60],
+        max_user_iterations=60,
+        include_final_in_pass_k=True,
     )
     cts = capped["cost_to_succeed"]
     assert cts["max_user_iterations"] == 60
@@ -348,7 +388,6 @@ def test_cost_to_succeed_respects_max_user_iterations():
         records,
         pass_k_values=[10, 60],
         max_user_iterations=60,
-        include_final_in_pass_k=False,
     )
     cts2 = ckpt_only["cost_to_succeed"]
     assert cts2["n_succeeded"] == 1
@@ -404,7 +443,9 @@ def test_pass_k_macro_uses_full_suite_denominator():
             "run_conversation_result": {"total_tokens": 9000, "api_calls": 45},
         },
     ]
-    summary = mod.aggregate_records(records, pass_k_values=[10, 60])
+    summary = mod.aggregate_records(
+        records, pass_k_values=[10, 60], include_final_in_pass_k=True
+    )
     # Only early-ok is in-budget at 10; long-runner is still a suite failure@10.
     assert summary["pass_k"]["10"]["tasks_total"] == 2
     assert summary["pass_k"]["10"]["tasks_with_turn_data"] == 1
@@ -454,7 +495,7 @@ def test_auc_macro_micro_continuous_k():
         }
     ]
     summary = mod.aggregate_records(
-        records, pass_k_values=[1, 3], auc_max_k=4
+        records, pass_k_values=[1, 3], auc_max_k=4, include_final_in_pass_k=True
     )
     assert summary["auc"]["k_max"] == 4
     assert summary["auc"]["method"] == "mean_of_rates"

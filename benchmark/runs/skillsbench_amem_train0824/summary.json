@@ -1,0 +1,291 @@
+{
+  "schema": "skillsbench.metrics_summary.v1",
+  "tasks": 65,
+  "records": 66,
+  "errors": 0,
+  "filters": {
+    "split_part": "train",
+    "method": null,
+    "phase": null,
+    "max_user_iterations": 60
+  },
+  "pass_k": {
+    "1": {
+      "k": 1,
+      "cumulative": true,
+      "macro_success_rate": 0.0,
+      "macro_task_pass_rate": 0.0,
+      "tasks_with_turn_data": 65,
+      "tasks_passed_at_turn": 0,
+      "micro_success_rate": 0.0870712401055409,
+      "micro_test_pass_rate": 0.0870712401055409,
+      "tests_passed_sum": 33,
+      "tests_total_sum": 379,
+      "reward_mean": 0.05669549230769231,
+      "tokens": {
+        "n": 33,
+        "mean": 40275.90909090909,
+        "std": 141548.00750106914,
+        "min": 14725.0,
+        "max": 828766.0
+      },
+      "tokens_mean_at_turn": 40275.90909090909,
+      "tokens_median_at_turn": 15681.0,
+      "user_iterations": {
+        "n": 65,
+        "mean": 1.4923076923076923,
+        "std": 0.503831473655779,
+        "min": 1.0,
+        "max": 2.0
+      },
+      "api_calls_mean_at_turn": 1.4923076923076923,
+      "estimated_cost_usd": {
+        "n": 33,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0
+    },
+    "5": {
+      "k": 5,
+      "cumulative": true,
+      "macro_success_rate": 0.03076923076923077,
+      "macro_task_pass_rate": 0.03076923076923077,
+      "tasks_with_turn_data": 65,
+      "tasks_passed_at_turn": 2,
+      "micro_success_rate": 0.1266490765171504,
+      "micro_test_pass_rate": 0.1266490765171504,
+      "tests_passed_sum": 48,
+      "tests_total_sum": 379,
+      "reward_mean": 0.09464421538461538,
+      "tokens": {
+        "n": 33,
+        "mean": 185850.36363636365,
+        "std": 173903.9856935822,
+        "min": 90207.0,
+        "max": 828766.0
+      },
+      "tokens_mean_at_turn": 185850.36363636365,
+      "tokens_median_at_turn": 131527.0,
+      "user_iterations": {
+        "n": 65,
+        "mean": 3.3692307692307693,
+        "std": 2.4847612483976125,
+        "min": 1.0,
+        "max": 6.0
+      },
+      "api_calls_mean_at_turn": 3.3692307692307693,
+      "estimated_cost_usd": {
+        "n": 33,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0
+    },
+    "10": {
+      "k": 10,
+      "cumulative": true,
+      "macro_success_rate": 0.15384615384615385,
+      "macro_task_pass_rate": 0.15384615384615385,
+      "tasks_with_turn_data": 65,
+      "tasks_passed_at_turn": 10,
+      "micro_success_rate": 0.3044496487119438,
+      "micro_test_pass_rate": 0.3044496487119438,
+      "tests_passed_sum": 130,
+      "tests_total_sum": 427,
+      "reward_mean": 0.24077975384615385,
+      "tokens": {
+        "n": 33,
+        "mean": 381418.54545454547,
+        "std": 145225.77735742432,
+        "min": 213147.0,
+        "max": 828766.0
+      },
+      "tokens_mean_at_turn": 381418.54545454547,
+      "tokens_median_at_turn": 332095.0,
+      "user_iterations": {
+        "n": 65,
+        "mean": 5.615384615384615,
+        "std": 4.929795595700152,
+        "min": 1.0,
+        "max": 11.0
+      },
+      "api_calls_mean_at_turn": 5.615384615384615,
+      "estimated_cost_usd": {
+        "n": 33,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0
+    },
+    "30": {
+      "k": 30,
+      "cumulative": true,
+      "macro_success_rate": 0.3384615384615385,
+      "macro_task_pass_rate": 0.3384615384615385,
+      "tasks_with_turn_data": 65,
+      "tasks_passed_at_turn": 22,
+      "micro_success_rate": 0.5377969762419006,
+      "micro_test_pass_rate": 0.5377969762419006,
+      "tests_passed_sum": 249,
+      "tests_total_sum": 463,
+      "reward_mean": 0.3919519076923077,
+      "tokens": {
+        "n": 32,
+        "mean": 1094589.09375,
+        "std": 656900.179480348,
+        "min": 327365.0,
+        "max": 2641218.0
+      },
+      "tokens_mean_at_turn": 1094589.09375,
+      "tokens_median_at_turn": 850412.0,
+      "user_iterations": {
+        "n": 65,
+        "mean": 10.384615384615385,
+        "std": 11.521301342096066,
+        "min": 1.0,
+        "max": 31.0
+      },
+      "api_calls_mean_at_turn": 10.384615384615385,
+      "estimated_cost_usd": {
+        "n": 32,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0
+    },
+    "60": {
+      "k": 60,
+      "cumulative": true,
+      "macro_success_rate": 0.35384615384615387,
+      "macro_task_pass_rate": 0.35384615384615387,
+      "tasks_with_turn_data": 65,
+      "tasks_passed_at_turn": 23,
+      "micro_success_rate": 0.5536480686695279,
+      "micro_test_pass_rate": 0.5536480686695279,
+      "tests_passed_sum": 258,
+      "tests_total_sum": 466,
+      "reward_mean": 0.4272083230769231,
+      "tokens": {
+        "n": 32,
+        "mean": 1740140.15625,
+        "std": 1688254.7989016525,
+        "min": 327365.0,
+        "max": 6373674.0
+      },
+      "tokens_mean_at_turn": 1740140.15625,
+      "tokens_median_at_turn": 862269.0,
+      "user_iterations": {
+        "n": 65,
+        "mean": 13.092307692307692,
+        "std": 17.524735266298496,
+        "min": 1.0,
+        "max": 60.0
+      },
+      "api_calls_mean_at_turn": 13.092307692307692,
+      "estimated_cost_usd": {
+        "n": 32,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0
+    }
+  },
+  "final": {
+    "label": "max_user_iterations",
+    "max_user_iterations": 60,
+    "macro_success_rate": 0.35384615384615387,
+    "macro_task_pass_rate": 0.35384615384615387,
+    "tasks_with_evaluation": 65,
+    "tasks_passed": 23,
+    "micro_success_rate": 0.5536480686695279,
+    "micro_test_pass_rate": 0.5536480686695279,
+    "tests_passed_sum": 258,
+    "tests_total_sum": 466,
+    "reward_mean": 0.4272083230769231,
+    "completion_rate": 0.4307692307692308,
+    "interrupted_tasks": 0,
+    "tokens": {
+      "n": 32,
+      "mean": 1740140.15625,
+      "std": 1688254.7989016525,
+      "min": 327365.0,
+      "max": 6373674.0
+    },
+    "tokens_mean": 1740140.15625,
+    "tokens_median": 862269.0,
+    "user_iterations": {
+      "n": 65,
+      "mean": 13.092307692307692,
+      "std": 17.524735266298496,
+      "min": 1.0,
+      "max": 60.0
+    },
+    "api_calls_mean": 13.092307692307692,
+    "estimated_cost_usd": {
+      "n": 32,
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "estimated_cost_usd_mean": 0.0,
+    "estimated_cost_usd_sum": 0.0,
+    "duration_sec": {
+      "n": 65,
+      "mean": 2808.164373876923,
+      "std": 4005.2370883248705,
+      "min": 29.456303,
+      "max": 17646.794639
+    },
+    "duration_sec_mean": 2808.164373876923,
+    "duration_sec_sum": 182530.684302,
+    "duration_sec_std": 4005.2370883248705
+  },
+  "cost_to_succeed": {
+    "n_succeeded": 23,
+    "sources": {
+      "pass_at_turn": 8,
+      "final": 15
+    },
+    "tokens": {
+      "n": 23,
+      "mean": 871252.695652174,
+      "std": 680098.3870195437,
+      "min": 304543.0,
+      "max": 2473068.0
+    },
+    "user_iterations": {
+      "n": 23,
+      "mean": 15.304347826086957,
+      "std": 8.588760004737141,
+      "min": 2.0,
+      "max": 36.0
+    },
+    "estimated_cost_usd": {
+      "n": 23,
+      "mean": 0.0,
+      "std": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "duration_sec": {
+      "n": 23,
+      "mean": 3545.522118956522,
+      "std": 2197.255590417658,
+      "min": 832.983429,
+      "max": 9032.418286
+    },
+    "note": "Mean±std among tasks that succeed, measured at first successful pass@k checkpoint when available, else at final usage. duration_sec is wall-clock for the full task run among successes."
+  }
+}

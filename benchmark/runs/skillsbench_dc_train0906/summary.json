@@ -1,0 +1,16 @@
+{
+  "schema": "skillsbench.metrics_summary.v1",
+  "tasks": 0,
+  "records": 0,
+  "errors": 0,
+  "pass_k": {},
+  "final": {},
+  "cost_to_succeed": {},
+  "note": "No task records found.",
+  "filters": {
+    "split_part": "test",
+    "method": null,
+    "phase": null,
+    "max_user_iterations": 60
+  }
+}
