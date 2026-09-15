@@ -423,3 +423,134 @@ def test_pass_k_macro_uses_full_suite_denominator():
     assert summary["pass_k"]["60"]["tasks_total"] == 2
     assert summary["pass_k"]["60"]["micro_success_rate"] == 1.0
     assert summary["pass_k"]["60"]["tests_total_sum"] == 24
+
+
+def test_auc_macro_micro_continuous_k():
+    """AUC is mean of pass@k rates over continuous k=1..K."""
+    mod = _load_module()
+    # Passes at turn 3 via final usage (api_calls=3); fails for k=1,2.
+    records = [
+        {
+            "schema": "skillsbench.hermes_run.v1",
+            "skillsbench_task_id": "late",
+            "ts_end_iso": "2026-01-01T00:00:00Z",
+            "pass_at_turn": {
+                "1": {
+                    "turn": 1,
+                    "evaluation": {
+                        "task_success": False,
+                        "tests_passed": 0,
+                        "tests_total": 4,
+                    },
+                    "total_tokens": 10,
+                },
+            },
+            "evaluation": {
+                "task_success": True,
+                "tests_passed": 4,
+                "tests_total": 4,
+            },
+            "run_conversation_result": {"total_tokens": 100, "api_calls": 3},
+        }
+    ]
+    summary = mod.aggregate_records(
+        records, pass_k_values=[1, 3], auc_max_k=4
+    )
+    assert summary["auc"]["k_max"] == 4
+    assert summary["auc"]["method"] == "mean_of_rates"
+    # macro: k=1,2 → 0; k=3,4 → 1 → mean 0.5
+    assert summary["auc"]["macro_success_rate"] == 0.5
+    assert summary["auc"]["macro_curve"] == [0.0, 0.0, 1.0, 1.0]
+    # micro: k=1 uses @1 snapshot 0/4; k=2 still no better in-budget obs than
+    # latest ≤2 which is @1 → 0/4; k=3,4 use final 4/4 → mean 0.5
+    assert summary["auc"]["micro_success_rate"] == 0.5
+    assert summary["filters"]["auc_max_k"] == 4
+
+
+def test_auc_disabled_when_max_k_zero():
+    mod = _load_module()
+    records = [
+        _record(
+            "a",
+            pass_at_turn={
+                "1": {
+                    "turn": 1,
+                    "evaluation": {
+                        "task_success": True,
+                        "tests_passed": 2,
+                        "tests_total": 2,
+                    },
+                    "total_tokens": 1,
+                },
+            },
+            final_success=True,
+        )
+    ]
+    summary = mod.aggregate_records(records, pass_k_values=[1], auc_max_k=0)
+    assert summary["auc"] == {}
+
+
+def test_summary_order_pass_k_auc_then_final_with_success_turn():
+    mod = _load_module()
+    records = [
+        {
+            "schema": "skillsbench.hermes_run.v1",
+            "skillsbench_task_id": "verified",
+            "ts_end_iso": "2026-01-01T00:00:00Z",
+            "pass_at_turn": {
+                "5": {
+                    "turn": 5,
+                    "evaluation": {
+                        "task_success": False,
+                        "tests_passed": 0,
+                        "tests_total": 2,
+                    },
+                    "total_tokens": 50,
+                },
+            },
+            "evaluation": {
+                "task_success": True,
+                "tests_passed": 2,
+                "tests_total": 2,
+            },
+            "host_verification_attempts": [
+                {
+                    "attempt": 1,
+                    "api_calls": 12,
+                    "evaluation": {
+                        "task_success": False,
+                        "tests_passed": 0,
+                        "tests_total": 2,
+                    },
+                },
+                {
+                    "attempt": 2,
+                    "api_calls": 18,
+                    "evaluation": {
+                        "task_success": True,
+                        "tests_passed": 2,
+                        "tests_total": 2,
+                    },
+                },
+            ],
+            "run_conversation_result": {"total_tokens": 200, "api_calls": 18},
+        }
+    ]
+    summary = mod.aggregate_records(
+        records, pass_k_values=[5, 60], auc_max_k=60
+    )
+    sui = summary["final"]["success_user_iterations"]
+    assert sui["n"] == 1
+    assert sui["mean"] == 18.0
+    text = mod.format_metrics_summary_text(summary)
+    assert "pass@5_macro=" in text
+    assert "pass@60_macro=" in text
+    assert "auc_macro@1-60=" in text
+    assert "auc_micro@1-60=" in text
+    assert "final_macro=" in text
+    assert "final_success_turn=18.00±0.00 (n=1, includes_verification)" in text
+    # Order: pass@60 before auc before final
+    i60 = text.index("pass@60_macro=")
+    iauc = text.index("auc_macro@1-60=")
+    ifinal = text.index("final_macro=")
+    assert i60 < iauc < ifinal

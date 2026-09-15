@@ -34,6 +34,13 @@ Headline metrics
   set, else ``max(pass_k_values)`` under ``include_final_in_pass_k=False``.
   Tasks that only succeed after a verification retry or past the budget
   are excluded.
+- **AUC of pass@k** — for continuous integer *k* from 1 to ``auc_max_k``
+  (default 60), compute macro and micro success rates at each *k*, then
+  report the normalized area under each curve as the mean of those rates:
+  ``AUC = (1/K) Σ_{k=1}^{K} rate(k)`` ∈ [0, 1]. Perfect always-pass@1 → 1.0.
+- **final** — end-of-run host eval (after any verification retries). Reported
+  after sparse pass@k / AUC in the text summary, with mean±std of the API
+  turn at which final success was recorded (verification retries included).
 
 Token / iteration stats reported under ``pass_k[k]`` use that same **terminal**
 in-budget observation.
@@ -471,6 +478,70 @@ def _pass_k_slice(
     }
 
 
+def _final_success_turn(record: dict) -> Optional[float]:
+    """
+    API turns when end-of-run host eval first succeeded.
+
+    Prefers ``api_calls`` on the successful ``host_verification_attempts``
+    entry (verification retries included in the turn count). Falls back to
+    final usage ``user_iterations`` / ``api_calls``.
+    """
+    ev = _final_eval(record)
+    if not ev.get("task_success"):
+        return None
+    attempts = record.get("host_verification_attempts")
+    if isinstance(attempts, list):
+        for attempt in reversed(attempts):
+            if not isinstance(attempt, dict):
+                continue
+            aev = attempt.get("evaluation") or {}
+            if not isinstance(aev, dict) or not aev.get("task_success"):
+                continue
+            ac = _to_float(attempt.get("api_calls"))
+            if ac is not None:
+                return ac
+    usage = _final_usage(record)
+    return usage.get("user_iterations")
+
+
+def _auc_pass_k(
+    by_task: Dict[str, dict],
+    *,
+    k_max: int,
+    include_final: bool,
+) -> Dict[str, Any]:
+    """
+    Normalized AUC of macro/micro pass@k for continuous k=1..k_max.
+
+    AUC = (1/K) Σ rate(k) — mean of unit-width rectangular areas, so a curve
+    that is always 1.0 yields AUC 1.0.
+    """
+    if k_max < 1 or not by_task:
+        return {}
+    macro_curve: List[Optional[float]] = []
+    micro_curve: List[Optional[float]] = []
+    for k in range(1, k_max + 1):
+        slice_k = _pass_k_slice(by_task, k, include_final=include_final)
+        macro_curve.append(slice_k.get("macro_success_rate"))
+        micro_curve.append(slice_k.get("micro_success_rate"))
+    macro_vals = [float(v) for v in macro_curve if v is not None]
+    micro_vals = [float(v) for v in micro_curve if v is not None]
+    return {
+        "k_min": 1,
+        "k_max": k_max,
+        "method": "mean_of_rates",
+        "note": (
+            "Normalized AUC over continuous integer k: "
+            f"AUC = (1/{k_max}) * sum(rate(k) for k in 1..{k_max})."
+        ),
+        "include_final": include_final,
+        "macro_success_rate": _mean(macro_vals),
+        "micro_success_rate": _mean(micro_vals),
+        "macro_curve": macro_curve,
+        "micro_curve": micro_curve,
+    }
+
+
 def aggregate_skillsbench_metrics(
     records: Sequence[dict],
     *,
@@ -480,6 +551,7 @@ def aggregate_skillsbench_metrics(
     phase: Optional[str] = None,
     max_user_iterations: Optional[int] = None,
     include_final_in_pass_k: bool = True,
+    auc_max_k: int = 60,
 ) -> Dict[str, Any]:
     """
     Aggregate compatible SkillsBench JSONL rows into a shared metrics summary.
@@ -500,6 +572,15 @@ def aggregate_skillsbench_metrics(
         )
     )
 
+    empty_filters = {
+        "split_part": split_part,
+        "method": method,
+        "phase": phase,
+        "max_user_iterations": max_user_iterations,
+        "include_final_in_pass_k": include_final_in_pass_k,
+        "auc_max_k": auc_max_k,
+    }
+
     if not by_task:
         return {
             "schema": "skillsbench.metrics_summary.v1",
@@ -507,16 +588,11 @@ def aggregate_skillsbench_metrics(
             "records": len(records),
             "errors": errors,
             "pass_k": {},
+            "auc": {},
             "final": {},
             "cost_to_succeed": {},
             "note": "No task records found.",
-            "filters": {
-                "split_part": split_part,
-                "method": method,
-                "phase": phase,
-                "max_user_iterations": max_user_iterations,
-                "include_final_in_pass_k": include_final_in_pass_k,
-            },
+            "filters": empty_filters,
         }
 
     pass_k_summary: Dict[str, Any] = {}
@@ -524,6 +600,16 @@ def aggregate_skillsbench_metrics(
         pass_k_summary[str(turn)] = _pass_k_slice(
             by_task, turn, include_final=include_final_in_pass_k
         )
+
+    auc_block = (
+        _auc_pass_k(
+            by_task,
+            k_max=int(auc_max_k),
+            include_final=include_final_in_pass_k,
+        )
+        if auc_max_k and int(auc_max_k) > 0
+        else {}
+    )
 
     # Final / max-iteration metrics
     final_passed = 0
@@ -535,6 +621,7 @@ def aggregate_skillsbench_metrics(
     final_costs: List[float] = []
     final_rewards: List[float] = []
     final_durations: List[float] = []
+    final_success_turns: List[float] = []
     completed_count = 0
     interrupted_count = 0
 
@@ -557,6 +644,9 @@ def aggregate_skillsbench_metrics(
             final_with_eval += 1
             if ev.get("task_success"):
                 final_passed += 1
+                st = _final_success_turn(rec)
+                if st is not None:
+                    final_success_turns.append(float(st))
             p, t = _to_int(ev.get("tests_passed")), _to_int(ev.get("tests_total"))
             if p is not None and t is not None and t > 0:
                 final_tests_passed += p
@@ -643,6 +733,11 @@ def aggregate_skillsbench_metrics(
         "tokens_median": statistics.median(final_tokens) if final_tokens else None,
         "user_iterations": _mean_std(final_iters),
         "api_calls_mean": _mean(final_iters),
+        "success_user_iterations": _mean_std(final_success_turns),
+        "success_user_iterations_note": (
+            "Among finally-passed tasks: API turns when host eval succeeded "
+            "(includes host verification retries when logged)."
+        ),
         "estimated_cost_usd": _mean_std(final_costs),
         "estimated_cost_usd_mean": _mean(final_costs),
         "estimated_cost_usd_sum": sum(final_costs) if final_costs else None,
@@ -678,14 +773,9 @@ def aggregate_skillsbench_metrics(
         "tasks": len(by_task),
         "records": len(records),
         "errors": errors,
-        "filters": {
-            "split_part": split_part,
-            "method": method,
-            "phase": phase,
-            "max_user_iterations": max_user_iterations,
-            "include_final_in_pass_k": include_final_in_pass_k,
-        },
+        "filters": empty_filters,
         "pass_k": pass_k_summary,
+        "auc": auc_block,
         "final": final_block,
         "cost_to_succeed": cost_to_succeed,
     }
@@ -696,17 +786,7 @@ def format_metrics_summary_text(summary: Dict[str, Any]) -> str:
         f"tasks={summary.get('tasks')} records={summary.get('records')} "
         f"errors={summary.get('errors')}",
     ]
-    final = summary.get("final") or {}
-    if final.get("macro_success_rate") is not None:
-        lines.append(
-            f"final_macro={final['macro_success_rate']:.4f} "
-            f"({final.get('tasks_passed')}/{final.get('tasks_with_evaluation')})"
-        )
-    if final.get("micro_success_rate") is not None:
-        lines.append(
-            f"final_micro={final['micro_success_rate']:.4f} "
-            f"({final.get('tests_passed_sum')}/{final.get('tests_total_sum')})"
-        )
+    # Sparse pass@k first, then AUC, then final (after pass@60 when present).
     for turn, block in sorted(
         (summary.get("pass_k") or {}).items(),
         key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0,
@@ -726,6 +806,36 @@ def format_metrics_summary_text(summary: Dict[str, Any]) -> str:
                 f"pass@{turn}_micro={micro:.4f} "
                 f"({block.get('tests_passed_sum')}/{block.get('tests_total_sum')})"
             )
+    auc = summary.get("auc") or {}
+    if isinstance(auc, dict) and auc.get("macro_success_rate") is not None:
+        k_min = auc.get("k_min", 1)
+        k_max = auc.get("k_max")
+        lines.append(
+            f"auc_macro@{k_min}-{k_max}={auc['macro_success_rate']:.4f}"
+        )
+    if isinstance(auc, dict) and auc.get("micro_success_rate") is not None:
+        k_min = auc.get("k_min", 1)
+        k_max = auc.get("k_max")
+        lines.append(
+            f"auc_micro@{k_min}-{k_max}={auc['micro_success_rate']:.4f}"
+        )
+    final = summary.get("final") or {}
+    if final.get("macro_success_rate") is not None:
+        lines.append(
+            f"final_macro={final['macro_success_rate']:.4f} "
+            f"({final.get('tasks_passed')}/{final.get('tasks_with_evaluation')})"
+        )
+    if final.get("micro_success_rate") is not None:
+        lines.append(
+            f"final_micro={final['micro_success_rate']:.4f} "
+            f"({final.get('tests_passed_sum')}/{final.get('tests_total_sum')})"
+        )
+    sui = final.get("success_user_iterations") or {}
+    if sui.get("mean") is not None:
+        lines.append(
+            f"final_success_turn={sui['mean']:.2f}±{sui.get('std') or 0:.2f} "
+            f"(n={sui.get('n')}, includes_verification)"
+        )
     cts = summary.get("cost_to_succeed") or {}
     tok = cts.get("tokens") or {}
     it = cts.get("user_iterations") or {}

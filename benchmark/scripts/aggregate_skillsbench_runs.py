@@ -7,14 +7,17 @@ Works for Hermes, CoEvoSkills, and other baselines that log compatible envelopes
 ``evaluation``, ``pass_at_turn``, ``run_conversation_result``).
 
 Metrics (see ``skillsbench_aggregate_core.py``):
-  - macro / micro success rate at each pass@k turn budget (cumulative ≤k) and at final (max iterations)
+  - macro / micro success rate at each pass@k turn budget (cumulative ≤k)
+  - AUC of macro/micro pass@k over continuous k=1..60 (default; ``--auc-max-k``)
+  - final rates after pass@k / AUC, with mean±std success turn (verification included)
   - cost to succeed: mean ± std of tokens and user iterations among successes
 
 Usage::
 
   python3 benchmark/scripts/aggregate_skillsbench_runs.py \\
     benchmark/runs/batch.jsonl \\
-    --pass-k 1,5,10,70 \\
+    --pass-k 1,5,10,60 \\
+    --auc-max-k 60 \\
     --pass-k-checkpoints-only \\
     --max-user-iterations 90 \\
     -o benchmark/runs/batch_summary.json \\
@@ -50,6 +53,7 @@ def aggregate_records(
     phase: Optional[str] = None,
     max_user_iterations: Optional[int] = None,
     include_final_in_pass_k: bool = True,
+    auc_max_k: int = 60,
 ) -> Dict[str, Any]:
     """Build summary dict from JSONL run records (shared schema)."""
     return aggregate_skillsbench_metrics(
@@ -60,6 +64,7 @@ def aggregate_records(
         phase=phase,
         max_user_iterations=max_user_iterations,
         include_final_in_pass_k=include_final_in_pass_k,
+        auc_max_k=auc_max_k,
     )
 
 
@@ -70,8 +75,8 @@ def format_summary_text(summary: Dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Aggregate SkillsBench JSONL: macro/micro success@k, final rates, "
-            "cost-to-succeed mean±std (tokens + user iterations)."
+            "Aggregate SkillsBench JSONL: macro/micro success@k, AUC@1..K, "
+            "final rates (with success turn), cost-to-succeed mean±std."
         ),
     )
     parser.add_argument(
@@ -83,7 +88,16 @@ def main() -> int:
         "--pass-k",
         type=str,
         default="1",
-        help="Comma-separated conversation turns (e.g. 1,5,10,70).",
+        help="Comma-separated conversation turns (e.g. 1,5,10,60).",
+    )
+    parser.add_argument(
+        "--auc-max-k",
+        type=int,
+        default=60,
+        help=(
+            "Compute normalized AUC of macro/micro pass@k for continuous "
+            "integer k from 1 to this value (default 60). Set 0 to disable."
+        ),
     )
     parser.add_argument(
         "--max-user-iterations",
@@ -156,6 +170,7 @@ def main() -> int:
         phase=args.phase,
         max_user_iterations=args.max_user_iterations,
         include_final_in_pass_k=not args.pass_k_checkpoints_only,
+        auc_max_k=args.auc_max_k,
     )
 
     if args.output:
