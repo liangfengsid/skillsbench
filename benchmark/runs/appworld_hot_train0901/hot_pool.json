@@ -1,0 +1,75 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1788301213.4196212,
+  "global_turn": 1716,
+  "order": [
+    "api-sandbox-tasks"
+  ],
+  "entries": {
+    "api-sandbox-tasks": {
+      "name": "api-sandbox-tasks",
+      "key_points": [
+        "Never invent values — always look up IDs/tokens/passwords via APIs",
+        "Always paginate fully — loop until empty response, don't hardcode page counts",
+        "Use standard library only — no `os.system`, no external packages like `spotipy`"
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/appworld_hot_train0901/hermes_home/skills/productivity/api-sandbox-tasks",
+      "skill_md_mtime": 1788300817.3099158,
+      "recorded_turn": 1714,
+      "description": "Complete tasks in the interactive Python API sandbox (apis.*) that connects to third-party apps via a supervised REPL environment.",
+      "tags": [
+        "apis",
+        "sandbox",
+        "appworld",
+        "supervisor",
+        "repl",
+        "python",
+        "third-party-apis"
+      ],
+      "scope": "Complete tasks in the interactive Python API sandbox (apis.*) that connects to third-party apps via a supervised REPL environment.",
+      "point_utilities": [
+        {
+          "n_labeled": 10,
+          "helpful": 6,
+          "harmful": 4,
+          "irrelevant": 0,
+          "success_sum": 6.0,
+          "reward_sum": 6.0,
+          "iterations_sum": 161.0,
+          "n_success": 6,
+          "iterations_when_success_sum": 83.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 56,
+    "inject_success": 27,
+    "no_inject_n": 34,
+    "no_inject_success": 25,
+    "throttled": true,
+    "episodes_since_inject": 1
+  }
+}

@@ -27,6 +27,7 @@ Examples (from Hermes repo root):
 
   python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen \\
       --model Qwen/Qwen3.6-27B --max-steps 50 \\
+      --pass-k 1,5,10,30,50 --auc-max-k 50 \\
       --experiment-dir benchmark/runs/alfworld_unseen \\
       --log-jsonl benchmark/runs/alfworld_unseen/runs.jsonl --resume --print-summary
 
@@ -75,7 +76,11 @@ _HERMES_ROOT = _SCRIPT.parents[2]
 if str(_HERMES_ROOT) not in sys.path:
     sys.path.insert(0, str(_HERMES_ROOT))
 
-from aggregate_skillsbench_runs import aggregate_records, format_summary_text  # noqa: E402
+from aggregate_skillsbench_runs import (  # noqa: E402
+    default_step_pass_k_values,
+    format_summary_text,
+    summarize_run_log,
+)
 from amem_baseline import (  # noqa: E402
     add_amem_cli_flags,
     amem_telemetry_from_agent,
@@ -90,6 +95,7 @@ from dc_baseline import (  # noqa: E402
     dc_telemetry_from_agent,
     resolve_dc_persist,
 )
+from evaluate_skillsbench_task import parse_pass_k_values  # noqa: E402
 from hermes_hot_pool_outcome import apply_benchmark_hot_pool_outcome_feedback  # noqa: E402
 from run_skillsbench_with_hermes import (  # noqa: E402
     apply_hot_pool_cli_overrides,
@@ -576,6 +582,40 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="With --resume, only skip tasks whose last row has task_success=True.",
     )
     parser.add_argument("--print-summary", action="store_true")
+    parser.add_argument(
+        "--print-batch-summary",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "After the batch, print aggregate Success@k / AUC / final / cost "
+            "from --log-jsonl (default: on). Budget k is env steps."
+        ),
+    )
+    parser.add_argument(
+        "--pass-k",
+        default=None,
+        metavar="TURNS",
+        help=(
+            "Comma-separated env-step budgets for Success@k "
+            "(default: 1,5,10,30,…,max-steps)."
+        ),
+    )
+    parser.add_argument(
+        "--auc-max-k",
+        type=int,
+        default=None,
+        metavar="K",
+        help=(
+            "Normalized AUC of Success@k over continuous k=1..K "
+            "(default: --max-steps; 0 disables)."
+        ),
+    )
+    parser.add_argument(
+        "--summary-output",
+        default=None,
+        metavar="PATH",
+        help="Write batch metrics JSON (default: <log-jsonl dirname>/summary.json when logging).",
+    )
     parser.add_argument("--log-steps", action="store_true", help="Store per-step obs in JSONL (large).")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--skip-context-files", action="store_true", default=True)
@@ -789,21 +829,37 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"[alfworld] batch done: ok={ok} fail={fail} skipped_before={len(skip_ids)} "
         f"wall={elapsed:.1f}s split={SPLIT_ALIASES.get(split, split)} data={data_root}"
     )
-    if args.print_summary and log_path is not None and log_path.is_file():
-        records = []
-        for line in log_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-        if records:
-            summary = aggregate_records(
-                records,
-                pass_k_values=[1],
-                max_user_iterations=args.max_steps,
-            )
-            print(format_summary_text(summary))
+
+    pass_k_values = (
+        parse_pass_k_values(args.pass_k)
+        if args.pass_k
+        else default_step_pass_k_values(int(args.max_steps))
+    )
+    auc_max_k = int(args.auc_max_k) if args.auc_max_k is not None else int(args.max_steps)
+    summary_output = Path(args.summary_output).expanduser() if args.summary_output else None
+    if summary_output is None and log_path is not None:
+        summary_output = log_path.parent / "summary.json"
+
+    if log_path is not None and log_path.is_file() and (
+        args.print_batch_summary or args.summary_output or summary_output is not None
+    ):
+        summary = summarize_run_log(
+            log_path,
+            pass_k_values=pass_k_values,
+            max_user_iterations=int(args.max_steps),
+            auc_max_k=auc_max_k,
+            include_final_in_pass_k=True,
+        )
+        if summary is not None:
+            if summary_output is not None:
+                summary_output.parent.mkdir(parents=True, exist_ok=True)
+                summary_output.write_text(
+                    json.dumps(summary, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                print(f"[alfworld] wrote batch summary → {summary_output}", flush=True)
+            if args.print_batch_summary:
+                print("[alfworld] " + format_summary_text(summary), flush=True)
     return 0
 
 

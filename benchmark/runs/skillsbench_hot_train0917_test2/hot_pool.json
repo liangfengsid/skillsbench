@@ -1,0 +1,69 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1789802229.1924338,
+  "global_turn": 169,
+  "order": [
+    "skillsbench-workspace-setup",
+    "skillsbench-host-grading"
+  ],
+  "entries": {
+    "skillsbench-workspace-setup": {
+      "name": "skillsbench-workspace-setup",
+      "key_points": [
+        "Host verifier never reads container filesystem — files written inside Docker during execution must be mirrored to `tasks/<id>/` or they won't appear in host staging."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test2/hermes_home/skills/software-development/skillsbench-workspace-setup",
+      "skill_md_mtime": 1789772612.7761257,
+      "recorded_turn": 168,
+      "description": "SkillsBench workspace implementation workflow: reading tests first, handling pre-existing starter files, building inside Docker, and staging deliverables correctly.",
+      "tags": [],
+      "scope": "SkillsBench workspace implementation workflow: reading tests first, handling pre-existing starter files, building inside Docker, and staging deliverables correctly.",
+      "point_utilities": [
+        {
+          "n_labeled": 6,
+          "helpful": 3,
+          "harmful": 0,
+          "irrelevant": 3,
+          "success_sum": 6.0,
+          "reward_sum": 6.0,
+          "iterations_sum": 224.0,
+          "n_success": 6,
+          "iterations_when_success_sum": 224.0
+        }
+      ]
+    },
+    "skillsbench-host-grading": {
+      "name": "skillsbench-host-grading",
+      "key_points": [
+        "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test2/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_md_mtime": 1789786408.0083592,
+      "recorded_turn": 168,
+      "description": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
+      "tags": [],
+      "scope": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
+      "point_utilities": [
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 1,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.777778,
+          "iterations_sum": 60.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 49,
+    "inject_success": 42,
+    "no_inject_n": 39,
+    "no_inject_success": 33,
+    "throttled": false,
+    "episodes_since_inject": 0
+  }
+}

@@ -331,10 +331,11 @@ def main() -> int:
     parser.add_argument(
         "--pass-k-checkpoints-only",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
-            "Score pass@k / AUC from pass_at_turn snapshots only (default: on). "
-            "Use --no-pass-k-checkpoints-only to also credit in-budget finals."
+            "Score pass@k / AUC from pass_at_turn snapshots only (default: off). "
+            "When off (default), also credit in-budget finals. "
+            "Use --pass-k-checkpoints-only to ignore finals."
         ),
     )
     parser.add_argument(

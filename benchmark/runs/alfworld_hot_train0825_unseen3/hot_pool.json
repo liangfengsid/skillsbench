@@ -1,0 +1,55 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1788492700.996424,
+  "global_turn": 3022,
+  "order": [
+    "alfworld-player"
+  ],
+  "entries": {
+    "alfworld-player": {
+      "name": "alfworld-player",
+      "key_points": [
+        "Don't try commands not in the admissible list — they will fail",
+        "You must be at a location before acting on it: `open cabinet 3` from cabinet 2 fails with \"Nothing happens.\" Always `go to` the target first, then `open`/`take`/`put`."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/alfworld_hot_train0825_unseen3/hermes_home/skills/gaming/alfworld-player",
+      "skill_md_mtime": 1788491968.561221,
+      "recorded_turn": 3022,
+      "description": "Play ALFWorld/ALFRED text household simulator — systematic exploration and command selection.",
+      "tags": [],
+      "scope": "Play ALFWorld/ALFRED text household simulator — systematic exploration and command selection.",
+      "point_utilities": [
+        {
+          "n_labeled": 83,
+          "helpful": 30,
+          "harmful": 1,
+          "irrelevant": 52,
+          "success_sum": 81.0,
+          "reward_sum": 81.0,
+          "iterations_sum": 943.0,
+          "n_success": 81,
+          "iterations_when_success_sum": 843.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 101,
+    "inject_success": 99,
+    "no_inject_n": 30,
+    "no_inject_success": 29,
+    "throttled": false,
+    "episodes_since_inject": 1
+  }
+}

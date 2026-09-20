@@ -1,0 +1,119 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1787683941.4124436,
+  "global_turn": 2798,
+  "order": [
+    "alfworld-player"
+  ],
+  "entries": {
+    "alfworld-player": {
+      "name": "alfworld-player",
+      "key_points": [
+        "Don't try commands not in the admissible list — they will fail",
+        "Don't include quotes, numbering, or explanations — reply with bare command only",
+        "Don't rush to use items before finding them — explore first",
+        "Don't re-clean an item after already completing the clean sequence (`move to sinkbasin` → `take back`). Once cleaned, proceed directly to the destination. Repeating the clean step wastes turns and can cause loops.",
+        "STOP after your final task-satisfying action — never issue `look`, `inventory`, `help`, or write natural language explanations after completing the objective. The game only accepts bare admissible commands. After the last action that com...",
+        "NEVER open a container just to verify the item is inside. If you placed the item and closed it, it's there. Re-opening to check wastes turns and triggers verification loops.",
+        "LOOP DETECTION — hard rule: If you've issued `look` 3+ times consecutively (or the same command 3+ times in a row), STOP immediately. Do NOT issue it again. Instead, check: (1) Have I completed the task? If yes, stop entirely. (2) If not...",
+        "open/close loops: If you find yourself alternating `open cabinet X` → `close cabinet X` → `open cabinet X`, STOP. You've already done what's needed. Check task completion and stop entirely."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/alfworld_hot_train0825_unseen/hermes_home/skills/gaming/alfworld-player",
+      "skill_md_mtime": 1787683923.1497128,
+      "recorded_turn": 2796,
+      "description": "",
+      "tags": [],
+      "scope": "alfworld-player",
+      "point_utilities": [
+        {
+          "n_labeled": 116,
+          "helpful": 84,
+          "harmful": 0,
+          "irrelevant": 32,
+          "success_sum": 113.0,
+          "reward_sum": 113.0,
+          "iterations_sum": 1374.0,
+          "n_success": 113,
+          "iterations_when_success_sum": 1224.0
+        },
+        {
+          "n_labeled": 116,
+          "helpful": 84,
+          "harmful": 0,
+          "irrelevant": 32,
+          "success_sum": 113.0,
+          "reward_sum": 113.0,
+          "iterations_sum": 1374.0,
+          "n_success": 113,
+          "iterations_when_success_sum": 1224.0
+        },
+        {
+          "n_labeled": 116,
+          "helpful": 84,
+          "harmful": 0,
+          "irrelevant": 32,
+          "success_sum": 113.0,
+          "reward_sum": 113.0,
+          "iterations_sum": 1374.0,
+          "n_success": 113,
+          "iterations_when_success_sum": 1224.0
+        },
+        {
+          "n_labeled": 58,
+          "helpful": 33,
+          "harmful": 0,
+          "irrelevant": 25,
+          "success_sum": 55.0,
+          "reward_sum": 55.0,
+          "iterations_sum": 922.0,
+          "n_success": 55,
+          "iterations_when_success_sum": 772.0
+        },
+        {
+          "n_labeled": 23,
+          "helpful": 11,
+          "harmful": 0,
+          "irrelevant": 12,
+          "success_sum": 22.0,
+          "reward_sum": 22.0,
+          "iterations_sum": 401.0,
+          "n_success": 22,
+          "iterations_when_success_sum": 351.0
+        },
+        {
+          "n_labeled": 56,
+          "helpful": 33,
+          "harmful": 0,
+          "irrelevant": 23,
+          "success_sum": 55.0,
+          "reward_sum": 55.0,
+          "iterations_sum": 822.0,
+          "n_success": 55,
+          "iterations_when_success_sum": 772.0
+        },
+        {
+          "n_labeled": 116,
+          "helpful": 84,
+          "harmful": 0,
+          "irrelevant": 32,
+          "success_sum": 113.0,
+          "reward_sum": 113.0,
+          "iterations_sum": 1374.0,
+          "n_success": 113,
+          "iterations_when_success_sum": 1224.0
+        },
+        {
+          "n_labeled": 116,
+          "helpful": 84,
+          "harmful": 0,
+          "irrelevant": 32,
+          "success_sum": 113.0,
+          "reward_sum": 113.0,
+          "iterations_sum": 1374.0,
+          "n_success": 113,
+          "iterations_when_success_sum": 1224.0
+        }
+      ]
+    }
+  }
+}

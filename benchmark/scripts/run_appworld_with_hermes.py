@@ -13,9 +13,10 @@ Requires:
 
 Examples (from Hermes repo root):
 
-  # 1) Train — generate hot pool
+  # 1) Train — generate hot pool (prints Success@k / AUC at end by default)
   python3 benchmark/scripts/run_appworld_with_hermes.py \\
       --dataset train --all --model Qwen/Qwen3.6-27B \\
+      --max-steps 40 --pass-k 1,5,10,30,40 --auc-max-k 40 \\
       --experiment-dir benchmark/runs/appworld_hot_train \\
       --isolate-hermes-home --hot-pool --experiment-name hermes-train \\
       --log-jsonl benchmark/runs/appworld_hot_train/runs.jsonl \\
@@ -24,6 +25,7 @@ Examples (from Hermes repo root):
   # 2) Unseen test_normal — frozen train pool
   python3 benchmark/scripts/run_appworld_with_hermes.py \\
       --dataset test_normal --all --model Qwen/Qwen3.6-27B \\
+      --max-steps 40 --pass-k 1,5,10,30,40 --auc-max-k 40 \\
       --experiment-dir benchmark/runs/appworld_hot_test \\
       --isolate-hermes-home \\
       --hot-pool --hot-pool-persist benchmark/runs/appworld_hot_train/hot_pool.json \\
@@ -252,6 +254,11 @@ _DEFAULT_PROMPT = (
 )
 DEFAULT_EXPERIMENT_NAME = "hermes-agent"
 
+from aggregate_skillsbench_runs import (  # noqa: E402
+    default_step_pass_k_values,
+    format_summary_text,
+    summarize_run_log,
+)
 from amem_baseline import (  # noqa: E402
     add_amem_cli_flags,
     amem_telemetry_from_agent,
@@ -266,6 +273,7 @@ from dc_baseline import (  # noqa: E402
     dc_telemetry_from_agent,
     resolve_dc_persist,
 )
+from evaluate_skillsbench_task import parse_pass_k_values  # noqa: E402
 from hermes_hot_pool_outcome import apply_benchmark_hot_pool_outcome_feedback  # noqa: E402
 from run_skillsbench_with_hermes import (  # noqa: E402
     apply_hot_pool_cli_overrides,
@@ -281,6 +289,7 @@ from skillsbench_experiment_workspace import (  # noqa: E402
     resolve_source_hermes_home,
     seed_hermes_skills,
 )
+from skillsbench_metrics import build_envelope_metrics  # noqa: E402
 
 DATASET_NAMES = ("train", "dev", "test_normal", "test_challenge")
 
@@ -1155,6 +1164,8 @@ def run_one_task(
     if evaluation is not None and isinstance(evaluation, dict):
         evaluation.setdefault("steps", len(steps))
         evaluation.setdefault("task_success", bool(evaluation.get("success")))
+        if evaluation.get("success") is None and evaluation.get("task_success") is not None:
+            evaluation["success"] = bool(evaluation.get("task_success"))
         if evaluation.get("reward") is None:
             evaluation["reward"] = 1.0 if evaluation.get("task_success") else 0.0
 
@@ -1189,6 +1200,18 @@ def run_one_task(
         appworld_root / "experiments" / "outputs" / experiment_name / "tasks" / task_id
     )
 
+    run_conversation_result = {
+        "api_calls": hermes_stats.get("api_calls"),
+        "input_tokens": hermes_stats.get("input_tokens"),
+        "output_tokens": hermes_stats.get("output_tokens"),
+        "total_tokens": hermes_stats.get("total_tokens"),
+        "estimated_cost_usd": hermes_stats.get("estimated_cost_usd"),
+        "completed": bool(hermes_stats.get("completed", task_completed)),
+        "interrupted": bool(hermes_stats.get("interrupted")),
+        "failed": bool(hermes_stats.get("failed")),
+        "messages": conversation,
+    }
+
     envelope: Dict[str, Any] = {
         "schema": "appworld.hermes_run.v1",
         "benchmark": "appworld",
@@ -1219,13 +1242,7 @@ def run_one_task(
         "run_error": run_error,
         "steps": steps,
         "hermes_stats": hermes_stats,
-        "run_conversation_result": {
-            "api_calls": hermes_stats.get("api_calls"),
-            "input_tokens": hermes_stats.get("input_tokens"),
-            "output_tokens": hermes_stats.get("output_tokens"),
-            "total_tokens": hermes_stats.get("total_tokens"),
-            "estimated_cost_usd": hermes_stats.get("estimated_cost_usd"),
-        },
+        "run_conversation_result": run_conversation_result,
         "output_directory": str(output_dir),
         "evaluation": evaluation,
     }
@@ -1240,6 +1257,7 @@ def run_one_task(
             envelope["amem_telemetry"] = amem_telemetry_from_agent(agent)
         if dc:
             envelope["dc_telemetry"] = dc_telemetry_from_agent(agent)
+    envelope["metrics"] = build_envelope_metrics(envelope)
     return envelope
 
 
@@ -1394,6 +1412,40 @@ def main() -> int:
         "--print-summary",
         action="store_true",
         help="Print a short stdout summary per task.",
+    )
+    parser.add_argument(
+        "--print-batch-summary",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "After the batch, print aggregate Success@k / AUC / final / cost "
+            "from --log-jsonl (default: on). Budget k is AppWorld execute() steps."
+        ),
+    )
+    parser.add_argument(
+        "--pass-k",
+        default=None,
+        metavar="TURNS",
+        help=(
+            "Comma-separated execute-step budgets for Success@k "
+            "(default: 1,5,10,30,…,max-steps)."
+        ),
+    )
+    parser.add_argument(
+        "--auc-max-k",
+        type=int,
+        default=None,
+        metavar="K",
+        help=(
+            "Normalized AUC of Success@k over continuous k=1..K "
+            "(default: --max-steps; 0 disables)."
+        ),
+    )
+    parser.add_argument(
+        "--summary-output",
+        default=None,
+        metavar="PATH",
+        help="Write batch metrics JSON (default: <log-jsonl dirname>/summary.json when logging).",
     )
     parser.add_argument(
         "--stop-on-error",
@@ -1889,6 +1941,51 @@ def main() -> int:
             run_stats_by_task=run_stats_by_task,
             **eval_batch,
         )
+
+    metrics_log: Optional[Path] = None
+    if log_path is not None:
+        metrics_log = Path(log_path).expanduser().resolve()
+    if args.evaluate_only:
+        run_log = args.run_log_jsonl or args.log_jsonl
+        if run_log:
+            candidate = host_expand_path(run_log)
+            if candidate.is_file():
+                # Prefer agent-run rows (have steps_taken) over eval-only rows.
+                metrics_log = candidate
+
+    if metrics_log is not None and metrics_log.is_file() and (
+        args.print_batch_summary or args.summary_output
+    ):
+        pass_k_values = (
+            parse_pass_k_values(args.pass_k)
+            if args.pass_k
+            else default_step_pass_k_values(int(args.max_steps))
+        )
+        auc_max_k = (
+            int(args.auc_max_k) if args.auc_max_k is not None else int(args.max_steps)
+        )
+        summary_output = (
+            Path(args.summary_output).expanduser() if args.summary_output else None
+        )
+        if summary_output is None and log_path is not None:
+            summary_output = Path(log_path).expanduser().resolve().parent / "summary.json"
+        summary = summarize_run_log(
+            metrics_log,
+            pass_k_values=pass_k_values,
+            max_user_iterations=int(args.max_steps),
+            auc_max_k=auc_max_k,
+            include_final_in_pass_k=True,
+        )
+        if summary is not None:
+            if summary_output is not None:
+                summary_output.parent.mkdir(parents=True, exist_ok=True)
+                summary_output.write_text(
+                    json.dumps(summary, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                print(f"[appworld] wrote batch summary → {summary_output}", flush=True)
+            if args.print_batch_summary:
+                print("[appworld] " + format_summary_text(summary), flush=True)
 
     return 1 if any_failed else 0
 

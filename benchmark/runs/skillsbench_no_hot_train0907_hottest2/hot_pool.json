@@ -1,0 +1,43 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1789506132.7098067,
+  "global_turn": 30,
+  "order": [
+    "skillsbench-host-grading"
+  ],
+  "entries": {
+    "skillsbench-host-grading": {
+      "name": "skillsbench-host-grading",
+      "key_points": [
+        "Testing only inside container, not on host: The driver runs BOTH container and host verifiers. A deliverable that works in the container but isn't at the source task root will fail host-side tests."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_no_hot_train0907_hottest2/hermes_home/skills/skillsbench-host-grading",
+      "skill_md_mtime": 1789506080.446988,
+      "recorded_turn": 30,
+      "description": "",
+      "tags": [],
+      "scope": "skillsbench-host-grading",
+      "point_utilities": [
+        {
+          "n_labeled": 2,
+          "helpful": 2,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 2.0,
+          "reward_sum": 2.0,
+          "iterations_sum": 75.0,
+          "n_success": 2,
+          "iterations_when_success_sum": 75.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 19,
+    "inject_success": 16,
+    "no_inject_n": 4,
+    "no_inject_success": 4,
+    "throttled": false,
+    "episodes_since_inject": 0
+  }
+}

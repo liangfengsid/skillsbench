@@ -1,0 +1,55 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1789164369.6529248,
+  "global_turn": 76,
+  "order": [
+    "skillsbench-host-grading"
+  ],
+  "entries": {
+    "skillsbench-host-grading": {
+      "name": "skillsbench-host-grading",
+      "key_points": [
+        "When the instruction names an absolute container dir (e.g. `/root/output/<f>`), ALWAYS mirror it as a same-named top-level task-dir dir (`output/<f>`) so the remapped test path resolves after staging.",
+        "A passing host run MUST show `tests_total > 0` with `tests_failed == 0`; a `main()`-only script collecting 0 items reports exit 5 and scores 0."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0911_ds/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_md_mtime": 1789164329.8409517,
+      "recorded_turn": 76,
+      "description": "",
+      "tags": [],
+      "scope": "skillsbench-host-grading",
+      "point_utilities": [
+        {
+          "n_labeled": 40,
+          "helpful": 35,
+          "harmful": 1,
+          "irrelevant": 4,
+          "success_sum": 39.0,
+          "reward_sum": 39.6,
+          "iterations_sum": 860.0,
+          "n_success": 39,
+          "iterations_when_success_sum": 816.0
+        },
+        {
+          "n_labeled": 6,
+          "helpful": 4,
+          "harmful": 0,
+          "irrelevant": 2,
+          "success_sum": 6.0,
+          "reward_sum": 6.0,
+          "iterations_sum": 102.0,
+          "n_success": 6,
+          "iterations_when_success_sum": 102.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 56,
+    "inject_success": 55,
+    "no_inject_n": 9,
+    "no_inject_success": 8,
+    "throttled": false,
+    "episodes_since_inject": 0
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1789458153.9239886,
+  "global_turn": 105,
+  "order": [
+    "skillsbench-host-grading"
+  ],
+  "entries": {
+    "skillsbench-host-grading": {
+      "name": "skillsbench-host-grading",
+      "key_points": [
+        "Graded deliverables MUST live as top-level entries of the task dir (`tasks/<id>/`), because `stage_task_for_host_eval` copies those into `<stage>/root/` (which `/root` and `/app` remap to). `environment/`, `solution/`, `tests/`, `instruc...",
+        "When the instruction names an absolute container dir (e.g. `/root/output/<f>`), ALWAYS mirror it as a same-named top-level task-dir dir (`output/<f>`) so the remapped test path resolves after staging.",
+        "NEVER rely on a pre-generated answer the image ships under `environment/` (e.g. `environment/output/`): stage your own copy at the task-dir path the test reads.",
+        "A passing host run MUST show `tests_total > 0` with `tests_failed == 0`; a `main()`-only script collecting 0 items reports exit 5 and scores 0.",
+        "Deliverables the instruction names by absolute container path (e.g. `/root/results.json`) MUST be staged as same-named top-level task-dir entries (`results.json`); the stager remaps `/root` → `<stage>/root`, nothing else places them there."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0911_ds_test8/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_md_mtime": 1789458087.1383379,
+      "recorded_turn": 105,
+      "description": "",
+      "tags": [],
+      "scope": "skillsbench-host-grading",
+      "point_utilities": [
+        {
+          "n_labeled": 2,
+          "helpful": 2,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 2.0,
+          "reward_sum": 2.0,
+          "iterations_sum": 64.0,
+          "n_success": 2,
+          "iterations_when_success_sum": 64.0
+        },
+        {
+          "n_labeled": 2,
+          "helpful": 2,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 2.0,
+          "reward_sum": 2.0,
+          "iterations_sum": 64.0,
+          "n_success": 2,
+          "iterations_when_success_sum": 64.0
+        },
+        {
+          "n_labeled": 2,
+          "helpful": 2,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 2.0,
+          "reward_sum": 2.0,
+          "iterations_sum": 64.0,
+          "n_success": 2,
+          "iterations_when_success_sum": 64.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 2,
+          "helpful": 2,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 2.0,
+          "reward_sum": 2.0,
+          "iterations_sum": 64.0,
+          "n_success": 2,
+          "iterations_when_success_sum": 64.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 76,
+    "inject_success": 75,
+    "no_inject_n": 12,
+    "no_inject_success": 11,
+    "throttled": false,
+    "episodes_since_inject": 0
+  }
+}

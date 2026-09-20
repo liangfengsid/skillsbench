@@ -1,0 +1,149 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1788687474.4255617,
+  "global_turn": 5271,
+  "order": [
+    "multi-app-api-workflow",
+    "api-sandbox-tasks"
+  ],
+  "entries": {
+    "multi-app-api-workflow": {
+      "name": "multi-app-api-workflow",
+      "key_points": [
+        "Never assume parameter names (e.g., `name` vs `query`) - always check the API spec",
+        "Survey Available Apps: Always start with `apis.api_docs.show_app_descriptions()` to see what apps are connected",
+        "Never guess IDs — always search to resolve them",
+        "Never skip `show_api_doc` — API names/params vary (e.g. `song_id` vs `id`, `page_index` vs `offset`)"
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/appworld_hot_train0901_unseen2/hermes_home/skills/productivity/multi-app-api-workflow",
+      "skill_md_mtime": 1788684089.7728753,
+      "recorded_turn": 5269,
+      "description": "Pattern for working with multiple connected apps (Spotify, Venmo, Gmail, etc.) via APIs to complete cross-app tasks.",
+      "tags": [],
+      "scope": "Pattern for working with multiple connected apps (Spotify, Venmo, Gmail, etc.) via APIs to complete cross-app tasks.",
+      "point_utilities": [
+        {
+          "n_labeled": 5,
+          "helpful": 3,
+          "harmful": 2,
+          "irrelevant": 0,
+          "success_sum": 3.0,
+          "reward_sum": 3.0,
+          "iterations_sum": 99.0,
+          "n_success": 3,
+          "iterations_when_success_sum": 40.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        }
+      ]
+    },
+    "api-sandbox-tasks": {
+      "name": "api-sandbox-tasks",
+      "key_points": [
+        "Access tokens expire within seconds (often between code block executions). If you login in one block and call an API in the next, you'll get `401: unauthorized`.",
+        "Never invent values — always look up IDs/tokens/passwords via APIs",
+        "Always paginate fully — loop until empty response, don't hardcode page counts",
+        "Use standard library only — no `os.system`, no external packages like `spotipy`"
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/appworld_hot_train0901_unseen2/hermes_home/skills/productivity/api-sandbox-tasks",
+      "skill_md_mtime": 1788602342.3222513,
+      "recorded_turn": 5269,
+      "description": "Complete tasks in the interactive Python API sandbox (apis.*) that connects to third-party apps via a supervised REPL environment.",
+      "tags": [
+        "apis",
+        "sandbox",
+        "appworld",
+        "supervisor",
+        "repl",
+        "python",
+        "third-party-apis"
+      ],
+      "scope": "Complete tasks in the interactive Python API sandbox (apis.*) that connects to third-party apps via a supervised REPL environment.",
+      "point_utilities": [
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 5,
+          "helpful": 3,
+          "harmful": 2,
+          "irrelevant": 0,
+          "success_sum": 3.0,
+          "reward_sum": 3.0,
+          "iterations_sum": 99.0,
+          "n_success": 3,
+          "iterations_when_success_sum": 40.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 71,
+    "inject_success": 35,
+    "no_inject_n": 187,
+    "no_inject_success": 131,
+    "throttled": true,
+    "episodes_since_inject": 4
+  }
+}

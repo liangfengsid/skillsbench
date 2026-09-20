@@ -7,7 +7,9 @@
     "split_part": null,
     "method": null,
     "phase": null,
-    "max_user_iterations": 50
+    "max_user_iterations": 50,
+    "include_final_in_pass_k": true,
+    "auc_max_k": 50
   },
   "pass_k": {
     "1": {
@@ -47,8 +49,242 @@
         "min": null,
         "max": null
       },
-      "estimated_cost_usd_mean_at_turn": null
+      "estimated_cost_usd_mean_at_turn": null,
+      "include_final": true
+    },
+    "10": {
+      "k": 10,
+      "cumulative": true,
+      "macro_success_rate": 0.5671641791044776,
+      "macro_task_pass_rate": 0.5671641791044776,
+      "tasks_total": 134,
+      "tasks_with_turn_data": 76,
+      "tasks_passed_at_turn": 76,
+      "micro_success_rate": null,
+      "micro_test_pass_rate": null,
+      "tests_passed_sum": 0,
+      "tests_total_sum": 0,
+      "reward_mean": 1.0,
+      "tokens": {
+        "n": 76,
+        "mean": 534863.3815789474,
+        "std": 288081.56513973454,
+        "min": 102129.0,
+        "max": 1972946.0
+      },
+      "tokens_mean_at_turn": 534863.3815789474,
+      "tokens_median_at_turn": 487077.5,
+      "user_iterations": {
+        "n": 76,
+        "mean": 6.9868421052631575,
+        "std": 1.7925283525614992,
+        "min": 3.0,
+        "max": 10.0
+      },
+      "api_calls_mean_at_turn": 6.9868421052631575,
+      "estimated_cost_usd": {
+        "n": 76,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0,
+      "include_final": true
+    },
+    "30": {
+      "k": 30,
+      "cumulative": true,
+      "macro_success_rate": 0.9029850746268657,
+      "macro_task_pass_rate": 0.9029850746268657,
+      "tasks_total": 134,
+      "tasks_with_turn_data": 121,
+      "tasks_passed_at_turn": 121,
+      "micro_success_rate": null,
+      "micro_test_pass_rate": null,
+      "tests_passed_sum": 0,
+      "tests_total_sum": 0,
+      "reward_mean": 1.0,
+      "tokens": {
+        "n": 121,
+        "mean": 1750139.3719008265,
+        "std": 2260803.8858040855,
+        "min": 102129.0,
+        "max": 15488306.0
+      },
+      "tokens_mean_at_turn": 1750139.3719008265,
+      "tokens_median_at_turn": 778131.0,
+      "user_iterations": {
+        "n": 121,
+        "mean": 11.239669421487603,
+        "std": 6.469189533715989,
+        "min": 3.0,
+        "max": 30.0
+      },
+      "api_calls_mean_at_turn": 11.239669421487603,
+      "estimated_cost_usd": {
+        "n": 121,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0,
+      "include_final": true
+    },
+    "50": {
+      "k": 50,
+      "cumulative": true,
+      "macro_success_rate": 0.9701492537313433,
+      "macro_task_pass_rate": 0.9701492537313433,
+      "tasks_total": 134,
+      "tasks_with_turn_data": 134,
+      "tasks_passed_at_turn": 130,
+      "micro_success_rate": null,
+      "micro_test_pass_rate": null,
+      "tests_passed_sum": 0,
+      "tests_total_sum": 0,
+      "reward_mean": 0.9701492537313433,
+      "tokens": {
+        "n": 134,
+        "mean": 3233863.186567164,
+        "std": 5597419.457966803,
+        "min": 102129.0,
+        "max": 30352625.0
+      },
+      "tokens_mean_at_turn": 3233863.186567164,
+      "tokens_median_at_turn": 795791.0,
+      "user_iterations": {
+        "n": 134,
+        "mean": 13.932835820895523,
+        "std": 10.571061193408987,
+        "min": 3.0,
+        "max": 50.0
+      },
+      "api_calls_mean_at_turn": 13.932835820895523,
+      "estimated_cost_usd": {
+        "n": 134,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0,
+      "include_final": true
     }
+  },
+  "auc": {
+    "k_min": 1,
+    "k_max": 50,
+    "method": "mean_of_rates",
+    "note": "Normalized AUC over continuous integer k: AUC = (1/50) * sum(rate(k) for k in 1..50).",
+    "include_final": true,
+    "macro_success_rate": 0.7407462686567164,
+    "micro_success_rate": null,
+    "macro_curve": [
+      0.0,
+      0.0,
+      0.007462686567164179,
+      0.06716417910447761,
+      0.12686567164179105,
+      0.22388059701492538,
+      0.31343283582089554,
+      0.43283582089552236,
+      0.5373134328358209,
+      0.5671641791044776,
+      0.5895522388059702,
+      0.6194029850746269,
+      0.6343283582089553,
+      0.6567164179104478,
+      0.6716417910447762,
+      0.6865671641791045,
+      0.7388059701492538,
+      0.753731343283582,
+      0.7611940298507462,
+      0.7761194029850746,
+      0.7985074626865671,
+      0.8134328358208955,
+      0.8507462686567164,
+      0.8656716417910447,
+      0.8805970149253731,
+      0.8880597014925373,
+      0.8880597014925373,
+      0.8955223880597015,
+      0.8955223880597015,
+      0.9029850746268657,
+      0.9253731343283582,
+      0.9253731343283582,
+      0.9402985074626866,
+      0.9477611940298507,
+      0.9552238805970149,
+      0.9552238805970149,
+      0.9552238805970149,
+      0.9626865671641791,
+      0.9626865671641791,
+      0.9626865671641791,
+      0.9701492537313433,
+      0.9701492537313433,
+      0.9701492537313433,
+      0.9701492537313433,
+      0.9701492537313433,
+      0.9701492537313433,
+      0.9701492537313433,
+      0.9701492537313433,
+      0.9701492537313433,
+      0.9701492537313433
+    ],
+    "micro_curve": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
   },
   "final": {
     "label": "max_user_iterations",
@@ -75,12 +311,20 @@
     "tokens_median": 795791.0,
     "user_iterations": {
       "n": 134,
-      "mean": 14.104477611940299,
-      "std": 10.722941926525825,
+      "mean": 13.932835820895523,
+      "std": 10.571061193408987,
       "min": 3.0,
-      "max": 52.0
+      "max": 50.0
     },
-    "api_calls_mean": 14.104477611940299,
+    "api_calls_mean": 13.932835820895523,
+    "success_user_iterations": {
+      "n": 130,
+      "mean": 12.823076923076924,
+      "std": 8.581090970389429,
+      "min": 3.0,
+      "max": 41.0
+    },
+    "success_user_iterations_note": "Among finally-passed tasks: API turns when host eval succeeded (includes host verification retries when logged).",
     "estimated_cost_usd": {
       "n": 134,
       "mean": 0.0,
@@ -103,6 +347,7 @@
   },
   "cost_to_succeed": {
     "n_succeeded": 130,
+    "max_user_iterations": 50,
     "sources": {
       "final": 130
     },
@@ -115,8 +360,8 @@
     },
     "user_iterations": {
       "n": 130,
-      "mean": 12.96923076923077,
-      "std": 8.661541533080499,
+      "mean": 12.823076923076924,
+      "std": 8.581090970389429,
       "min": 3.0,
       "max": 41.0
     },
@@ -134,6 +379,6 @@
       "min": 22.959736,
       "max": 7645.095859
     },
-    "note": "Mean±std among tasks that succeed, measured at first successful pass@k checkpoint when available, else at final usage. duration_sec is wall-clock for the full task run among successes."
+    "note": "Mean±std among tasks that succeed within the turn budget (50), measured at first successful pass@k checkpoint when available, else at in-budget final usage. duration_sec is wall-clock for the full task run among those successes."
   }
 }

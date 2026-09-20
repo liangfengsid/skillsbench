@@ -7,20 +7,23 @@
     "split_part": null,
     "method": null,
     "phase": null,
-    "max_user_iterations": 50
+    "max_user_iterations": 40,
+    "include_final_in_pass_k": true,
+    "auc_max_k": 40
   },
   "pass_k": {
     "1": {
       "k": 1,
       "cumulative": true,
-      "macro_success_rate": null,
-      "macro_task_pass_rate": null,
+      "macro_success_rate": 0.0,
+      "macro_task_pass_rate": 0.0,
+      "tasks_total": 168,
       "tasks_with_turn_data": 0,
       "tasks_passed_at_turn": 0,
-      "micro_success_rate": null,
-      "micro_test_pass_rate": null,
+      "micro_success_rate": 0.0,
+      "micro_test_pass_rate": 0.0,
       "tests_passed_sum": 0,
-      "tests_total_sum": 0,
+      "tests_total_sum": 1077,
       "reward_mean": null,
       "tokens": {
         "n": 0,
@@ -46,12 +49,226 @@
         "min": null,
         "max": null
       },
-      "estimated_cost_usd_mean_at_turn": null
+      "estimated_cost_usd_mean_at_turn": null,
+      "include_final": true
+    },
+    "10": {
+      "k": 10,
+      "cumulative": true,
+      "macro_success_rate": 0.22023809523809523,
+      "macro_task_pass_rate": 0.22023809523809523,
+      "tasks_total": 168,
+      "tasks_with_turn_data": 45,
+      "tasks_passed_at_turn": 37,
+      "micro_success_rate": 0.14298978644382543,
+      "micro_test_pass_rate": 0.14298978644382543,
+      "tests_passed_sum": 154,
+      "tests_total_sum": 1077,
+      "reward_mean": 0.8222222222222222,
+      "tokens": {
+        "n": 45,
+        "mean": 986474.8,
+        "std": 310544.46191718883,
+        "min": 404810.0,
+        "max": 1679744.0
+      },
+      "tokens_mean_at_turn": 986474.8,
+      "tokens_median_at_turn": 993918.0,
+      "user_iterations": {
+        "n": 45,
+        "mean": 8.488888888888889,
+        "std": 1.3249737942901194,
+        "min": 5.0,
+        "max": 10.0
+      },
+      "api_calls_mean_at_turn": 8.488888888888889,
+      "estimated_cost_usd": {
+        "n": 45,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0,
+      "include_final": true
+    },
+    "20": {
+      "k": 20,
+      "cumulative": true,
+      "macro_success_rate": 0.5476190476190477,
+      "macro_task_pass_rate": 0.5476190476190477,
+      "tasks_total": 168,
+      "tasks_with_turn_data": 114,
+      "tasks_passed_at_turn": 92,
+      "micro_success_rate": 0.532033426183844,
+      "micro_test_pass_rate": 0.532033426183844,
+      "tests_passed_sum": 573,
+      "tests_total_sum": 1077,
+      "reward_mean": 0.8070175438596491,
+      "tokens": {
+        "n": 114,
+        "mean": 2276660.052631579,
+        "std": 1476616.1895471546,
+        "min": 404810.0,
+        "max": 6077262.0
+      },
+      "tokens_mean_at_turn": 2276660.052631579,
+      "tokens_median_at_turn": 1723819.0,
+      "user_iterations": {
+        "n": 114,
+        "mean": 12.587719298245615,
+        "std": 4.18343002663674,
+        "min": 5.0,
+        "max": 20.0
+      },
+      "api_calls_mean_at_turn": 12.587719298245615,
+      "estimated_cost_usd": {
+        "n": 114,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0,
+      "include_final": true
+    },
+    "40": {
+      "k": 40,
+      "cumulative": true,
+      "macro_success_rate": 0.7202380952380952,
+      "macro_task_pass_rate": 0.7202380952380952,
+      "tasks_total": 168,
+      "tasks_with_turn_data": 168,
+      "tasks_passed_at_turn": 121,
+      "micro_success_rate": 0.8913649025069638,
+      "micro_test_pass_rate": 0.8913649025069638,
+      "tests_passed_sum": 960,
+      "tests_total_sum": 1077,
+      "reward_mean": 0.7202380952380952,
+      "tokens": {
+        "n": 168,
+        "mean": 4991602.386904762,
+        "std": 5334052.698245095,
+        "min": 404810.0,
+        "max": 31108006.0
+      },
+      "tokens_mean_at_turn": 4991602.386904762,
+      "tokens_median_at_turn": 3188419.5,
+      "user_iterations": {
+        "n": 168,
+        "mean": 17.279761904761905,
+        "std": 8.276599720717632,
+        "min": 5.0,
+        "max": 40.0
+      },
+      "api_calls_mean_at_turn": 17.279761904761905,
+      "estimated_cost_usd": {
+        "n": 168,
+        "mean": 0.0,
+        "std": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "estimated_cost_usd_mean_at_turn": 0.0,
+      "include_final": true
     }
+  },
+  "auc": {
+    "k_min": 1,
+    "k_max": 40,
+    "method": "mean_of_rates",
+    "note": "Normalized AUC over continuous integer k: AUC = (1/40) * sum(rate(k) for k in 1..40).",
+    "include_final": true,
+    "macro_success_rate": 0.4616071428571429,
+    "micro_success_rate": 0.48535283194057566,
+    "macro_curve": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.005952380952380952,
+      0.02976190476190476,
+      0.05357142857142857,
+      0.08928571428571429,
+      0.17261904761904762,
+      0.22023809523809523,
+      0.2619047619047619,
+      0.3333333333333333,
+      0.35119047619047616,
+      0.38095238095238093,
+      0.4107142857142857,
+      0.4226190476190476,
+      0.44642857142857145,
+      0.4642857142857143,
+      0.5178571428571429,
+      0.5476190476190477,
+      0.5654761904761905,
+      0.5892857142857143,
+      0.6309523809523809,
+      0.6607142857142857,
+      0.6726190476190477,
+      0.6726190476190477,
+      0.6785714285714286,
+      0.6904761904761905,
+      0.6964285714285714,
+      0.7023809523809523,
+      0.7142857142857143,
+      0.7202380952380952,
+      0.7202380952380952,
+      0.7202380952380952,
+      0.7202380952380952,
+      0.7202380952380952,
+      0.7202380952380952,
+      0.7202380952380952,
+      0.7202380952380952,
+      0.7202380952380952
+    ],
+    "micro_curve": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0018570102135561746,
+      0.012070566388115135,
+      0.02692664809656453,
+      0.04642525533890436,
+      0.10770659238625813,
+      0.14298978644382543,
+      0.17363045496750232,
+      0.23491179201485607,
+      0.25348189415041783,
+      0.2841225626740947,
+      0.3147632311977716,
+      0.3426183844011142,
+      0.3871866295264624,
+      0.4168987929433612,
+      0.49396471680594245,
+      0.532033426183844,
+      0.5608170844939647,
+      0.596100278551532,
+      0.6620241411327762,
+      0.6889507892293407,
+      0.7158774373259053,
+      0.734447539461467,
+      0.7474466109563602,
+      0.7678737233054782,
+      0.7994428969359332,
+      0.8096564531104921,
+      0.83008356545961,
+      0.840297121634169,
+      0.840297121634169,
+      0.840297121634169,
+      0.8635097493036211,
+      0.8635097493036211,
+      0.8635097493036211,
+      0.8635097493036211,
+      0.8635097493036211,
+      0.8913649025069638
+    ]
   },
   "final": {
     "label": "max_user_iterations",
-    "max_user_iterations": 50,
+    "max_user_iterations": 40,
     "macro_success_rate": 0.7202380952380952,
     "macro_task_pass_rate": 0.7202380952380952,
     "tasks_with_evaluation": 168,
@@ -74,12 +291,20 @@
     "tokens_median": 3188419.5,
     "user_iterations": {
       "n": 168,
-      "mean": 19.601190476190474,
-      "std": 9.818191523993862,
-      "min": 7.0,
-      "max": 58.0
+      "mean": 17.279761904761905,
+      "std": 8.276599720717632,
+      "min": 5.0,
+      "max": 40.0
     },
-    "api_calls_mean": 19.601190476190474,
+    "api_calls_mean": 17.279761904761905,
+    "success_user_iterations": {
+      "n": 121,
+      "mean": 15.363636363636363,
+      "std": 6.629479617586889,
+      "min": 5.0,
+      "max": 32.0
+    },
+    "success_user_iterations_note": "Among finally-passed tasks: API turns when host eval succeeded (includes host verification retries when logged).",
     "estimated_cost_usd": {
       "n": 168,
       "mean": 0.0,
@@ -102,6 +327,7 @@
   },
   "cost_to_succeed": {
     "n_succeeded": 121,
+    "max_user_iterations": 40,
     "sources": {
       "final": 121
     },
@@ -114,10 +340,10 @@
     },
     "user_iterations": {
       "n": 121,
-      "mean": 17.239669421487605,
-      "std": 7.759966487672943,
-      "min": 7.0,
-      "max": 58.0
+      "mean": 15.363636363636363,
+      "std": 6.629479617586889,
+      "min": 5.0,
+      "max": 32.0
     },
     "estimated_cost_usd": {
       "n": 121,
@@ -133,6 +359,6 @@
       "min": 138.079582,
       "max": 3239.511675
     },
-    "note": "Mean±std among tasks that succeed, measured at first successful pass@k checkpoint when available, else at final usage. duration_sec is wall-clock for the full task run among successes."
+    "note": "Mean±std among tasks that succeed within the turn budget (40), measured at first successful pass@k checkpoint when available, else at in-budget final usage. duration_sec is wall-clock for the full task run among those successes."
   }
 }

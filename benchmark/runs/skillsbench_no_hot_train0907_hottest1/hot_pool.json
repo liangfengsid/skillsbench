@@ -1,0 +1,67 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1789539997.8052862,
+  "global_turn": 28,
+  "order": [
+    "skillsbench-host-verification"
+  ],
+  "entries": {
+    "skillsbench-host-verification": {
+      "name": "skillsbench-host-verification",
+      "key_points": [
+        "Container-only placement: Deliverables only in Docker image or `runs/` dir — host verifier can't find them",
+        "Stale outputs: Leftover JSON/CSV from a prior attempt may satisfy old tests but not new runs — always regenerate",
+        "Modifying test files: Never rewrite `test_outputs.py` in the source repo — only add `conftest.py`"
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_no_hot_train0907_hottest1/hermes_home/skills/skillsbench/skillsbench-host-verification",
+      "skill_md_mtime": 1789515573.086486,
+      "recorded_turn": 28,
+      "description": "Host-side pytest grading protocol for SkillsBench tasks — deliverable placement, conftest path remapping, container+host verification.",
+      "tags": [],
+      "scope": "Host-side pytest grading protocol for SkillsBench tasks — deliverable placement, conftest path remapping, container+host verification.",
+      "point_utilities": [
+        {
+          "n_labeled": 20,
+          "helpful": 13,
+          "harmful": 4,
+          "irrelevant": 3,
+          "success_sum": 16.0,
+          "reward_sum": 16.866667,
+          "iterations_sum": 697.0,
+          "n_success": 16,
+          "iterations_when_success_sum": 498.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 1,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.666667,
+          "iterations_sum": 60.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 1,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.666667,
+          "iterations_sum": 60.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 21,
+    "inject_success": 17,
+    "no_inject_n": 2,
+    "no_inject_success": 2,
+    "throttled": false,
+    "episodes_since_inject": 0
+  }
+}

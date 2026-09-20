@@ -192,7 +192,7 @@ def test_pass_k_includes_final_success_between_sparse_checkpoints():
 
 
 def test_pass_k_checkpoints_only_ignores_final_eval():
-    """Between-checkpoint final success must not inflate pass@k."""
+    """Between-checkpoint final success must not inflate pass@k when opted in."""
     mod = _load_module()
     records = [
         {
@@ -222,6 +222,7 @@ def test_pass_k_checkpoints_only_ignores_final_eval():
     summary = mod.aggregate_records(
         records,
         pass_k_values=[10, 15, 60],
+        include_final_in_pass_k=False,
     )
     assert summary["filters"]["include_final_in_pass_k"] is False
     assert summary["pass_k"]["10"]["include_final"] is False
@@ -235,8 +236,8 @@ def test_pass_k_checkpoints_only_ignores_final_eval():
     assert summary["final"]["macro_success_rate"] == 1.0
 
 
-def test_pass_k_default_is_checkpoints_only():
-    """Default aggregation matches --pass-k-checkpoints-only."""
+def test_pass_k_default_includes_in_budget_final():
+    """Default aggregation credits in-budget finals (not checkpoints-only)."""
     mod = _load_module()
     records = [
         {
@@ -262,10 +263,10 @@ def test_pass_k_default_is_checkpoints_only():
         }
     ]
     summary = mod.aggregate_records(records, pass_k_values=[5, 60])
-    assert summary["filters"]["include_final_in_pass_k"] is False
-    assert summary["pass_k"]["5"]["macro_success_rate"] == 0.0
+    assert summary["filters"]["include_final_in_pass_k"] is True
+    assert summary["pass_k"]["5"]["macro_success_rate"] == 1.0
+    assert summary["pass_k"]["60"]["macro_success_rate"] == 1.0
     assert summary["final"]["macro_success_rate"] == 1.0
-
 
 def test_pass_k_micro_prefers_final_over_inflated_later_checkpoint():
     """Like dynamic-object-aware-egomotion: high mid-run micro, worse final."""
@@ -388,6 +389,7 @@ def test_cost_to_succeed_respects_max_user_iterations():
         records,
         pass_k_values=[10, 60],
         max_user_iterations=60,
+        include_final_in_pass_k=False,
     )
     cts2 = ckpt_only["cost_to_succeed"]
     assert cts2["n_succeeded"] == 1

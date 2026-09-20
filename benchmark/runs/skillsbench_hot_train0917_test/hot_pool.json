@@ -1,0 +1,55 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1789740852.0905375,
+  "global_turn": 161,
+  "order": [
+    "skillsbench-host-grading"
+  ],
+  "entries": {
+    "skillsbench-host-grading": {
+      "name": "skillsbench-host-grading",
+      "key_points": [
+        "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`.",
+        "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_md_mtime": 1789734736.8880634,
+      "recorded_turn": 155,
+      "description": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
+      "tags": [],
+      "scope": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
+      "point_utilities": [
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 1,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.888889,
+          "iterations_sum": 30.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 1,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.888889,
+          "iterations_sum": 30.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 50,
+    "inject_success": 41,
+    "no_inject_n": 38,
+    "no_inject_success": 32,
+    "throttled": false,
+    "episodes_since_inject": 0
+  }
+}

@@ -8,7 +8,8 @@ Works for Hermes, CoEvoSkills, and other baselines that log compatible envelopes
 
 Metrics (see ``skillsbench_aggregate_core.py``):
   - macro / micro success rate at each pass@k turn budget (cumulative ≤k;
-    checkpoints-only by default; ``--no-pass-k-checkpoints-only`` to include finals)
+    in-budget finals credited by default; ``--pass-k-checkpoints-only`` to
+    score mid-run ``pass_at_turn`` snapshots only)
   - AUC of macro/micro pass@k over continuous k=1..60 (default; ``--auc-max-k``)
   - final rates after pass@k / AUC, with mean±std success turn (verification included)
   - cost to succeed: mean ± std of tokens and user iterations among successes
@@ -23,9 +24,9 @@ Usage::
     -o benchmark/runs/batch_summary.json \\
     --print-summary
 
-  # Opt into crediting in-budget final / verification-retry eval for pass@k:
+  # Opt into mid-run snapshots only (ignore in-budget finals for pass@k):
   python3 benchmark/scripts/aggregate_skillsbench_runs.py RUN.jsonl \\
-    --pass-k 1,5,10,60 --no-pass-k-checkpoints-only --print-summary
+    --pass-k 1,5,10,60 --pass-k-checkpoints-only --print-summary
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ def aggregate_records(
     method: Optional[str] = None,
     phase: Optional[str] = None,
     max_user_iterations: Optional[int] = None,
-    include_final_in_pass_k: bool = False,
+    include_final_in_pass_k: bool = True,
     auc_max_k: int = 60,
 ) -> Dict[str, Any]:
     """Build summary dict from JSONL run records (shared schema)."""
@@ -74,6 +75,50 @@ def aggregate_records(
 
 def format_summary_text(summary: Dict[str, Any]) -> str:
     return format_metrics_summary_text(summary)
+
+
+def default_step_pass_k_values(max_steps: int) -> List[int]:
+    """Sparse Success@k budgets for env-/execute-step suites (ALFWorld / AppWorld)."""
+    ms = max(1, int(max_steps))
+    out = [k for k in (1, 5, 10, 30, 50, 60) if k < ms]
+    out.append(ms)
+    return sorted(set(out))
+
+
+def load_jsonl_records(path: Path) -> List[dict]:
+    records: List[dict] = []
+    if not path.is_file():
+        return records
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def summarize_run_log(
+    log_path: Path,
+    *,
+    pass_k_values: List[int],
+    max_user_iterations: Optional[int] = None,
+    auc_max_k: int = 60,
+    include_final_in_pass_k: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """Aggregate Success@k / AUC / final from a driver JSONL log (last row per task)."""
+    records = load_jsonl_records(log_path)
+    if not records:
+        return None
+    return aggregate_records(
+        records,
+        pass_k_values=pass_k_values or [1],
+        max_user_iterations=max_user_iterations,
+        include_final_in_pass_k=include_final_in_pass_k,
+        auc_max_k=int(auc_max_k),
+    )
 
 
 def main() -> int:
@@ -117,12 +162,12 @@ def main() -> int:
     parser.add_argument(
         "--pass-k-checkpoints-only",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
-            "Score pass@k / AUC from pass_at_turn snapshots only (default: on). "
-            "Do not credit post-conversation host eval or verification retries "
-            "when user_iterations ≤ k. final_* rates are unchanged. "
-            "Use --no-pass-k-checkpoints-only to also credit in-budget finals."
+            "Score pass@k / AUC from pass_at_turn snapshots only (default: off). "
+            "When off (default), also credit post-conversation host eval / "
+            "verification retries when user_iterations ≤ k. final_* rates are "
+            "unchanged either way. Use --pass-k-checkpoints-only to ignore finals."
         ),
     )
     parser.add_argument(

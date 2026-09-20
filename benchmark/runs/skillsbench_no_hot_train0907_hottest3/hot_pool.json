@@ -1,0 +1,43 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1789573900.2348893,
+  "global_turn": 31,
+  "order": [
+    "skillsbench-docker-grading"
+  ],
+  "entries": {
+    "skillsbench-docker-grading": {
+      "name": "skillsbench-docker-grading",
+      "key_points": [
+        "The `solution/` directory is not executed — it contains reference/oracle scripts. You must produce outputs yourself."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_no_hot_train0907_hottest3/hermes_home/skills/skillsbench-docker-grading",
+      "skill_md_mtime": 1789570392.5688758,
+      "recorded_turn": 31,
+      "description": "SkillsBench grading protocol: host evaluator stages files to temp dir, runs pytest or test.sh. Deliverables must exist at task-root paths staged by the evaluator.",
+      "tags": [],
+      "scope": "SkillsBench grading protocol: host evaluator stages files to temp dir, runs pytest or test.sh. Deliverables must exist at task-root paths staged by the evaluator.",
+      "point_utilities": [
+        {
+          "n_labeled": 2,
+          "helpful": 1,
+          "harmful": 1,
+          "irrelevant": 0,
+          "success_sum": 1.0,
+          "reward_sum": 1.2,
+          "iterations_sum": 116.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 59.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 9,
+    "inject_success": 7,
+    "no_inject_n": 14,
+    "no_inject_success": 12,
+    "throttled": true,
+    "episodes_since_inject": 1
+  }
+}

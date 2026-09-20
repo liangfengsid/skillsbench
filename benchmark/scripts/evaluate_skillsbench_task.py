@@ -17,6 +17,7 @@ Set ``eval_mode: host`` on envelopes.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -24,6 +25,11 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    import tomli as tomllib  # type: ignore[no-redef]
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
@@ -337,6 +343,32 @@ def _metrics_from_cases(
     return task_success, reward, passed, failed, skipped, total
 
 
+def _read_verifier_env(task_dir: Path) -> Dict[str, str]:
+    """Read ``[verifier.env]`` and ``[verifier]`` from ``task.toml``."""
+    toml_path = task_dir / "task.toml"
+    if not toml_path.is_file():
+        return {}
+    try:
+        with open(toml_path, "rb") as f:
+            data = tomllib.load(f)
+    except Exception:
+        return {}
+    env: Dict[str, str] = {}
+    verifier = data.get("verifier") or {}
+    for key, val in verifier.items():
+        if isinstance(val, str):
+            env[key] = val
+        elif isinstance(val, (int, float)):
+            env[key] = str(val)
+    verifier_env = verifier.get("env") or {}
+    for key, val in verifier_env.items():
+        if isinstance(val, str):
+            env[key] = val
+        elif isinstance(val, (int, float)):
+            env[key] = str(val)
+    return env
+
+
 def evaluate_task_host(
     *,
     task_id: str,
@@ -362,6 +394,8 @@ def evaluate_task_host(
             f"Missing tests/test_outputs.py, test_*.py, or test.sh under {task_dir}",
         )
 
+    verifier_env = _read_verifier_env(task_dir)
+
     with tempfile.TemporaryDirectory(prefix=f"skillsbench-eval-{task_id}-") as tmp:
         stage = Path(tmp)
         host_root = stage_task_for_host_eval(task_dir, stage)
@@ -379,6 +413,7 @@ def evaluate_task_host(
                 targets=pytest_targets,
                 sim_info=sim_info,
                 timeout_sec=timeout_sec,
+                env=verifier_env,
             )
         return _run_test_sh_eval(
             task_id=task_id,
@@ -388,6 +423,7 @@ def evaluate_task_host(
             logs_dir=logs_dir,
             sim_info=sim_info,
             timeout_sec=timeout_sec,
+            env=verifier_env,
         )
 
 
@@ -441,6 +477,7 @@ def _run_pytest_eval(
     targets: Sequence[str],
     sim_info: Dict[str, Any],
     timeout_sec: float,
+    env: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     ctrf_path = logs_dir / "verifier" / "ctrf.json"
     cmd = [
@@ -453,6 +490,14 @@ def _run_pytest_eval(
     ]
     if _ctrf_plugin_available():
         cmd.extend(["--ctrf", str(ctrf_path)])
+    # Merge task.toml [verifier.env] into subprocess environment
+    # Remap container workspace paths in env var values (e.g. WORKSPACE=/root -> /tmp/stage/root)
+    host_root_str = str(host_root)
+    proc_env = os.environ.copy() if env is None else {**os.environ.copy(), **env}
+    for prefix in _WORKSPACE_PREFIXES:
+        for key, val in proc_env.items():
+            if isinstance(val, str) and val.startswith(prefix):
+                proc_env[key] = host_root_str + val[len(prefix):]
     try:
         proc = subprocess.run(
             cmd,
@@ -460,6 +505,7 @@ def _run_pytest_eval(
             capture_output=True,
             text=True,
             timeout=timeout_sec,
+            env=proc_env,
         )
     except subprocess.TimeoutExpired:
         return _eval_error(
@@ -512,6 +558,7 @@ def _run_test_sh_eval(
     logs_dir: Path,
     sim_info: Dict[str, Any],
     timeout_sec: float,
+    env: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     script = tests_dir / "test.sh"
     if not script.is_file():
@@ -521,6 +568,13 @@ def _run_test_sh_eval(
         host_python=sys.executable,
     )
     script.write_text(adapted, encoding="utf-8")
+    # Remap container workspace paths in env var values
+    host_root_str = str(host_root)
+    proc_env = os.environ.copy() if env is None else {**os.environ.copy(), **env}
+    for prefix in _WORKSPACE_PREFIXES:
+        for key, val in proc_env.items():
+            if isinstance(val, str) and val.startswith(prefix):
+                proc_env[key] = host_root_str + val[len(prefix):]
     try:
         proc = subprocess.run(
             ["bash", str(script)],
@@ -528,6 +582,7 @@ def _run_test_sh_eval(
             capture_output=True,
             text=True,
             timeout=timeout_sec,
+            env=proc_env,
         )
     except subprocess.TimeoutExpired:
         return _eval_error(

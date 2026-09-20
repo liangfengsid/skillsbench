@@ -1,0 +1,55 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1788508866.4205074,
+  "global_turn": 5203,
+  "order": [
+    "api-sandbox-tasks"
+  ],
+  "entries": {
+    "api-sandbox-tasks": {
+      "name": "api-sandbox-tasks",
+      "key_points": [
+        "Never guess IDs or tokens — always look them up via APIs",
+        "Always process all pages — paginated APIs return partial results; loop until empty response"
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/appworld_hot_train0901_unseen/hermes_home/skills/productivity/api-sandbox-tasks",
+      "skill_md_mtime": 1788508532.5739899,
+      "recorded_turn": 5193,
+      "description": "",
+      "tags": [],
+      "scope": "api-sandbox-tasks",
+      "point_utilities": [
+        {
+          "n_labeled": 1,
+          "helpful": 1,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 29.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 29.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 1,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 29.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 29.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 67,
+    "inject_success": 34,
+    "no_inject_n": 190,
+    "no_inject_success": 139,
+    "throttled": true,
+    "episodes_since_inject": 5
+  }
+}

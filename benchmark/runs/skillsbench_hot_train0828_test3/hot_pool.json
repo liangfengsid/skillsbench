@@ -1,0 +1,43 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1788486629.5502553,
+  "global_turn": 227,
+  "order": [
+    "skillsbench-task-solver"
+  ],
+  "entries": {
+    "skillsbench-task-solver": {
+      "name": "skillsbench-task-solver",
+      "key_points": [
+        "Do NOT run `solution/` scripts — write your own outputs. Running provided solution scripts does not satisfy the task."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0828_test3/hermes_home/skills/mlops/skillsbench-task-solver",
+      "skill_md_mtime": 1788474623.8283162,
+      "recorded_turn": 227,
+      "description": "Solve SkillsBench benchmark tasks: read instructions, replicate verifier logic, produce graded outputs in the task directory.",
+      "tags": [],
+      "scope": "Solve SkillsBench benchmark tasks: read instructions, replicate verifier logic, produce graded outputs in the task directory.",
+      "point_utilities": [
+        {
+          "n_labeled": 14,
+          "helpful": 7,
+          "harmful": 2,
+          "irrelevant": 5,
+          "success_sum": 12.0,
+          "reward_sum": 12.333333,
+          "iterations_sum": 361.0,
+          "n_success": 12,
+          "iterations_when_success_sum": 296.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 15,
+    "inject_success": 12,
+    "no_inject_n": 8,
+    "no_inject_success": 7,
+    "throttled": true,
+    "episodes_since_inject": 3
+  }
+}

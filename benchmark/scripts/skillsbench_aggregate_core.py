@@ -7,13 +7,13 @@ share one aggregator.
 
 Headline metrics
 ----------------
-- **macro success rate@k** — fraction of **all** tasks that succeeded at *any*
-  ``pass_at_turn`` checkpoint with turn ≤ *k*. By default
-  (``include_final_in_pass_k=False`` / ``--pass-k-checkpoints-only``), only
-  ``pass_at_turn`` keys count — post-conversation host eval and verification
-  retries do not. Pass ``include_final_in_pass_k=True`` /
-  ``--no-pass-k-checkpoints-only`` to also credit final evaluation when
-  ``user_iterations ≤ k``. Tasks with no in-budget observation (still running past
+- **macro success rate@k** (Success@k) — fraction of **all** tasks that
+  succeeded within budget *k* (any ``pass_at_turn`` with turn ≤ *k*, or by
+  default final host eval when budget iterations ≤ *k*). Default is
+  ``include_final_in_pass_k=True`` / ``--no-pass-k-checkpoints-only``. Pass
+  ``include_final_in_pass_k=False`` / ``--pass-k-checkpoints-only`` to score
+  mid-run ``pass_at_turn`` snapshots only (ignore post-conversation eval /
+  verification retries). Tasks with no in-budget observation (still running past
   *k*, or missing checkpoints) count as **not** succeeded — denominator is
   the suite size, not only early finishers. This is cumulative within a
   single trajectory budget, so rates are monotonic in *k*.
@@ -21,6 +21,10 @@ Headline metrics
   workspace state can regress after an earlier pass, and success can land
   between sparse checkpoint turns (e.g. final pass at 15 API calls with keys
   only at 1/5/10).
+
+  Budget axis: SkillsBench uses Hermes API turns (``api_calls``). ALFWorld /
+  AppWorld use environment / ``execute()`` steps (``evaluation.steps`` /
+  ``steps_taken``), matching those suites' ``max_steps`` budgets.
 - **micro success rate@k** — fraction of pytest cases passed within budget *k*
   out of **all** known test cases in the suite. For each task, if there is an
   in-budget observation, use that terminal score (final when
@@ -32,9 +36,9 @@ Headline metrics
 - **cost to succeed** — among tasks that succeed **within the turn budget**,
   mean ± std of cumulative tokens and user iterations (API turns) at the
   *first* successful checkpoint (earliest ``pass_at_turn`` with success,
-  else in-budget final usage). The budget is ``max_user_iterations`` when
-  set, else ``max(pass_k_values)`` under ``include_final_in_pass_k=False``.
-  Tasks that only succeed after a verification retry or past the budget
+  else in-budget final usage when ``include_final_in_pass_k``). The budget is
+  ``max_user_iterations`` when set, else ``max(pass_k_values)`` under
+  ``include_final_in_pass_k=False``. Tasks that only succeed past the budget
   are excluded.
 - **AUC of pass@k** — for continuous integer *k* from 1 to ``auc_max_k``
   (default 60), compute macro and micro success rates at each *k*, then
@@ -95,23 +99,100 @@ def _mean_std(vals: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
+_SKIP_SCHEMAS = frozenset(
+    {
+        "skillsbench.hermes_run_error.v1",
+        "skillsbench.baseline_run_error.v1",
+        "terminalbench.hermes_run_error.v1",
+        "terminalbench.baseline_run_error.v1",
+        "alfworld.hermes_run_error.v1",
+        "appworld.hermes_run_error.v1",
+        "appworld.hermes_eval_error.v1",
+        "appworld.hermes_eval_skip.v1",
+    }
+)
+
+
+def _infer_benchmark(record: dict) -> Optional[str]:
+    bench = record.get("benchmark")
+    if bench:
+        return str(bench)
+    schema = str(record.get("schema") or "")
+    if schema.startswith("appworld."):
+        return "appworld"
+    if schema.startswith("alfworld."):
+        return "alfworld"
+    if schema.startswith("skillsbench.") or schema.startswith("terminalbench."):
+        return "skillsbench"
+    return None
+
+
+def _merge_prefer_newer(older: dict, newer: dict) -> dict:
+    """Keep the newer row, but carry forward step/usage fields from an older run row.
+
+    AppWorld JSONLs often append ``hermes_eval`` after ``hermes_run``; the eval
+    row has the authoritative outcome but no ``steps_taken``. Without this merge,
+    Success@k would see success with a missing budget and under-count.
+    """
+    out = dict(newer)
+    for key in (
+        "steps_taken",
+        "max_steps",
+        "hermes_stats",
+        "run_conversation_result",
+        "metrics",
+        "duration_sec",
+        "pass_at_turn",
+    ):
+        if out.get(key) in (None, {}, []) and older.get(key) not in (None, {}, []):
+            out[key] = older[key]
+
+    older_ev = older.get("evaluation") if isinstance(older.get("evaluation"), dict) else {}
+    newer_ev = out.get("evaluation") if isinstance(out.get("evaluation"), dict) else {}
+    if older_ev or newer_ev:
+        merged_ev = {**older_ev, **newer_ev}
+        if merged_ev.get("steps") is None and older_ev.get("steps") is not None:
+            merged_ev["steps"] = older_ev["steps"]
+        if "task_success" not in merged_ev and "success" in merged_ev:
+            merged_ev["task_success"] = bool(merged_ev.get("success"))
+        out["evaluation"] = merged_ev
+
+    if not out.get("benchmark"):
+        out["benchmark"] = _infer_benchmark(out) or _infer_benchmark(older)
+    return out
+
+
 def latest_record_per_task(records: Sequence[dict]) -> Dict[str, dict]:
     by_task: Dict[str, dict] = {}
     for rec in records:
-        if rec.get("schema") in (
-            "skillsbench.hermes_run_error.v1",
-            "skillsbench.baseline_run_error.v1",
-            "terminalbench.hermes_run_error.v1",
-            "terminalbench.baseline_run_error.v1",
-        ):
+        schema = rec.get("schema")
+        if schema in _SKIP_SCHEMAS:
             continue
-        tid = rec.get("skillsbench_task_id") or rec.get("task_id")
+        if isinstance(schema, str) and schema.endswith("_batch.v1"):
+            continue
+        tid = (
+            rec.get("skillsbench_task_id")
+            or rec.get("appworld_task_id")
+            or rec.get("task_id")
+        )
         if not tid:
             continue
         tid = str(tid)
         prev = by_task.get(tid)
-        if prev is None or (rec.get("ts_end_iso") or "") >= (prev.get("ts_end_iso") or ""):
-            by_task[tid] = rec
+        if prev is None:
+            row = dict(rec)
+            if not row.get("benchmark"):
+                inferred = _infer_benchmark(row)
+                if inferred:
+                    row["benchmark"] = inferred
+            by_task[tid] = row
+            continue
+        prev_ts = prev.get("ts_end_iso") or ""
+        rec_ts = rec.get("ts_end_iso") or ""
+        if rec_ts >= prev_ts:
+            by_task[tid] = _merge_prefer_newer(prev, rec)
+        else:
+            by_task[tid] = _merge_prefer_newer(rec, prev)
     return by_task
 
 
@@ -166,12 +247,34 @@ def _turn_blocks_upto(record: dict, turn: int) -> List[Tuple[int, dict]]:
     return out
 
 
+def _normalize_eval(ev: dict) -> dict:
+    """Copy eval block; map AppWorld ``success`` → ``task_success`` when needed."""
+    out = dict(ev)
+    if "task_success" not in out and "success" in out:
+        out["task_success"] = bool(out.get("success"))
+    return out
+
+
+def _is_task_success(ev: dict) -> bool:
+    if not isinstance(ev, dict):
+        return False
+    if "task_success" in ev:
+        return bool(ev.get("task_success"))
+    if "success" in ev:
+        return bool(ev.get("success"))
+    return False
+
+
+def _has_task_outcome(ev: dict) -> bool:
+    return isinstance(ev, dict) and ("task_success" in ev or "success" in ev)
+
+
 def _eval_from_block(block: dict) -> dict:
     ev = block.get("evaluation")
     if isinstance(ev, dict):
-        return ev
-    if "task_success" in block:
-        return block
+        return _normalize_eval(ev)
+    if "task_success" in block or "success" in block:
+        return _normalize_eval(block)
     return {}
 
 
@@ -192,31 +295,63 @@ def _cost_from_block(block: dict) -> Optional[float]:
     return _to_float(block.get("estimated_cost_usd"))
 
 
+def _is_env_step_budget_record(record: dict) -> bool:
+    """ALFWorld / AppWorld Success@k budgets are env / execute steps, not API turns."""
+    bench = str(record.get("benchmark") or "").lower()
+    if bench in ("alfworld", "appworld"):
+        return True
+    schema = str(record.get("schema") or "").lower()
+    return schema.startswith("alfworld.") or schema.startswith("appworld.")
+
+
+def _env_step_budget(record: dict) -> Optional[float]:
+    ev = record.get("evaluation") if isinstance(record.get("evaluation"), dict) else {}
+    return (
+        _to_float(record.get("steps_taken"))
+        or _to_float(ev.get("steps"))
+        or _to_float(record.get("steps"))
+    )
+
+
 def _final_usage(record: dict) -> Dict[str, Optional[float]]:
     metrics = record.get("metrics") or {}
     final_m = metrics.get("final") if isinstance(metrics, dict) else None
     res = record.get("run_conversation_result") or {}
+    if not isinstance(res, dict):
+        res = {}
+    hs = record.get("hermes_stats") if isinstance(record.get("hermes_stats"), dict) else {}
+
     if isinstance(final_m, dict):
         tok_block = final_m.get("tokens") or {}
-        return {
-            "tokens": _to_float(tok_block.get("total")),
-            "user_iterations": _to_float(final_m.get("api_calls")),
-            "estimated_cost_usd": _to_float(final_m.get("estimated_cost_usd")),
-        }
+        tokens = _to_float(tok_block.get("total"))
+        api_calls = _to_float(final_m.get("api_calls"))
+        cost = _to_float(final_m.get("estimated_cost_usd"))
+    else:
+        tokens = _to_float(res.get("total_tokens")) or _to_float(hs.get("total_tokens"))
+        api_calls = _to_float(res.get("api_calls")) or _to_float(hs.get("api_calls"))
+        cost = _to_float(res.get("estimated_cost_usd")) or _to_float(
+            hs.get("estimated_cost_usd")
+        )
+
+    if _is_env_step_budget_record(record):
+        user_iterations = _env_step_budget(record)
+    else:
+        user_iterations = api_calls
+
     return {
-        "tokens": _to_float(res.get("total_tokens")),
-        "user_iterations": _to_float(res.get("api_calls")),
-        "estimated_cost_usd": _to_float(res.get("estimated_cost_usd")),
+        "tokens": tokens,
+        "user_iterations": user_iterations,
+        "estimated_cost_usd": cost,
     }
 
 
 def _final_eval(record: dict) -> dict:
     metrics = record.get("metrics") or {}
     final_m = metrics.get("final") if isinstance(metrics, dict) else None
-    if isinstance(final_m, dict) and "task_success" in final_m:
-        return final_m
+    if isinstance(final_m, dict) and _has_task_outcome(final_m):
+        return _normalize_eval(final_m)
     ev = record.get("evaluation")
-    return ev if isinstance(ev, dict) else {}
+    return _normalize_eval(ev) if isinstance(ev, dict) else {}
 
 
 def _suite_tests_total(record: dict) -> Optional[int]:
@@ -278,7 +413,7 @@ def first_success_checkpoint(
         if not block:
             continue
         ev = _eval_from_block(block)
-        if ev.get("task_success"):
+        if _is_task_success(ev):
             return {
                 "source": "pass_at_turn",
                 "user_iterations": float(turn),
@@ -290,7 +425,7 @@ def first_success_checkpoint(
     if not include_final:
         return None
     ev = _final_eval(record)
-    if not ev.get("task_success"):
+    if not _is_task_success(ev):
         return None
     usage = _final_usage(record)
     ui = usage.get("user_iterations")
@@ -416,7 +551,7 @@ def _pass_k_slice(
 
         any_success = False
         for _t, block, _src in obs:
-            if _eval_from_block(block).get("task_success"):
+            if _is_task_success(_eval_from_block(block)):
                 any_success = True
                 break
         if any_success:
@@ -489,7 +624,7 @@ def _final_success_turn(record: dict) -> Optional[float]:
     final usage ``user_iterations`` / ``api_calls``.
     """
     ev = _final_eval(record)
-    if not ev.get("task_success"):
+    if not _is_task_success(ev):
         return None
     attempts = record.get("host_verification_attempts")
     if isinstance(attempts, list):
@@ -497,7 +632,7 @@ def _final_success_turn(record: dict) -> Optional[float]:
             if not isinstance(attempt, dict):
                 continue
             aev = attempt.get("evaluation") or {}
-            if not isinstance(aev, dict) or not aev.get("task_success"):
+            if not isinstance(aev, dict) or not _is_task_success(aev):
                 continue
             ac = _to_float(attempt.get("api_calls"))
             if ac is not None:
@@ -552,7 +687,7 @@ def aggregate_skillsbench_metrics(
     method: Optional[str] = None,
     phase: Optional[str] = None,
     max_user_iterations: Optional[int] = None,
-    include_final_in_pass_k: bool = False,
+    include_final_in_pass_k: bool = True,
     auc_max_k: int = 60,
 ) -> Dict[str, Any]:
     """
@@ -562,17 +697,7 @@ def aggregate_skillsbench_metrics(
         records, split_part=split_part, method=method, phase=phase
     )
     by_task = latest_record_per_task(records)
-    errors = sum(
-        1
-        for r in records
-        if r.get("schema")
-        in (
-            "skillsbench.hermes_run_error.v1",
-            "skillsbench.baseline_run_error.v1",
-            "terminalbench.hermes_run_error.v1",
-            "terminalbench.baseline_run_error.v1",
-        )
-    )
+    errors = sum(1 for r in records if r.get("schema") in _SKIP_SCHEMAS)
 
     empty_filters = {
         "split_part": split_part,
@@ -642,9 +767,9 @@ def aggregate_skillsbench_metrics(
         rec = by_task[tid]
         ev = _final_eval(rec)
         usage = _final_usage(rec)
-        if "task_success" in ev:
+        if _has_task_outcome(ev):
             final_with_eval += 1
-            if ev.get("task_success"):
+            if _is_task_success(ev):
                 final_passed += 1
                 st = _final_success_turn(rec)
                 if st is not None:

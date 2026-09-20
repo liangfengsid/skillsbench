@@ -67,18 +67,28 @@ All drivers should log JSONL with `evaluation`, optional `pass_at_turn`, and
 `run_conversation_result` (tokens / `api_calls`). Then:
 
 ```bash
+# SkillsBench — budget k = Hermes API turns (user iterations)
 python benchmark/scripts/aggregate_skillsbench_runs.py RUN.jsonl \
   --pass-k 1,5,10,70 --max-user-iterations 90 \
   -o RUN_summary.json --print-summary
+
+# ALFWorld / AppWorld — same aggregator; budget k = env / execute() steps
+python benchmark/scripts/aggregate_skillsbench_runs.py RUN.jsonl \
+  --pass-k 1,5,10,30,50 --max-user-iterations 50 \
+  --auc-max-k 50 \
+  -o RUN_summary.json --print-summary
 ```
 
-Reports **macro/micro success@k** from `pass_at_turn` snapshots only
-(**default**; opt out with `--no-pass-k-checkpoints-only`), **final** rates
-within max iterations, and **cost-to-succeed** mean±std among tasks that first
-succeed within `--max-user-iterations` (or `max(--pass-k)` when that flag is
-omitted under checkpoints-only). Use `--no-pass-k-checkpoints-only` to also
-credit post-conversation host eval when `api_calls ≤ k` (including verification
-retries). See
+Reports **macro/micro Success@k** (success **within** budget *k*, not exact-at-*k*)
+from `pass_at_turn` snapshots **and** in-budget final host eval (**default**;
+opt into snapshots-only with `--pass-k-checkpoints-only`), **AUC** of that
+curve over `k=1..--auc-max-k`, **final** rates within max iterations, and
+**cost-to-succeed** mean±std among tasks that first succeed within
+`--max-user-iterations` (or `max(--pass-k)` when that flag is omitted under
+checkpoints-only).
+
+Budget axis: SkillsBench uses Hermes API turns; ALFWorld / AppWorld use
+environment / `execute()` steps (`evaluation.steps` / `steps_taken`). See
 [`scripts/skillsbench_aggregate_core.py`](scripts/skillsbench_aggregate_core.py).
 
 Hot-pool-specific proxies (plus the same core block as `core_metrics`):
@@ -98,7 +108,7 @@ python benchmark/scripts/analyze_hot_pool_runs.py RUN.jsonl \
 | [`run_alfworld_with_hermes.py`](scripts/run_alfworld_with_hermes.py) | ALFWorld TextWorld: Hermes picks admissible commands |
 | [`evaluate_skillsbench_task.py`](scripts/evaluate_skillsbench_task.py) | Host pytest / `test.sh` verifier for SkillsBench |
 | [`skillsbench_metrics.py`](scripts/skillsbench_metrics.py) | Build compact `metrics` blocks for JSONL rows |
-| [`aggregate_skillsbench_runs.py`](scripts/aggregate_skillsbench_runs.py) | Shared macro/micro success@k + cost-to-succeed mean±std |
+| [`aggregate_skillsbench_runs.py`](scripts/aggregate_skillsbench_runs.py) | Shared Success@k / AUC / final / cost-to-succeed (SkillsBench, ALFWorld, AppWorld) |
 | [`skillsbench_aggregate_core.py`](scripts/skillsbench_aggregate_core.py) | Core metrics library used by aggregators + baselines |
 | [`make_skillsbench_splits.py`](scripts/make_skillsbench_splits.py) | Generate SkillsBench train/val/test split JSON |
 | [`compare_skillsbench_runs.py`](scripts/compare_skillsbench_runs.py) | Compare two SkillsBench JSONL runs (tokens, cost, API calls) |
@@ -293,7 +303,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
   --model Qwen/Qwen3.6-27B \
   --log-jsonl benchmark/runs/stratified_test.jsonl
 
-# Aggregate across tasks: macro/micro from pass_at_turn checkpoints only (default)
+# Aggregate across tasks: macro/micro pass@k (in-budget finals included by default)
 python3 benchmark/scripts/aggregate_skillsbench_runs.py \
   benchmark/runs/stratified_test.jsonl \
   --pass-k 1,5,10,70 \
@@ -313,7 +323,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py \
 
 **Aggregate output** (`aggregate_skillsbench_runs.py`):
 
-- `pass_k.<turn>.macro_task_pass_rate` — fraction of tasks with a successful `pass_at_turn` checkpoint ≤ *k* (default checkpoints-only; use `--no-pass-k-checkpoints-only` to also credit in-budget final eval)
+- `pass_k.<turn>.macro_task_pass_rate` — fraction of tasks with success within budget *k* (any successful `pass_at_turn` ≤ *k*, or in-budget final by default; use `--pass-k-checkpoints-only` for snapshots only)
 - `pass_k.<turn>.micro_test_pass_rate` — Σ passed test cases / Σ total at the terminal in-budget observation
 - `pass_k.<turn>.tokens_mean_at_turn` / `input_tokens_mean_at_turn` / `api_calls_mean_at_turn`
 - `pass_k.<turn>.estimated_cost_usd_mean_at_turn` / `reward_mean`
@@ -547,15 +557,25 @@ python3 benchmark/scripts/run_alfworld_with_hermes.py \
   --log-jsonl benchmark/runs/alfworld_smoke/runs.jsonl \
   --print-summary
 
-# Official-style eval split (valid_unseen, 50 env steps)
+# Official-style eval split (valid_unseen, 50 env steps).
+# After the batch: prints Success@k / AUC / final / cost (default --print-batch-summary)
+# and writes DIR/summary.json. Budget k = env steps (default pass-k 1,5,10,30,50;
+# --auc-max-k defaults to --max-steps).
 python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen \
   --model Qwen/Qwen3.6-27B --max-steps 50 \
+  --pass-k 1,5,10,30,50 --auc-max-k 50 \
   --experiment-dir benchmark/runs/alfworld_unseen \
   --log-jsonl benchmark/runs/alfworld_unseen/runs.jsonl \
   --resume --print-summary
+
+# Re-aggregate an existing ALFWorld JSONL (same schema as the end-of-batch line)
+python3 benchmark/scripts/aggregate_skillsbench_runs.py \
+  benchmark/runs/alfworld_unseen/runs.jsonl \
+  --pass-k 1,5,10,30,50 --max-user-iterations 50 --auc-max-k 50 \
+  -o benchmark/runs/alfworld_unseen/summary.json --print-summary
 ```
 
-`--task` ids look like `pick_and_place_simple-Mug-None-Desk-1/trial_T…`. Default is **no Hermes tools** (pure text policy). Pass `--tools` / `--hot-pool` if you want skills in the loop. `--amem` and `--dc` are paper memory baselines (each forces `--no-hot-pool` and enables `--tools` so skill tools stay on); see [`baselines/amem/README.md`](baselines/amem/README.md) and [`baselines/dcheatsheet/README.md`](baselines/dcheatsheet/README.md). With `--isolate-hermes-home`, skills are seeded from repo `skills/` (not `~/.hermes/skills`). JSONL uses `evaluation.task_success` so `aggregate_skillsbench_runs.py` still works.
+`--task` ids look like `pick_and_place_simple-Mug-None-Desk-1/trial_T…`. Default is **no Hermes tools** (pure text policy). Pass `--tools` / `--hot-pool` if you want skills in the loop. `--amem` and `--dc` are paper memory baselines (each forces `--no-hot-pool` and enables `--tools` so skill tools stay on); see [`baselines/amem/README.md`](baselines/amem/README.md) and [`baselines/dcheatsheet/README.md`](baselines/dcheatsheet/README.md). With `--isolate-hermes-home`, skills are seeded from repo `skills/` (not `~/.hermes/skills`). JSONL uses `evaluation.task_success` so `aggregate_skillsbench_runs.py` still works. Per-task lines use `--print-summary`; batch Success@k / AUC use `--print-batch-summary` (on by default; `--no-print-batch-summary` to silence). Override budgets with `--pass-k` / `--auc-max-k` / `--summary-output`.
 
 If `ALFWORLD_DATA` is unset, the driver also looks at `/data/liangfeng/alfwordData` and `/data/liangfeng/alfworldData`.
 
@@ -575,10 +595,14 @@ pip install -e benchmark/appworld
 
 python3 benchmark/scripts/run_appworld_with_hermes.py --list-tasks --dataset train
 
-# 1) Train — generate / grow hot pool
+# 1) Train — generate / grow hot pool.
+# After the batch: prints Success@k / AUC / final / cost (default --print-batch-summary)
+# and writes DIR/summary.json. Budget k = AppWorld execute() steps
+# (default pass-k 1,5,10,30,40; --auc-max-k defaults to --max-steps).
 python3 benchmark/scripts/run_appworld_with_hermes.py \
   --dataset train --all \
   --model Qwen/Qwen3.6-27B \
+  --max-steps 40 --pass-k 1,5,10,30,40 --auc-max-k 40 \
   --experiment-dir benchmark/runs/appworld_hot_train \
   --isolate-hermes-home --hot-pool \
   --experiment-name hermes-train \
@@ -589,6 +613,7 @@ python3 benchmark/scripts/run_appworld_with_hermes.py \
 python3 benchmark/scripts/run_appworld_with_hermes.py \
   --dataset test_normal --all \
   --model Qwen/Qwen3.6-27B \
+  --max-steps 40 --pass-k 1,5,10,30,40 --auc-max-k 40 \
   --experiment-dir benchmark/runs/appworld_hot_test \
   --isolate-hermes-home \
   --hot-pool --hot-pool-persist benchmark/runs/appworld_hot_train/hot_pool.json \
@@ -616,13 +641,19 @@ python3 benchmark/scripts/run_appworld_with_hermes.py \
   --experiment-name hermes-no-hot-test \
   --log-jsonl benchmark/runs/appworld_no_hot_test/runs.jsonl \
   --resume --print-summary
+
+# Re-aggregate an existing AppWorld JSONL (run rows; eval-only rows merge steps from runs)
+python3 benchmark/scripts/aggregate_skillsbench_runs.py \
+  benchmark/runs/appworld_hot_test/runs.jsonl \
+  --pass-k 1,5,10,30,40 --max-user-iterations 40 --auc-max-k 40 \
+  -o benchmark/runs/appworld_hot_test/summary.json --print-summary
 ```
 
 **AppWorld data:** from `benchmark/appworld/`, run `appworld download data` once (sets up `data/` under `APPWORLD_ROOT`; default is the AppWorld repo root). See [`appworld/README.md`](appworld/README.md) for `APPWORLD_ROOT` and full setup.
 
 **Hermes tools:** the driver exposes all configured Hermes toolsets by default (terminal, files, web search, skills, etc.). AppWorld API actions still run via ` ```python ` blocks executed in the AppWorld REPL. Use `--no-tools` to restore the original code-only ReAct mode. With tools enabled, each AppWorld step allows up to 90 Hermes tool-calling iterations by default (`--max-hermes-iterations` overrides).
 
-**Hot pool:** same CLI as SkillsBench/ALFWorld. With `--experiment-dir` + `--hot-pool` and no `--hot-pool-persist`, the pool defaults to `DIR/hot_pool.json`. After evaluation, outcome feedback updates tip utilities (iterations = AppWorld steps when present). JSONL includes `hot_pool_enabled`, `hot_pool_persist`, optional `hot_pool_telemetry`, and `evaluation.task_success` (alias of AppWorld `success`) for shared aggregators.
+**Hot pool:** same CLI as SkillsBench/ALFWorld. With `--experiment-dir` + `--hot-pool` and no `--hot-pool-persist`, the pool defaults to `DIR/hot_pool.json`. After evaluation, outcome feedback updates tip utilities (iterations = AppWorld steps when present). JSONL includes `hot_pool_enabled`, `hot_pool_persist`, optional `hot_pool_telemetry`, and `evaluation.task_success` (alias of AppWorld `success`) for shared aggregators. Per-task lines use `--print-summary`; batch Success@k / AUC use `--print-batch-summary` (on by default). Override budgets with `--pass-k` / `--auc-max-k` / `--summary-output`.
 
 **A-Mem:** `--amem` on the same driver (skill tools stay on; incompatible with `--hot-pool` and `--dc`). Persist dir defaults to `DIR/amem`. See [`baselines/amem/README.md`](baselines/amem/README.md).
 

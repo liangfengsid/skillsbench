@@ -1177,12 +1177,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--pass-k-checkpoints-only",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "For batch summary: score pass@k / AUC from pass_at_turn snapshots only "
-            "(default: on; same as aggregate_skillsbench_runs.py). "
-            "Do not credit post-conversation host eval when user_iterations ≤ k. "
-            "Use --no-pass-k-checkpoints-only to also credit in-budget finals."
+            "(default: off; same as aggregate_skillsbench_runs.py). "
+            "When off (default), also credit post-conversation host eval when "
+            "user_iterations ≤ k. Use --pass-k-checkpoints-only to ignore finals."
         ),
     )
     parser.add_argument(

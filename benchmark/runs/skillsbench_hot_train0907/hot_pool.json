@@ -1,0 +1,43 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1789217976.785304,
+  "global_turn": 165,
+  "order": [
+    "skillsbench-host-grading"
+  ],
+  "entries": {
+    "skillsbench-host-grading": {
+      "name": "skillsbench-host-grading",
+      "key_points": [
+        "DO NOT copy oracle values from tests — tests may recompute ground truth from input files; fabricating results fails anti-cheat behavioral checks"
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0907/hermes_home/skills/productivity/skillsbench-host-grading",
+      "skill_md_mtime": 1789217928.374435,
+      "recorded_turn": 165,
+      "description": "",
+      "tags": [],
+      "scope": "skillsbench-host-grading",
+      "point_utilities": [
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 34,
+    "inject_success": 24,
+    "no_inject_n": 48,
+    "no_inject_success": 18,
+    "throttled": false,
+    "episodes_since_inject": 0
+  }
+}

@@ -67,8 +67,11 @@ def _eval_block(ev: Optional[dict]) -> Dict[str, Any]:
     total = _to_int(ev.get("tests_total"))
     failed = _to_int(ev.get("tests_failed"))
     micro = (passed / total) if passed is not None and total else None
+    task_success = ev.get("task_success")
+    if task_success is None and "success" in ev:
+        task_success = bool(ev.get("success"))
     return {
-        "task_success": ev.get("task_success"),
+        "task_success": task_success,
         "reward": _to_float(ev.get("reward")),
         "tests_passed": passed,
         "tests_failed": failed,

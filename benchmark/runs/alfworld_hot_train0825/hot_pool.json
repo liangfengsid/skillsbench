@@ -1,0 +1,95 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1787640962.9273658,
+  "global_turn": 425,
+  "order": [
+    "alfworld-player"
+  ],
+  "entries": {
+    "alfworld-player": {
+      "name": "alfworld-player",
+      "key_points": [
+        "Don't try commands not in the admissible list — they will fail",
+        "Don't include quotes, numbering, or explanations — reply with bare command only",
+        "Don't rush to use items before finding them — explore first",
+        "Search systematically: go to each visible location one by one rather than guessing",
+        "Read observations carefully: items on the current location are listed — act on them before moving away",
+        "One command per turn: never combine actions or add commentary"
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/alfworld_hot_train0825/hermes_home/skills/gaming/alfworld-player",
+      "skill_md_mtime": 1787638568.973357,
+      "recorded_turn": 419,
+      "description": "Play ALFWorld/ALFRED text household simulator — systematic exploration and command selection.",
+      "tags": [],
+      "scope": "Play ALFWorld/ALFRED text household simulator — systematic exploration and command selection.",
+      "point_utilities": [
+        {
+          "n_labeled": 28,
+          "helpful": 26,
+          "harmful": 0,
+          "irrelevant": 2,
+          "success_sum": 28.0,
+          "reward_sum": 28.0,
+          "iterations_sum": 176.0,
+          "n_success": 28,
+          "iterations_when_success_sum": 176.0
+        },
+        {
+          "n_labeled": 28,
+          "helpful": 26,
+          "harmful": 0,
+          "irrelevant": 2,
+          "success_sum": 28.0,
+          "reward_sum": 28.0,
+          "iterations_sum": 176.0,
+          "n_success": 28,
+          "iterations_when_success_sum": 176.0
+        },
+        {
+          "n_labeled": 28,
+          "helpful": 26,
+          "harmful": 0,
+          "irrelevant": 2,
+          "success_sum": 28.0,
+          "reward_sum": 28.0,
+          "iterations_sum": 176.0,
+          "n_success": 28,
+          "iterations_when_success_sum": 176.0
+        },
+        {
+          "n_labeled": 28,
+          "helpful": 26,
+          "harmful": 0,
+          "irrelevant": 2,
+          "success_sum": 28.0,
+          "reward_sum": 28.0,
+          "iterations_sum": 176.0,
+          "n_success": 28,
+          "iterations_when_success_sum": 176.0
+        },
+        {
+          "n_labeled": 28,
+          "helpful": 26,
+          "harmful": 0,
+          "irrelevant": 2,
+          "success_sum": 28.0,
+          "reward_sum": 28.0,
+          "iterations_sum": 176.0,
+          "n_success": 28,
+          "iterations_when_success_sum": 176.0
+        },
+        {
+          "n_labeled": 28,
+          "helpful": 26,
+          "harmful": 0,
+          "irrelevant": 2,
+          "success_sum": 28.0,
+          "reward_sum": 28.0,
+          "iterations_sum": 176.0,
+          "n_success": 28,
+          "iterations_when_success_sum": 176.0
+        }
+      ]
+    }
+  }
+}
