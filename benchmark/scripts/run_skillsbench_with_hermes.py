@@ -22,6 +22,13 @@ Examples (from Hermes repo root):
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --no-hot-pool \\
       --log-jsonl ./runs.jsonl
 
+  # Keep the pool, but disable query/scope retrieve and attribution + utility screen
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --hot-pool \\
+      --hot-pool-persist benchmark/runs/exp_hot/hot_pool.json \\
+      --no-hot-pool-inject-retrieve \\
+      --no-hot-pool-outcome-feedback --no-hot-pool-inject-filter-utilities \\
+      --log-jsonl benchmark/runs/exp_hot/runs.jsonl
+
   # A-Mem baseline (same Hermes + skill tools, no hot-skill pool):
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \\
       --amem --experiment-dir benchmark/runs/exp_amem_train \\
@@ -487,13 +494,28 @@ def resolve_agent_runtime(
     return runtime
 
 
+_HOT_POOL_BOOL_ENV = (
+    "HERMES_HOT_POOL_INJECT_RETRIEVE",
+    "HERMES_HOT_POOL_OUTCOME_FEEDBACK",
+    "HERMES_HOT_POOL_INJECT_FILTER_UTILITIES",
+)
+
+
 def apply_hot_pool_cli_overrides(
     *,
     hot_pool: Optional[bool],
     hot_pool_persist: Optional[str],
+    inject_retrieve: Optional[bool] = None,
+    outcome_feedback: Optional[bool] = None,
+    inject_filter_utilities: Optional[bool] = None,
 ) -> None:
-    """Set env vars so AIAgent honors CLI hot-pool on/off before import."""
-    for key in ("HERMES_HOT_POOL_ENABLED", "HERMES_HOT_POOL_PERSIST", "HERMES_HOT_POOL_PATH"):
+    """Set env vars so AIAgent honors CLI hot-pool knobs before import."""
+    for key in (
+        "HERMES_HOT_POOL_ENABLED",
+        "HERMES_HOT_POOL_PERSIST",
+        "HERMES_HOT_POOL_PATH",
+        *_HOT_POOL_BOOL_ENV,
+    ):
         os.environ.pop(key, None)
     if hot_pool is False:
         os.environ["HERMES_HOT_POOL_ENABLED"] = "0"
@@ -503,6 +525,14 @@ def apply_hot_pool_cli_overrides(
     if hot_pool_persist:
         os.environ["HERMES_HOT_POOL_PERSIST"] = "1"
         os.environ["HERMES_HOT_POOL_PATH"] = str(host_expand_path(hot_pool_persist))
+    for env_name, value in (
+        ("HERMES_HOT_POOL_INJECT_RETRIEVE", inject_retrieve),
+        ("HERMES_HOT_POOL_OUTCOME_FEEDBACK", outcome_feedback),
+        ("HERMES_HOT_POOL_INJECT_FILTER_UTILITIES", inject_filter_utilities),
+    ):
+        if value is None:
+            continue
+        os.environ[env_name] = "1" if value else "0"
 
 
 def run_one_task(
@@ -521,6 +551,9 @@ def run_one_task(
     save_trajectories: bool,
     hot_pool: Optional[bool] = None,
     hot_pool_persist: Optional[str] = None,
+    hot_pool_inject_retrieve: Optional[bool] = None,
+    hot_pool_outcome_feedback: Optional[bool] = None,
+    hot_pool_inject_filter_utilities: Optional[bool] = None,
     amem: bool = False,
     amem_persist: Optional[str] = None,
     amem_k: int = 5,
@@ -548,6 +581,9 @@ def run_one_task(
     apply_hot_pool_cli_overrides(
         hot_pool=hot_pool,
         hot_pool_persist=hot_pool_persist,
+        inject_retrieve=hot_pool_inject_retrieve,
+        outcome_feedback=hot_pool_outcome_feedback,
+        inject_filter_utilities=hot_pool_inject_filter_utilities,
     )
     _ensure_hermes_on_path(hermes_root)
     from run_agent import AIAgent  # type: ignore  # after sys.path
@@ -741,6 +777,9 @@ def run_one_task(
         "batch_review_prompt": batch_review_prompt,
         "hot_pool_enabled": hot_pool,
         "hot_pool_persist": hot_pool_persist,
+        "hot_pool_inject_retrieve": hot_pool_inject_retrieve,
+        "hot_pool_outcome_feedback": hot_pool_outcome_feedback,
+        "hot_pool_inject_filter_utilities": hot_pool_inject_filter_utilities,
         "amem_enabled": bool(amem),
         "amem_persist": amem_persist,
         "dc_enabled": bool(dc),
@@ -1066,6 +1105,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Disable hot skill pool for this run (overrides config.yaml).",
     )
     parser.set_defaults(hot_pool=None)
+    parser.add_argument(
+        "--hot-pool-inject-retrieve",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Scope matching at inject: rank/omit tips by lexical overlap with "
+            "the frozen episode query (skills.hot_pool.inject_retrieve). "
+            "Default: follow config (on). Use --no-hot-pool-inject-retrieve to "
+            "inject without query/scope retrieve ranking."
+        ),
+    )
+    parser.add_argument(
+        "--hot-pool-outcome-feedback",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Contribution attribution after host eval "
+            "(skills.hot_pool.outcome_feedback). Default: follow config (on). "
+            "Use --no-hot-pool-outcome-feedback to skip the side-channel judge. "
+            "Existing persist utilities still rank/omit at inject unless you also "
+            "pass --no-hot-pool-inject-filter-utilities."
+        ),
+    )
+    parser.add_argument(
+        "--hot-pool-inject-filter-utilities",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Utility screen at inject: omit strongly harmful / negatively scored "
+            "labeled tips (skills.hot_pool.inject_filter_utilities). Default: "
+            "follow config (on). Use --no-hot-pool-inject-filter-utilities to "
+            "keep ranking retrieve-only (or insertion order if retrieve is off)."
+        ),
+    )
     add_amem_cli_flags(parser)
     add_dc_cli_flags(parser)
     parser.add_argument(
@@ -1609,6 +1682,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     save_trajectories=args.save_trajectories,
                     hot_pool=args.hot_pool,
                     hot_pool_persist=args.hot_pool_persist,
+                    hot_pool_inject_retrieve=args.hot_pool_inject_retrieve,
+                    hot_pool_outcome_feedback=args.hot_pool_outcome_feedback,
+                    hot_pool_inject_filter_utilities=args.hot_pool_inject_filter_utilities,
                     amem=bool(args.amem),
                     amem_persist=args.amem_persist,
                     amem_k=int(args.amem_k),

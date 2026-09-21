@@ -458,7 +458,25 @@ def load_hot_skills_config(skills_cfg: Optional[dict] = None) -> dict:
         cfg["persist_across_conversations"] = False
     elif _env_enabled in ("1", "true", "yes", "on"):
         cfg["enabled"] = True
+    for env_name, key in (
+        ("HERMES_HOT_POOL_INJECT_RETRIEVE", "inject_retrieve"),
+        ("HERMES_HOT_POOL_OUTCOME_FEEDBACK", "outcome_feedback"),
+        ("HERMES_HOT_POOL_INJECT_FILTER_UTILITIES", "inject_filter_utilities"),
+    ):
+        flag = _hot_pool_env_flag(env_name)
+        if flag is not None:
+            cfg[key] = flag
     return cfg
+
+
+def _hot_pool_env_flag(name: str) -> Optional[bool]:
+    """Parse a 0/1-style env override. None means 'leave config as-is'."""
+    raw = os.getenv(name, "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return None
 
 
 def resolve_hot_pool_persist_path(config: Optional[dict] = None) -> Path:

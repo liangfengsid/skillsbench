@@ -1,69 +1,129 @@
 {
   "schema": "hermes.hot_skill_pool.v1",
-  "updated_at": 1789802229.1924338,
-  "global_turn": 169,
+  "updated_at": 1789890163.9157856,
+  "global_turn": 162,
   "order": [
-    "skillsbench-workspace-setup",
+    "skillsbench-live-server-tasks",
     "skillsbench-host-grading"
   ],
   "entries": {
-    "skillsbench-workspace-setup": {
-      "name": "skillsbench-workspace-setup",
+    "skillsbench-live-server-tasks": {
+      "name": "skillsbench-live-server-tasks",
       "key_points": [
-        "Host verifier never reads container filesystem — files written inside Docker during execution must be mirrored to `tasks/<id>/` or they won't appear in host staging."
+        "NEVER bypass external API calls to \"speed up\" responses — anti-cheat tests assert `elapsed >= Xms`",
+        "NEVER remove `performance.mark()` or `data-testid` attributes — explicit constraints, instant failure",
+        "DO NOT modify test files — they are read-only oracle files, not editable scaffolding",
+        "ALWAYS read test.sh first — it tells you exactly what the verifier runs and where"
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test2/hermes_home/skills/software-development/skillsbench-workspace-setup",
-      "skill_md_mtime": 1789772612.7761257,
-      "recorded_turn": 168,
-      "description": "SkillsBench workspace implementation workflow: reading tests first, handling pre-existing starter files, building inside Docker, and staging deliverables correctly.",
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test4/hermes_home/skills/software-development/skillsbench-live-server-tasks",
+      "skill_md_mtime": 1789876050.958889,
+      "recorded_turn": 162,
+      "description": "SkillsBench tasks that run a live server (Docker + httpx/Playwright tests) — how to read the test harness, fix performance/functionality, and pass host verification.",
       "tags": [],
-      "scope": "SkillsBench workspace implementation workflow: reading tests first, handling pre-existing starter files, building inside Docker, and staging deliverables correctly.",
+      "scope": "SkillsBench tasks that run a live server (Docker + httpx/Playwright tests) — how to read the test harness, fix performance/functionality, and pass host verification.",
       "point_utilities": [
         {
-          "n_labeled": 6,
-          "helpful": 3,
+          "n_labeled": 0,
+          "helpful": 0,
           "harmful": 0,
-          "irrelevant": 3,
-          "success_sum": 6.0,
-          "reward_sum": 6.0,
-          "iterations_sum": 224.0,
-          "n_success": 6,
-          "iterations_when_success_sum": 224.0
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
         }
       ]
     },
     "skillsbench-host-grading": {
       "name": "skillsbench-host-grading",
       "key_points": [
-        "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`."
+        "NEVER assume Docker image contents are staged — the verifier does NOT extract container contents. Output inside a Docker image is invisible to host verification. ALWAYS extract output from Docker to the task directory.",
+        "NEVER place outputs inside `tests/` or `environment/` — they're excluded from staging to `/root/`",
+        "ALWAYS save deliverables at the task root level — e.g., `task_dir/annotations.json` stages to `<stage>/root/annotations.json`. Also `task_dir/output/...` works."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test2/hermes_home/skills/software-development/skillsbench-host-grading",
-      "skill_md_mtime": 1789786408.0083592,
-      "recorded_turn": 168,
-      "description": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test4/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_md_mtime": 1789890149.5468268,
+      "recorded_turn": 162,
+      "description": "",
       "tags": [],
-      "scope": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
+      "scope": "skillsbench-host-grading",
       "point_utilities": [
         {
           "n_labeled": 1,
           "helpful": 0,
-          "harmful": 1,
-          "irrelevant": 0,
-          "success_sum": 0.0,
-          "reward_sum": 0.777778,
-          "iterations_sum": 60.0,
-          "n_success": 0,
-          "iterations_when_success_sum": 0.0
+          "harmful": 0,
+          "irrelevant": 1,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 28.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 28.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 1,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 28.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 28.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 1,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 28.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 28.0
         }
       ]
     }
   },
   "inject_cohort": {
-    "inject_n": 49,
-    "inject_success": 42,
-    "no_inject_n": 39,
-    "no_inject_success": 33,
-    "throttled": false,
-    "episodes_since_inject": 0
+    "inject_n": 45,
+    "inject_success": 37,
+    "no_inject_n": 43,
+    "no_inject_success": 38,
+    "throttled": true,
+    "episodes_since_inject": 3
   }
 }

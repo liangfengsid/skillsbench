@@ -51,6 +51,7 @@ _DATA_PREFIX = "/data"
 _TESTS_PREFIX = "/tests"
 _LOGS_PREFIX = "/logs"
 _OUTPUT_PREFIX = "/output"
+_OUTPUTS_PREFIX = "/outputs"
 _SETPRIV_RE = re.compile(r"\bsetpriv\b[^\n]*?--\s*")
 _CTRF_FLAG_RE = re.compile(r"--ctrf(?:\s+|=)\S+")
 _OPT_VENV_PYTHON_RE = re.compile(r"/opt/venv/bin/python(?:3)?")
@@ -117,6 +118,8 @@ def adapt_container_paths(
         text = _remap_abs_prefix(text, _LOGS_PREFIX, logs_dir)
     output_dir = Path(host_root) / "output"
     text = _remap_abs_prefix(text, _OUTPUT_PREFIX, output_dir)
+    outputs_dir = Path(host_root) / "outputs"
+    text = _remap_abs_prefix(text, _OUTPUTS_PREFIX, outputs_dir)
     data_dir = Path(host_root) / "data"
     text = _remap_abs_prefix(text, _DATA_PREFIX, data_dir)
     return text
@@ -152,6 +155,7 @@ def stage_task_for_host_eval(task_dir: Path, stage_dir: Path) -> Path:
             shutil.copytree(entry, dest, dirs_exist_ok=True)
 
     (host_root / "output").mkdir(parents=True, exist_ok=True)
+    (host_root / "outputs").mkdir(parents=True, exist_ok=True)
     return host_root
 
 

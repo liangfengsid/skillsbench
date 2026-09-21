@@ -260,6 +260,24 @@ def test_load_hot_skills_config_env_enabled_override(monkeypatch):
     assert cfg_on["enabled"] is True
 
 
+def test_load_hot_skills_config_env_inject_and_outcome_overrides(monkeypatch):
+    monkeypatch.setenv("HERMES_HOT_POOL_INJECT_RETRIEVE", "0")
+    monkeypatch.setenv("HERMES_HOT_POOL_OUTCOME_FEEDBACK", "0")
+    monkeypatch.setenv("HERMES_HOT_POOL_INJECT_FILTER_UTILITIES", "0")
+    cfg = load_hot_skills_config(
+        {
+            "hot_pool": {
+                "inject_retrieve": True,
+                "outcome_feedback": True,
+                "inject_filter_utilities": True,
+            }
+        }
+    )
+    assert cfg["inject_retrieve"] is False
+    assert cfg["outcome_feedback"] is False
+    assert cfg["inject_filter_utilities"] is False
+
+
 def test_global_pool_max_entries_is_retain_and_inject():
     cfg = {
         "enabled": True,

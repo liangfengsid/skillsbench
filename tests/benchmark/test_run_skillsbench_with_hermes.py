@@ -216,6 +216,25 @@ def test_apply_hot_pool_cli_overrides_enable_with_persist(monkeypatch):
     assert os.environ["HERMES_HOT_POOL_PATH"].endswith("skillsbench_hot_pool.json")
 
 
+def test_apply_hot_pool_cli_overrides_scope_and_attribution(monkeypatch):
+    mod = _load_module()
+    monkeypatch.setenv("HERMES_HOT_POOL_INJECT_RETRIEVE", "1")
+    monkeypatch.setenv("HERMES_HOT_POOL_OUTCOME_FEEDBACK", "1")
+    monkeypatch.setenv("HERMES_HOT_POOL_INJECT_FILTER_UTILITIES", "1")
+    mod.apply_hot_pool_cli_overrides(
+        hot_pool=True,
+        hot_pool_persist=None,
+        inject_retrieve=False,
+        outcome_feedback=False,
+        inject_filter_utilities=False,
+    )
+    import os
+
+    assert os.environ.get("HERMES_HOT_POOL_INJECT_RETRIEVE") == "0"
+    assert os.environ.get("HERMES_HOT_POOL_OUTCOME_FEEDBACK") == "0"
+    assert os.environ.get("HERMES_HOT_POOL_INJECT_FILTER_UTILITIES") == "0"
+
+
 def test_build_batch_metrics_summary_matches_aggregator(tmp_path):
     """Batch summary uses full JSONL + same kwargs as aggregate_skillsbench_runs."""
     import json

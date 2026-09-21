@@ -1,7 +1,7 @@
 {
   "schema": "hermes.hot_skill_pool.v1",
-  "updated_at": 1789740852.0905375,
-  "global_turn": 161,
+  "updated_at": 1789968343.685374,
+  "global_turn": 123,
   "order": [
     "skillsbench-host-grading"
   ],
@@ -12,32 +12,32 @@
         "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`.",
         "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test/hermes_home/skills/software-development/skillsbench-host-grading",
-      "skill_md_mtime": 1789734736.8880634,
-      "recorded_turn": 155,
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_nu_test2/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_md_mtime": 1789967661.3620765,
+      "recorded_turn": 121,
       "description": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
       "tags": [],
       "scope": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
       "point_utilities": [
         {
-          "n_labeled": 1,
+          "n_labeled": 0,
           "helpful": 0,
-          "harmful": 1,
+          "harmful": 0,
           "irrelevant": 0,
           "success_sum": 0.0,
-          "reward_sum": 0.888889,
-          "iterations_sum": 30.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
           "n_success": 0,
           "iterations_when_success_sum": 0.0
         },
         {
-          "n_labeled": 1,
+          "n_labeled": 0,
           "helpful": 0,
-          "harmful": 1,
+          "harmful": 0,
           "irrelevant": 0,
           "success_sum": 0.0,
-          "reward_sum": 0.888889,
-          "iterations_sum": 30.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
           "n_success": 0,
           "iterations_when_success_sum": 0.0
         }
@@ -45,10 +45,10 @@
     }
   },
   "inject_cohort": {
-    "inject_n": 50,
-    "inject_success": 41,
-    "no_inject_n": 38,
-    "no_inject_success": 32,
+    "inject_n": 29,
+    "inject_success": 25,
+    "no_inject_n": 36,
+    "no_inject_success": 31,
     "throttled": false,
     "episodes_since_inject": 0
   }

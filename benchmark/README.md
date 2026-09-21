@@ -394,12 +394,15 @@ Hot pool injects recently learned skill **key points** ephemerally each API turn
 | `--hot-pool` | Force enable for this run |
 | `--no-hot-pool` | Force disable for this run (also disables persistence) |
 | `--hot-pool-persist PATH` | Load/save pool JSON across tasks (implies pool must be enabled) |
+| `--hot-pool-inject-retrieve` / `--no-hot-pool-inject-retrieve` | Scope matching at inject (`inject_retrieve`). Default follows config (on). `--no-…` injects without query/scope retrieve ranking |
+| `--hot-pool-outcome-feedback` / `--no-hot-pool-outcome-feedback` | Contribution attribution after host eval (`outcome_feedback`). `--no-…` skips the side-channel judge |
+| `--hot-pool-inject-filter-utilities` / `--no-hot-pool-inject-filter-utilities` | Utility screen at inject (`inject_filter_utilities`). `--no-…` does not omit/rank by stored utilities. Pair with `--no-hot-pool-outcome-feedback` to A/B without credit assignment |
 | `--amem` / `--amem-persist` / `--amem-k` | A-Mem baseline (see [baselines/amem](baselines/amem/README.md)); cannot combine with `--hot-pool` or `--dc` |
 | `--dc` / `--dc-persist` / `--dc-mode` / `--dc-k` | Dynamic Cheatsheet baseline (see [baselines/dcheatsheet](baselines/dcheatsheet/README.md)); cannot combine with `--hot-pool` or `--amem` |
 
 Pool curation is **admit-time** (`skills.hot_pool.eviction_policy`): `llm` (default — side-channel reconcile judge on each material admit/sync and when over `max_entries`; falls back to `oldest`) or `oldest` (FIFO only when over cap). Mechanical extract is followed by junk filters (`junk_filter`, `exclude_skills_from_pool`), a ritual filter (`ritual_filter`: episode closers / short-answer procedures stay out of the transfer pool), and a lexical domain gate (`admit_domain_gate`: AppWorld/ALFWorld omit distinctive off-domain skills; SkillsBench fails open except framework identities). Extract redacts structural identifiers; transfer vs episode-local is a side-channel prompt judgment. Inject selects up to `inject_k` tips by retrieve overlap with the frozen episode query, omits off-domain skills, ritual tips, and strongly harmful utilities, and ranks the rest. See [Hot skills](../README.md#hot-skills-ephemeral-key-point-pool). `max_entries` is the store cap; `inject_k` is the inject cap. JSONL `hot_pool_telemetry.eviction` reports `capacity` drops and `reconcile_ran`.
 
-**Outcome feedback** (`skills.hot_pool.outcome_feedback`, default **on**): after host evaluation (SkillsBench `--evaluate-after-run`), episode end (ALFWorld), or AppWorld `evaluate_task()`, a side-channel LLM attributes exposed tips using multi-dimensional metrics (success, reward, **iterations/steps**, tests). Empty or unparseable judge JSON does **not** persist utilities (`skipped_reason` stays `unparseable_or_empty` / `no_complete_fn`). `outcome_feedback_heuristic` is off by default — cloned win/loss is not credit assignment. Results land in `hot_pool_telemetry.outcome_feedback` (`skipped_reason`, `attribution_source`, plus `judge_finish_reason` / `judge_raw_preview` / `judge_stripped_preview` when the side-channel ran). The judge call disables thinking, uses `outcome_judge_max_tokens` (default 2048), and receives a compressed tool/env action log (`outcome_judge_log`, no observations). Set `outcome_feedback: false` to A/B without attribution.
+**Outcome feedback** (`skills.hot_pool.outcome_feedback`, default **on**): after host evaluation (SkillsBench `--evaluate-after-run`), episode end (ALFWorld), or AppWorld `evaluate_task()`, a side-channel LLM attributes exposed tips using multi-dimensional metrics (success, reward, **iterations/steps**, tests). Empty or unparseable judge JSON does **not** persist utilities (`skipped_reason` stays `unparseable_or_empty` / `no_complete_fn`). `outcome_feedback_heuristic` is off by default — cloned win/loss is not credit assignment. Results land in `hot_pool_telemetry.outcome_feedback` (`skipped_reason`, `attribution_source`, plus `judge_finish_reason` / `judge_raw_preview` / `judge_stripped_preview` when the side-channel ran). The judge call disables thinking, uses `outcome_judge_max_tokens` (default 2048), and receives a compressed tool/env action log (`outcome_judge_log`, no observations). SkillsBench CLI: `--no-hot-pool-outcome-feedback` (and `--no-hot-pool-inject-filter-utilities` to also skip the inject utility screen). Config: `outcome_feedback: false`.
 
 **Treatment** — pool enabled with persistence across a split or batch:
 
@@ -438,7 +441,17 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py \
 
 JSONL rows record `hot_pool_enabled` (`true` / `false` / `null`) and `hot_pool_persist`. When the pool is active, `hot_pool_telemetry.inject` shows `point_count`, `skills_injected`, and `points_injected`. With `skip_if_in_history` (default on), pool skills already opened via `skill_view` are omitted from the inject block to avoid duplicating the full skill body; that is **not** “hot off.” Read `inject.skills_excluded_in_history` and `inject.points_excluded_in_history` for how many retained tips were skipped for that reason (`point_count==0` with nonzero exclusions still means the tips lived in the transcript via `skill_view`).
 
-Env vars (set by the driver): `HERMES_HOT_POOL_ENABLED=0|1`, `HERMES_HOT_POOL_PERSIST=1`, `HERMES_HOT_POOL_PATH=/path/to/pool.json`.
+Env vars (set by the driver): `HERMES_HOT_POOL_ENABLED=0|1`, `HERMES_HOT_POOL_PERSIST=1`, `HERMES_HOT_POOL_PATH=/path/to/pool.json`, and optionally `HERMES_HOT_POOL_INJECT_RETRIEVE`, `HERMES_HOT_POOL_OUTCOME_FEEDBACK`, `HERMES_HOT_POOL_INJECT_FILTER_UTILITIES` (`0`/`1`).
+
+A/B without scope matching or credit assignment (pool still injects):
+
+```bash
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --hot-pool --hot-pool-persist benchmark/runs/exp_hot/hot_pool.json \
+  --no-hot-pool-inject-retrieve \
+  --no-hot-pool-outcome-feedback --no-hot-pool-inject-filter-utilities \
+  --log-jsonl benchmark/runs/exp_hot/runs.jsonl
+```
 
 ### Clean task trees before A/B runs
 
