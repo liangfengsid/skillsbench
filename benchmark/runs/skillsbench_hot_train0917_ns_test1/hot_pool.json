@@ -1,109 +1,65 @@
 {
   "schema": "hermes.hot_skill_pool.v1",
-  "updated_at": 1789970070.7640562,
-  "global_turn": 138,
+  "updated_at": 1790009810.833911,
+  "global_turn": 157,
   "order": [
-    "pdf-redaction",
     "skillsbench-host-grading"
   ],
   "entries": {
-    "pdf-redaction": {
-      "name": "pdf-redaction",
-      "key_points": [
-        "NEVER use draw_rect or overlay rectangles for redaction — `page.draw_rect()` draws on top of text but doesn't remove it from extraction. Only `add_redact_annot()` + `apply_redactions()` actually removes text."
-      ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_ns_test1/hermes_home/skills/pdf-redaction",
-      "skill_md_mtime": 1789922680.256206,
-      "recorded_turn": 126,
-      "description": "Redact text from PDFs for anonymization, blind review, or privacy — PyMuPDF search+annotate pipeline with verification.",
-      "tags": [
-        "PDF",
-        "Redaction",
-        "Anonymization",
-        "Privacy",
-        "PyMuPDF"
-      ],
-      "scope": "Redact text from PDFs for anonymization, blind review, or privacy — PyMuPDF search+annotate pipeline with verification.",
-      "point_utilities": [
-        {
-          "n_labeled": 5,
-          "helpful": 1,
-          "harmful": 1,
-          "irrelevant": 3,
-          "success_sum": 4.0,
-          "reward_sum": 4.0,
-          "iterations_sum": 212.0,
-          "n_success": 4,
-          "iterations_when_success_sum": 152.0
-        }
-      ]
-    },
     "skillsbench-host-grading": {
       "name": "skillsbench-host-grading",
       "key_points": [
         "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host. Verifier only stages task dir files.",
-        "Dockerfile RUN commands do NOT execute during host verification — host staging copies files from the task tree; it never builds Docker images. Pre-compute outputs as static files in the task root.",
-        "DO NOT rely on solution/ to generate deliverables — `solution/` is excluded from staging. Run your script and commit the output to the task root.",
+        "DO NOT rely on solution/ to generate deliverables — `solution/` is excluded from staging. Run your script and commit the output to the task root. You MAY inspect solution/ files to understand expected schemas and structure.",
         "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks."
       ],
       "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_ns_test1/hermes_home/skills/software-development/skillsbench-host-grading",
-      "skill_md_mtime": 1789970067.728354,
-      "recorded_turn": 138,
+      "skill_md_mtime": 1790003722.002992,
+      "recorded_turn": 155,
       "description": "",
       "tags": [],
       "scope": "skillsbench-host-grading",
       "point_utilities": [
         {
-          "n_labeled": 0,
-          "helpful": 0,
+          "n_labeled": 6,
+          "helpful": 4,
           "harmful": 0,
-          "irrelevant": 0,
-          "success_sum": 0.0,
-          "reward_sum": 0.0,
-          "iterations_sum": 0.0,
-          "n_success": 0,
-          "iterations_when_success_sum": 0.0
+          "irrelevant": 2,
+          "success_sum": 6.0,
+          "reward_sum": 6.0,
+          "iterations_sum": 264.0,
+          "n_success": 6,
+          "iterations_when_success_sum": 264.0
         },
         {
-          "n_labeled": 0,
+          "n_labeled": 2,
           "helpful": 0,
           "harmful": 0,
-          "irrelevant": 0,
-          "success_sum": 0.0,
-          "reward_sum": 0.0,
-          "iterations_sum": 0.0,
-          "n_success": 0,
-          "iterations_when_success_sum": 0.0
+          "irrelevant": 2,
+          "success_sum": 2.0,
+          "reward_sum": 2.0,
+          "iterations_sum": 95.0,
+          "n_success": 2,
+          "iterations_when_success_sum": 95.0
         },
         {
-          "n_labeled": 0,
-          "helpful": 0,
-          "harmful": 0,
-          "irrelevant": 0,
-          "success_sum": 0.0,
-          "reward_sum": 0.0,
-          "iterations_sum": 0.0,
-          "n_success": 0,
-          "iterations_when_success_sum": 0.0
-        },
-        {
-          "n_labeled": 1,
-          "helpful": 0,
+          "n_labeled": 2,
+          "helpful": 1,
           "harmful": 0,
           "irrelevant": 1,
-          "success_sum": 1.0,
-          "reward_sum": 1.0,
-          "iterations_sum": 60.0,
-          "n_success": 1,
-          "iterations_when_success_sum": 60.0
+          "success_sum": 2.0,
+          "reward_sum": 2.0,
+          "iterations_sum": 95.0,
+          "n_success": 2,
+          "iterations_when_success_sum": 95.0
         }
       ]
     }
   },
   "inject_cohort": {
-    "inject_n": 39,
-    "inject_success": 34,
-    "no_inject_n": 38,
+    "inject_n": 49,
+    "inject_success": 42,
+    "no_inject_n": 39,
     "no_inject_success": 33,
     "throttled": false,
     "episodes_since_inject": 0

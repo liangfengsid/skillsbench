@@ -15,7 +15,7 @@ The current cheatsheet injects via the existing `<memory-context>` fence on the 
 
 ## Enable
 
-Benchmarks: `--dc` on the SkillsBench / ALFWorld / AppWorld drivers (sets `HERMES_DC_ENABLED=1`). Held-out eval: `--dc --dc-freeze --dc-persist <train_store>`.
+Benchmarks: `--dc` on the SkillsBench / ALFWorld / AppWorld drivers (sets `HERMES_DC_ENABLED=1`). TipsWarm paper protocol: warmup `--dc --dc-freeze`; after copying the workspace, test `--dc --dc-sync-every 0`. See [`benchmark/baselines/dcheatsheet/README.md`](../../../benchmark/baselines/dcheatsheet/README.md).
 
 No extra pip extra is required for the default **DC-Cu** mode. `--dc-mode rs` / `curetr` use MiniLM if `sentence-transformers` is installed (same prefetch as A-Mem); otherwise retrieval falls back to recency.
 
@@ -43,4 +43,4 @@ Env vars (set by the drivers):
 - `HERMES_DC_LLM_MODEL` / `HERMES_DC_API_KEY` / `HERMES_DC_API_BASE` — curator LLM (same as the agent by default)
 - `HERMES_DC_EMBED_MODEL` — retrieval encoder (default `all-MiniLM-L6-v2`)
 
-See [`benchmark/baselines/dcheatsheet/README.md`](../../../benchmark/baselines/dcheatsheet/README.md) for train → freeze → eval commands.
+See [`benchmark/baselines/dcheatsheet/README.md`](../../../benchmark/baselines/dcheatsheet/README.md) for copy-workspace warmup (`--dc-freeze`) → test (`--dc-sync-every 0`) commands.

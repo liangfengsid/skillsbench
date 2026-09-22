@@ -29,6 +29,12 @@ Examples (from Hermes repo root):
       --no-hot-pool-outcome-feedback --no-hot-pool-inject-filter-utilities \\
       --log-jsonl benchmark/runs/exp_hot/runs.jsonl
 
+  # Larger store and per-turn inject quota (defaults are max_entries=12, inject_k=4)
+  python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --hot-pool \\
+      --hot-pool-persist benchmark/runs/exp_hot/hot_pool.json \\
+      --hot-pool-max-entries 24 --hot-pool-inject-k 8 \\
+      --log-jsonl benchmark/runs/exp_hot/runs.jsonl
+
   # A-Mem baseline (same Hermes + skill tools, no hot-skill pool):
   python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \\
       --amem --experiment-dir benchmark/runs/exp_amem_train \\
@@ -499,6 +505,10 @@ _HOT_POOL_BOOL_ENV = (
     "HERMES_HOT_POOL_OUTCOME_FEEDBACK",
     "HERMES_HOT_POOL_INJECT_FILTER_UTILITIES",
 )
+_HOT_POOL_INT_ENV = (
+    "HERMES_HOT_POOL_MAX_ENTRIES",
+    "HERMES_HOT_POOL_INJECT_K",
+)
 
 
 def apply_hot_pool_cli_overrides(
@@ -508,6 +518,8 @@ def apply_hot_pool_cli_overrides(
     inject_retrieve: Optional[bool] = None,
     outcome_feedback: Optional[bool] = None,
     inject_filter_utilities: Optional[bool] = None,
+    max_entries: Optional[int] = None,
+    inject_k: Optional[int] = None,
 ) -> None:
     """Set env vars so AIAgent honors CLI hot-pool knobs before import."""
     for key in (
@@ -515,6 +527,7 @@ def apply_hot_pool_cli_overrides(
         "HERMES_HOT_POOL_PERSIST",
         "HERMES_HOT_POOL_PATH",
         *_HOT_POOL_BOOL_ENV,
+        *_HOT_POOL_INT_ENV,
     ):
         os.environ.pop(key, None)
     if hot_pool is False:
@@ -533,6 +546,16 @@ def apply_hot_pool_cli_overrides(
         if value is None:
             continue
         os.environ[env_name] = "1" if value else "0"
+    for env_name, value in (
+        ("HERMES_HOT_POOL_MAX_ENTRIES", max_entries),
+        ("HERMES_HOT_POOL_INJECT_K", inject_k),
+    ):
+        if value is None:
+            continue
+        n = int(value)
+        if n < 0:
+            raise ValueError(f"{env_name} must be >= 0")
+        os.environ[env_name] = str(n)
 
 
 def run_one_task(
@@ -554,6 +577,8 @@ def run_one_task(
     hot_pool_inject_retrieve: Optional[bool] = None,
     hot_pool_outcome_feedback: Optional[bool] = None,
     hot_pool_inject_filter_utilities: Optional[bool] = None,
+    hot_pool_max_entries: Optional[int] = None,
+    hot_pool_inject_k: Optional[int] = None,
     amem: bool = False,
     amem_persist: Optional[str] = None,
     amem_k: int = 5,
@@ -584,6 +609,8 @@ def run_one_task(
         inject_retrieve=hot_pool_inject_retrieve,
         outcome_feedback=hot_pool_outcome_feedback,
         inject_filter_utilities=hot_pool_inject_filter_utilities,
+        max_entries=hot_pool_max_entries,
+        inject_k=hot_pool_inject_k,
     )
     _ensure_hermes_on_path(hermes_root)
     from run_agent import AIAgent  # type: ignore  # after sys.path
@@ -780,6 +807,8 @@ def run_one_task(
         "hot_pool_inject_retrieve": hot_pool_inject_retrieve,
         "hot_pool_outcome_feedback": hot_pool_outcome_feedback,
         "hot_pool_inject_filter_utilities": hot_pool_inject_filter_utilities,
+        "hot_pool_max_entries": hot_pool_max_entries,
+        "hot_pool_inject_k": hot_pool_inject_k,
         "amem_enabled": bool(amem),
         "amem_persist": amem_persist,
         "dc_enabled": bool(dc),
@@ -956,6 +985,16 @@ def print_batch_metrics_summary(
         flush=True,
     )
     print(format_summary_text(summary), flush=True)
+
+
+def _nonneg_int(value: str) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("must be an integer >= 0") from exc
+    if n < 0:
+        raise argparse.ArgumentTypeError("must be an integer >= 0")
+    return n
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1137,6 +1176,26 @@ def main(argv: Optional[List[str]] = None) -> int:
             "labeled tips (skills.hot_pool.inject_filter_utilities). Default: "
             "follow config (on). Use --no-hot-pool-inject-filter-utilities to "
             "keep ranking retrieve-only (or insertion order if retrieve is off)."
+        ),
+    )
+    parser.add_argument(
+        "--hot-pool-max-entries",
+        type=_nonneg_int,
+        default=None,
+        metavar="N",
+        help=(
+            "Store cap for hot-pool key points (skills.hot_pool.max_entries). "
+            "Default: follow config (12). New admits over this cap are reconciled down."
+        ),
+    )
+    parser.add_argument(
+        "--hot-pool-inject-k",
+        type=_nonneg_int,
+        default=None,
+        metavar="N",
+        help=(
+            "Per-turn inject quota (skills.hot_pool.inject_k). "
+            "Default: follow config (4). 0 injects every tip that passes the skill gate."
         ),
     )
     add_amem_cli_flags(parser)
@@ -1685,6 +1744,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     hot_pool_inject_retrieve=args.hot_pool_inject_retrieve,
                     hot_pool_outcome_feedback=args.hot_pool_outcome_feedback,
                     hot_pool_inject_filter_utilities=args.hot_pool_inject_filter_utilities,
+                    hot_pool_max_entries=args.hot_pool_max_entries,
+                    hot_pool_inject_k=args.hot_pool_inject_k,
                     amem=bool(args.amem),
                     amem_persist=args.amem_persist,
                     amem_k=int(args.amem_k),

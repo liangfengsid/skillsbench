@@ -1,4 +1,6 @@
-# SkillsBench splits (Hermes)
+# SkillsBench splits (TipsWarm / Hermes)
+
+Reproducible **train/test** partitions for `benchmark/skillsbench/tasks/` (88 tasks in this checkout).
 
 Reproducible **train/test** partitions for `benchmark/skillsbench/tasks/` (88 tasks in this checkout).
 
@@ -19,10 +21,14 @@ Each JSON includes `stats` with per-split difficulty histograms.
 python3 benchmark/scripts/make_skillsbench_splits.py --write-defaults
 ```
 
-## Use with Hermes driver
+## Use with the Hermes driver
+
+Paper-style `$expDir` commands: root [`../README.md`](../README.md).
 
 ```bash
+expDir=benchmark/runs/skillsbench_hot_train
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --experiment-dir $expDir --isolate-hermes-home \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part train
 ```

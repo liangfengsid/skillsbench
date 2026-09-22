@@ -1,330 +1,414 @@
-<p align="center">
-  <img src="assets/banner.png" alt="Hermes Agent" width="100%">
-</p>
+# TipsWarm
 
-# Hermes Agent ☤
+**TipsWarm** is a transfer-oriented memory mechanism on top of [Hermes Agent](README_HERMES.md): a small pool of short, reusable tips (guardrails / pitfalls) is extracted from skills, stored across tasks, and injected ephemerally each turn. This repository is a Hermes Agent checkout plus the benchmark drivers, baselines, and reported runs used in the TipsWarm experiments.
 
-<p align="center">
-  <a href="https://hermes-agent.nousresearch.com/docs/"><img src="https://img.shields.io/badge/Docs-hermes--agent.nousresearch.com-FFD700?style=for-the-badge" alt="Documentation"></a>
-  <a href="https://discord.gg/NousResearch"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://github.com/NousResearch/hermes-agent/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://nousresearch.com"><img src="https://img.shields.io/badge/Built%20by-Nous%20Research-blueviolet?style=for-the-badge" alt="Built by Nous Research"></a>
-</p>
+This README is the reproduction guide. Hermes Agent itself (CLI, gateway, skills, config) is documented in **[`README_HERMES.md`](README_HERMES.md)** and at the [upstream docs](https://hermes-agent.nousresearch.com/docs/).
 
-**The self-improving AI agent built by [Nous Research](https://nousresearch.com).** It's the only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
+| Method in tables | What it is | Driver flags |
+|------------------|------------|----------------|
+| **TipsWarm** (ours) | Hot-tip pool (`hot_pool.json`) | `--hot-pool --hot-pool-persist $expDir/hot_pool.json` |
+| **HermesSkills** | Same Hermes agent, no tip pool | `--no-hot-pool` |
+| **A-MEM** | [A-Mem](https://github.com/WujiangXu/A-mem-sys) notes + Chroma | `--amem` (test: `--amem-sync-every 20`) |
+| **DC** | [Dynamic Cheatsheet](https://arxiv.org/abs/2504.07952) (DC-Cu) | `--dc` (warmup: `--dc-freeze`; test: `--dc-sync-every 0`) |
 
-Use any model you want — [Nous Portal](https://portal.nousresearch.com), [OpenRouter](https://openrouter.ai) (200+ models), [NVIDIA NIM](https://build.nvidia.com) (Nemotron), [Xiaomi MiMo](https://platform.xiaomimimo.com), [z.ai/GLM](https://z.ai), [Kimi/Moonshot](https://platform.moonshot.ai), [MiniMax](https://www.minimax.io), [Hugging Face](https://huggingface.co), OpenAI, or your own endpoint. Switch with `hermes model` — no code changes, no lock-in.
+`--hot-pool`, `--amem`, and `--dc` are mutually exclusive.
 
-<table>
-<tr><td><b>A real terminal interface</b></td><td>Full TUI with multiline editing, slash-command autocomplete, conversation history, interrupt-and-redirect, and streaming tool output.</td></tr>
-<tr><td><b>Lives where you do</b></td><td>Telegram, Discord, Slack, WhatsApp, Signal, and CLI — all from a single gateway process. Voice memo transcription, cross-platform conversation continuity.</td></tr>
-<tr><td><b>A closed learning loop</b></td><td>Agent-curated memory with periodic nudges. Autonomous skill creation after complex tasks. Skills self-improve during use. FTS5 session search with LLM summarization for cross-session recall. <a href="https://github.com/plastic-labs/honcho">Honcho</a> dialectic user modeling. Compatible with the <a href="https://agentskills.io">agentskills.io</a> open standard.</td></tr>
-<tr><td><b>Scheduled automations</b></td><td>Built-in cron scheduler with delivery to any platform. Daily reports, nightly backups, weekly audits — all in natural language, running unattended.</td></tr>
-<tr><td><b>Delegates and parallelizes</b></td><td>Spawn isolated subagents for parallel workstreams. Write Python scripts that call tools via RPC, collapsing multi-step pipelines into zero-context-cost turns.</td></tr>
-<tr><td><b>Runs anywhere, not just your laptop</b></td><td>Six terminal backends — local, Docker, SSH, Daytona, Singularity, and Modal. Daytona and Modal offer serverless persistence — your agent's environment hibernates when idle and wakes on demand, costing nearly nothing between sessions. Run it on a $5 VPS or a GPU cluster.</td></tr>
-<tr><td><b>Research-ready</b></td><td>Batch trajectory generation, Atropos RL environments, trajectory compression for training the next generation of tool-calling models.</td></tr>
-</table>
+**Default experiment style:** isolated workspace home (`--experiment-dir` + `--isolate-hermes-home`) and a shell variable `$expDir` so warmup, test, and aggregation reuse the same command with only the path changed.
+
+```
+1. Hermes environment
+2. Benchmark data (SkillsBench, AppWorld, ALFWorld)
+3. Baseline extras (A-MEM, DC)
+4. Run experiments (full commands below)
+5. Reported results (CSVs + indexed summary.json / hot_pool.json)
+```
 
 ---
 
-## Quick Install
+## 1. Hermes Agent environment
+
+TipsWarm runs through Hermes `AIAgent`. From the repo root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
-```
-
-Works on Linux, macOS, WSL2, and Android via Termux. The installer handles the platform-specific setup for you.
-
-> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux). On Termux, Hermes installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
->
-> **Windows:** Native Windows is not supported. Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and run the command above.
-
-After installation:
-
-```bash
-source ~/.bashrc    # reload shell (or: source ~/.zshrc)
-hermes              # start chatting!
-```
-
-**SkillsBench** (`benchmark/skillsbench/`) is a nested Python subproject (BenchFlow). To add BenchFlow to the same venv as Hermes: `pip install -e ".[skillsbench]"` from the repo root. Task authoring and BenchFlow CLI: `benchmark/skillsbench/README.md` and `benchmark/skillsbench/AGENTS.md`.
-
-### Benchmarks
-
-Hermes batch drivers (SkillsBench, AppWorld), hot-pool evaluation, and run comparison live under **`benchmark/`**. See **[`benchmark/README.md`](benchmark/README.md)** for install prerequisites, example commands, and script reference. Conceptually, the hot skill pool is described under [Hot skills](#hot-skills-ephemeral-key-point-pool) below.
-
-### Skills: step-level variant pools (optional)
-
-Skills can expose **multiple procedural variants per step** instead of a single fixed instruction. When enabled, `skill_view` expands tagged regions in **`SKILL.md`** and merges in data from **`step_pools.json`** next to that file.
-
-**1. Turn it on** in `~/.hermes/config.yaml`:
-
-```yaml
-skills:
-  step_pools:
-    enabled: true
-    default_max_variants_per_step: 5   # optional cap when a step omits max_variants
-    # Optional: how variants sort after manual_order (laplace | raw | wilson | ucb1)
-    # rank_strategy: laplace
-    # ucb1_c: 1.4142135623730951   # only for rank_strategy: ucb1
-```
-
-**2. Mark steps in `SKILL.md`** (baseline text is the content between the tags):
-
-```markdown
-<!-- hermes-step id="install" max_variants="4" -->
-Run `npm ci` in the project root.
-<!-- /hermes-step -->
-```
-
-**3. Store extra variants** (bodies + optional success/fail counts) in **`step_pools.json`** in the same skill directory. Hermes ranks variants (with optional manual order) and trims to `max_variants` or the default above.
-
-**4. At runtime** the agent can maintain pools with the **`skill_step_variant`** tool (skills toolset): `record_attempt`, `add_variant`, `remove_variant`, `patch_variant`, `set_variant_order`, `clear_variant_order`, `list_pools`. Editing is limited to **local** skills under `~/.hermes/skills/`. Change the baseline prose in **`SKILL.md`** with `skill_manage`, not `patch_variant`.
-
-**5. Rank strategy** (`skills.step_pools.rank_strategy`, default `laplace`): after any `manual_order` prefix, remaining variants sort by a numeric score (higher = try earlier). **`laplace`** — smoothed `(success+1)/(trials+2)` for small-sample stability. **`raw`** — empirical `success/max(1,trials)` (no prior; can reorder vs Laplace when trial counts differ). **`wilson`** — conservative 95% Wilson lower bound on the success rate. **`ucb1`** — mean rate plus an exploration bonus using total pool trials and optional `ucb1_c` (default `√2`).
-
-Implementation: [`agent/skill_step_pools.py`](agent/skill_step_pools.py), [`tools/skill_step_variant_tool.py`](tools/skill_step_variant_tool.py).
-
-### Hot skills (ephemeral key-point pool)
-
-Skills already expose full procedures through `skill_view`, but loading every recently useful skill into context is expensive and cache-hostile. The **hot skill pool** keeps a small set of **decisive key points** (guardrails, pitfalls, “always/never” rules) and injects **that whole set** ephemerally into the current turn’s user message at API-call time — not into the durable system prompt — so the model gets short reminders without rewriting cached prefixes.
-
-**Idea in one sentence:** remember *what not to mess up* from skills you just opened; open the full skill again only when you need the procedure.
-
-```
-skill_view / skill_manage / recent use
-        │
-        ▼
-  extract key points  ──►  HotSkillPool (max_entries store; inject_k retrieve subset)
-        │
-        ▼
-  <hot-skills>…</hot-skills>  prepended to this turn’s user message
-        │
-        ▼
-  model may still call skill_view(name) for the full SKILL.md
-```
-
-**What gets extracted** (in order):
-
-1. Guardrail-style headings used by Hermes skills **and** SkillsBench task
-   skills under `tasks/*/environment/skills/`:
-   - Hermes: `## Common Pitfalls` / `## Pitfalls` / `## Key Points` / …
-   - SkillsBench: `## Best Practices` / `## Limitations` / `## Error Handling`
-     / `## Important Requirements` / `CRITICAL: …` formula rules / …
-2. Optional author override markers (rare; mostly for hand-tuned skills):
-   ```markdown
-   <!-- hermes-hot -->
-   - NEVER hardcode `~/.hermes` — use `get_hermes_home()`.
-   - ALWAYS run tests via `scripts/run_tests.sh`, not bare `pytest`.
-   <!-- /hermes-hot -->
-   ```
-3. Fallback: imperative / NEVER–ALWAYS style bullets elsewhere in the skill.
-
-**Lifecycle**
-
-| Stage | Behavior |
-|-------|----------|
-| Populate | After a skill is viewed/created, key points enter the pool if they pass the lexical domain gate (`admit_domain_gate`: closed-world platforms omit distinctive off-domain skills; SkillsBench/CLI fail-open except framework identities), the ritual filter (episode closers / short-answer procedures stay out of the transfer pool), and the transfer tip gate |
-| Inject | Each user turn prepends up to `inject_k` tips as `<hot-skills>`. Selection is lexical retrieve (skill/tip tokens ∩ frozen episode instruction), then utility. Off-domain skills with empty overlap are omitted. Ritual tips and strongly harmful utilities are omitted (`ritual_filter`, `inject_filter_utilities`); irrelevant scores only change order. Unlabeled tips can still inject. The inject preface frames ALWAYS/NEVER as exception handlers (not a first-action checklist / location-ID tour). With `skip_if_in_history` (default), skills already in recent `skill_view` history are omitted from the block to avoid duplicating the full skill body — that is channel separation, not “hot off.” Telemetry records `inject.skills_excluded_in_history` / `inject.points_excluded_in_history` / `inject.points_omitted_utility` / `inject.points_omitted_retrieve` / `inject.points_omitted_ritual`. |
-| Evict | Only when a new extract would exceed `max_entries`. Policies: `oldest` (FIFO of extract time on a persisted global clock when the pool is saved across conversations) or `llm` (optional judge at overflow). Model "use" of a point is not observable. |
-| Outcome feedback (default on) | After a labeled task/episode, a side-channel LLM attributes exposed tips (`helpful` / `harmful` / `irrelevant`) using **multi-dimensional** metrics (success, reward, iterations/steps, tests, duration). Empty or unparseable judge JSON does **not** write utilities (`skipped_reason` stays loud). `outcome_feedback_heuristic` is opt-in only — cloned win/loss is a broken credit-assignment loop. Disable the whole path with `outcome_feedback: false`. |
-| Persist (optional) | Pool JSON can survive across conversations / sequential benchmark tasks |
-
-**Configure** in `~/.hermes/config.yaml`:
-
-```yaml
-skills:
-  hot_pool:
-    enabled: true
-    max_entries: 12               # store budget (key points)
-    inject_k: 4                   # per-turn inject budget; 0 = no cap
-    inject_retrieve: true         # lexical skill/tip ∩ frozen episode query
-    admit_domain_gate: true       # refuse off-domain skills at admit (no LLM)
-    ritual_filter: true           # drop done()/short-answer episode procedures
-    # max_chars: ignored          # legacy; do not use — budget is inject_k
-    max_chars_per_point: 240      # truncate individual extracted tips
-    eviction_policy: llm          # llm (default) | oldest (fallback / opt-in)
-    outcome_feedback: true        # default on; set false to A/B without attribution
-    outcome_feedback_heuristic: false # off: empty judge JSON does not persist
-    outcome_judge_max_tokens: 2048    # side-channel JSON budget (thinking disabled)
-    outcome_judge_log: true           # compressed tool/env actions for the judge
-    outcome_judge_log_max_events: 48
-    outcome_judge_log_arg_chars: 96
-    abstract_extract: true        # redact paths/emails/UUIDs at extract
-    inject_filter_utilities: true # omit strongly harmful at inject (not irrelevant)
-    persist_across_conversations: false
-    # persist_path: ""            # default ~/.hermes/hot_skill_pool.json when persisting
-```
-
-`eviction_policy` runs only when a new extract would exceed `max_entries` (model "use" of a point is not observable, so inject never refreshes eviction clocks). The store keeps retained tips; inject selects a retrieve top-k and omits ones with a clear harmful majority. Irrelevant labels only rank the block. Extract redacts structural identifiers (paths, emails, UUIDs). Whether a tip is transferable vs an episode recap is judged in the overflow / outcome side-channel prompts, not by semantic regex:
-
-| Policy | Victim | When to use |
-|--------|--------|-------------|
-| `llm` (default) | Side-channel judge on the **running agent's LLM client** (tools-free, not written to history). Asks which point **ids to keep** (at most `max_entries`). One call per overflow. Falls back to `oldest` if the judge is missing or fails. | Primary policy — quality / transferability at overflow cost only |
-| `oldest` | Earliest `recorded_turn` (FIFO of extract). Protects the incoming extract. | Explicit opt-in or automatic fallback when the llm judge is unavailable |
-
-**`llm` judge prompt** (built by `build_llm_eviction_messages` in [`agent/hot_skills.py`](agent/hot_skills.py); isolated from the conversation):
-
-System (summary): curate a keep-set for the store (inject later retrieves a subset); prefer transferable guardrails; drop instance-bound recipes (paths, credentials, one-off filenames, single-product workflows); use `context` only as overflow/admit background and tie-breaker — not as primary relevance ranking. Return JSON `{"keep": ["id", ...]}` with at most `keep_n` ids (fewer allowed).
-
-User (JSON):
-
-```json
-{
-  "selection_goal": "Choose a keep-set that transfers to held-out / unseen tasks (store; inject later retrieves a subset). Prefer abstract, evaluator-safe pitfalls over cheatsheets for replaying seen tasks. Prefer fewer strong tips over filling keep_n.",
-  "context_role": "Background for the incoming extract / overflow. Tie-breaker only; not the primary ranking objective.",
-  "context": "<overflow / admit background text>",
-  "keep_n": 12,
-  "points": [
-    {
-      "id": "0",
-      "skill": "skill-name",
-      "index": 0,
-      "point": "NEVER run bare pytest — use scripts/run_tests.sh",
-      "recorded_turn": 3
-    }
-  ]
-}
-```
-
-`keep_n` is `max_entries`. Unknown ids are ignored; an empty or unparseable reply falls back to `oldest`.
-
-Injected sections may include a soft natural-language **`Scope:`** line (prefer skill description, else tags, else skill name). Scope tokens also feed the retrieve lexicon (with tip nouns and tags). The LLM eviction judge still uses scope as soft guidance, not as a dump filter.
-
-**Not the same as** step-level variant pools (above): step pools rewrite *which procedure variant* `skill_view` shows; hot skills inject *short reminders* without opening the skill body.
-
-Implementation: [`agent/hot_skills.py`](agent/hot_skills.py). Benchmark A/B usage (`--hot-pool`, `--hot-pool-persist`): [`benchmark/README.md`](benchmark/README.md#hot-skill-key-points-cross-task-pool).
-
----
-
-## Getting Started
-
-```bash
-hermes              # Interactive CLI — start a conversation
-hermes model        # Choose your LLM provider and model
-hermes tools        # Configure which tools are enabled
-hermes config set   # Set individual config values
-hermes gateway      # Start the messaging gateway (Telegram, Discord, etc.)
-hermes setup        # Run the full setup wizard (configures everything at once)
-hermes claw migrate # Migrate from OpenClaw (if coming from OpenClaw)
-hermes update       # Update to the latest version
-hermes doctor       # Diagnose any issues
-```
-
-
-
-📖 **[Full documentation →](https://hermes-agent.nousresearch.com/docs/)**
-
-## CLI vs Messaging Quick Reference
-
-Hermes has two entry points: start the terminal UI with `hermes`, or run the gateway and talk to it from Telegram, Discord, Slack, WhatsApp, Signal, or Email. Once you're in a conversation, many slash commands are shared across both interfaces.
-
-| Action | CLI | Messaging platforms |
-|---------|-----|---------------------|
-| Start chatting | `hermes` | Run `hermes gateway setup` + `hermes gateway start`, then send the bot a message |
-| Start fresh conversation | `/new` or `/reset` | `/new` or `/reset` |
-| Change model | `/model [provider:model]` | `/model [provider:model]` |
-| Set a personality | `/personality [name]` | `/personality [name]` |
-| Retry or undo the last turn | `/retry`, `/undo` | `/retry`, `/undo` |
-| Compress context / check usage | `/compress`, `/usage`, `/insights [--days N]` | `/compress`, `/usage`, `/insights [days]` |
-| Browse skills | `/skills` or `/<skill-name>` | `/<skill-name>` |
-| Interrupt current work | `Ctrl+C` or send a new message | `/stop` or send a new message |
-| Platform-specific status | `/platforms` | `/status`, `/sethome` |
-
-For the full command lists, see the [CLI guide](https://hermes-agent.nousresearch.com/docs/user-guide/cli) and the [Messaging Gateway guide](https://hermes-agent.nousresearch.com/docs/user-guide/messaging).
-
----
-
-## Documentation
-
-All documentation lives at **[hermes-agent.nousresearch.com/docs](https://hermes-agent.nousresearch.com/docs/)**:
-
-| Section | What's Covered |
-|---------|---------------|
-| [Quickstart](https://hermes-agent.nousresearch.com/docs/getting-started/quickstart) | Install → setup → first conversation in 2 minutes |
-| [CLI Usage](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | Commands, keybindings, personalities, sessions |
-| [Configuration](https://hermes-agent.nousresearch.com/docs/user-guide/configuration) | Config file, providers, models, all options |
-| [Messaging Gateway](https://hermes-agent.nousresearch.com/docs/user-guide/messaging) | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant |
-| [Security](https://hermes-agent.nousresearch.com/docs/user-guide/security) | Command approval, DM pairing, container isolation |
-| [Tools & Toolsets](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools) | 40+ tools, toolset system, terminal backends |
-| [Skills System](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) | Procedural memory, Skills Hub, creating skills |
-| [Memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory) | Persistent memory, user profiles, best practices |
-| [MCP Integration](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) | Connect any MCP server for extended capabilities |
-| [Cron Scheduling](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) | Scheduled tasks with platform delivery |
-| [Context Files](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-files) | Project context that shapes every conversation |
-| [Architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture) | Project structure, agent loop, key classes |
-| [Contributing](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) | Development setup, PR process, code style |
-| [CLI Reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) | All commands and flags |
-| [Environment Variables](https://hermes-agent.nousresearch.com/docs/reference/environment-variables) | Complete env var reference |
-
----
-
-## Migrating from OpenClaw
-
-If you're coming from OpenClaw, Hermes can automatically import your settings, memories, skills, and API keys.
-
-**During first-time setup:** The setup wizard (`hermes setup`) automatically detects `~/.openclaw` and offers to migrate before configuration begins.
-
-**Anytime after install:**
-
-```bash
-hermes claw migrate              # Interactive migration (full preset)
-hermes claw migrate --dry-run    # Preview what would be migrated
-hermes claw migrate --preset user-data   # Migrate without secrets
-hermes claw migrate --overwrite  # Overwrite existing conflicts
-```
-
-What gets imported:
-- **SOUL.md** — persona file
-- **Memories** — MEMORY.md and USER.md entries
-- **Skills** — user-created skills → `~/.hermes/skills/openclaw-imports/`
-- **Command allowlist** — approval patterns
-- **Messaging settings** — platform configs, allowed users, working directory
-- **API keys** — allowlisted secrets (Telegram, OpenRouter, OpenAI, Anthropic, ElevenLabs)
-- **TTS assets** — workspace audio files
-- **Workspace instructions** — AGENTS.md (with `--workspace-target`)
-
-See `hermes claw migrate --help` for all options, or use the `openclaw-migration` skill for an interactive agent-guided migration with dry-run previews.
-
----
-
-## Contributing
-
-We welcome contributions! See the [Contributing Guide](https://hermes-agent.nousresearch.com/docs/developer-guide/contributing) for development setup, code style, and PR process.
-
-Quick start for contributors — clone and go with `setup-hermes.sh`:
-
-```bash
-git clone https://github.com/NousResearch/hermes-agent.git
-cd hermes-agent
-./setup-hermes.sh     # installs uv, creates venv, installs .[all], symlinks ~/.local/bin/hermes
-./hermes              # auto-detects the venv, no need to `source` first
-```
-
-Manual path (equivalent to the above):
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv venv venv --python 3.11
-source venv/bin/activate
+# Python 3.12+ is required for SkillsBench / BenchFlow.
+./setup-hermes.sh          # uv venv, install, optional wizard
+# or:
+uv venv .venv --python 3.12
+source .venv/bin/activate  # or: source venv/bin/activate
 uv pip install -e ".[all,dev]"
-scripts/run_tests.sh
 ```
 
-> **RL Training (optional):** The RL/Atropos integration (`environments/`) ships via the `atroposlib` and `tinker` dependencies pulled in by `.[all,dev]` — no submodule setup required.
+Then configure a provider and API keys (Hermes reads `~/.hermes/config.yaml` and `~/.hermes/.env`):
+
+```bash
+source .venv/bin/activate
+hermes setup               # or: hermes model
+```
+
+Isolated experiment homes **copy** repo `skills/` into `$expDir/hermes_home/skills` and **symlink** `config.yaml`, `.env`, and `SOUL.md` to the real `~/.hermes`. You still need a working Hermes profile on the host.
+
+Full CLI / config / skills documentation: [`README_HERMES.md`](README_HERMES.md). TipsWarm internals: [`agent/hot_skills.py`](agent/hot_skills.py). Extra driver flags: [`benchmark/README.md`](benchmark/README.md).
 
 ---
 
-## Community
+## 2. Prepare benchmarks
 
-- 💬 [Discord](https://discord.gg/NousResearch)
-- 📚 [Skills Hub](https://agentskills.io)
-- 🐛 [Issues](https://github.com/NousResearch/hermes-agent/issues)
-- 🔌 [HermesClaw](https://github.com/AaronWong1999/hermesclaw) — Community WeChat bridge: Run Hermes Agent and OpenClaw on the same WeChat account.
+Install extras from the **repo root** (same venv). Task trees and official setup notes live in the vendored dirs.
+
+```bash
+source .venv/bin/activate
+pip install -e ".[skillsbench]"          # BenchFlow
+pip install -e ".[alfworld]"             # ALFWorld TextWorld driver
+pip install -e benchmark/appworld        # AppWorld package
+```
+
+| Benchmark | What to prepare | Details |
+|-----------|-----------------|---------|
+| **SkillsBench** | Nested tree at `benchmark/skillsbench/` (already vendored). Optional: `cd benchmark/skillsbench && pip install -e .` | [`benchmark/skillsbench/README.md`](benchmark/skillsbench/README.md), splits in [`benchmark/skillsbench_splits/`](benchmark/skillsbench_splits/) |
+| **AppWorld** | Download official data once | [`benchmark/appworld/README.md`](benchmark/appworld/README.md) |
+| **ALFWorld** | PDDL / `game.tw-pddl` files; set `ALFWORLD_DATA` | [`benchmark/alfworld/README.md`](benchmark/alfworld/README.md) |
+
+AppWorld data:
+
+```bash
+cd benchmark/appworld
+appworld download data
+cd ../..
+```
+
+ALFWorld data (path is machine-specific):
+
+```bash
+export ALFWORLD_DATA=/path/to/alfworld/data
+# optional: alfworld-download   # see benchmark/alfworld/README.md
+```
+
+Train/test partitions used in the paper:
+
+- SkillsBench: [`benchmark/skillsbench_splits/stratified_v1.json`](benchmark/skillsbench_splits/stratified_v1.json) — 65 train / 23 test
+- AppWorld: official `train` → `test_normal`
+- ALFWorld: `train` (limit 50) → `valid_unseen`
+
+---
+
+## 3. Configure other baseline methods
+
+**A-MEM** needs the `[amem]` extra and a one-time MiniLM prefetch (Chroma embeddings). If `huggingface.co` is blocked, set a mirror first. See [`benchmark/baselines/amem/README.md`](benchmark/baselines/amem/README.md).
+
+```bash
+pip install -e ".[amem]"
+export HF_ENDPOINT=https://hf-mirror.com   # optional
+python -c "from sentence_transformers import SentenceTransformer as S; m=S('all-MiniLM-L6-v2'); print('ok', m.get_sentence_embedding_dimension())"
+```
+
+**Dynamic Cheatsheet (DC-Cu)** uses the same OpenAI-compatible endpoint as Hermes. No extra pip package. See [`benchmark/baselines/dcheatsheet/README.md`](benchmark/baselines/dcheatsheet/README.md).
+
+Reported protocol:
+
+- DC **warmup:** `--dc --dc-freeze` (inject only; no curator writes)
+- DC **test** (after copying the workspace): `--dc --dc-sync-every 0` (one curator pass per episode)
+- A-MEM **test:** `--amem --amem-sync-every 20`
+
+`--dc-freeze` / `--amem-freeze` ignore `--*-sync-every` (readonly inject).
+
+---
+
+## 4. Run experiments
+
+Always from the **repo root**, with the venv activated. Shared conventions:
+
+1. Set `expDir=benchmark/runs/<name>` and pass `--experiment-dir $expDir --isolate-hermes-home`.
+2. Persist method state under that directory (`hot_pool.json`, `amem/`, `dcheatsheet/`).
+3. Warmup on the train split; **copy the whole workspace** to a test directory; delete only `runs.jsonl`; re-point `expDir`; run the test split.
+4. Between SkillsBench experiments, reset the nested task git so leftover agent files cannot leak:
+
+```bash
+cd benchmark/skillsbench
+git restore .
+git clean -fdn    # dry run
+git clean -fd
+cd ../..
+```
+
+`--experiment-dir` already copies tasks into `$expDir/skillsbench/tasks/`. The `git clean` is extra insurance for the shared tree at `benchmark/skillsbench/tasks/`.
+
+Set these once per shell:
+
+```bash
+source .venv/bin/activate
+model=Qwen/Qwen3.6-27B
+provider=openrouter          # or your Hermes provider id (e.g. a local vLLM)
+```
+
+OpenRouter-style ids are sometimes lowercase (`qwen/qwen3.6-27b`); use whatever `hermes model` resolved.
+
+More flags (pass@k variants, single-task smoke tests, telemetry): [`benchmark/README.md`](benchmark/README.md).
+
+### 4.1 SkillsBench — TipsWarm
+
+**Warmup (train)**
+
+```bash
+expDir=benchmark/runs/skillsbench_hot_train
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --experiment-dir $expDir \
+  --isolate-hermes-home \
+  --split-file benchmark/skillsbench_splits/stratified_v1.json \
+  --split-part train \
+  --pass-k 1,5,10,30,60 \
+  --model $model --provider $provider \
+  --skip-context-files \
+  --skip-memory \
+  --hot-pool \
+  --hot-pool-persist $expDir/hot_pool.json \
+  --max-iterations 60 \
+  --log-jsonl $expDir/runs.jsonl \
+  --print-summary \
+  --resume
+```
+
+**Test**
+
+```bash
+expDir2=benchmark/runs/skillsbench_hot_train_test
+cp -r $expDir $expDir2
+rm -f $expDir2/runs.jsonl
+expDir=$expDir2
+
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --experiment-dir $expDir \
+  --isolate-hermes-home \
+  --split-file benchmark/skillsbench_splits/stratified_v1.json \
+  --split-part test \
+  --pass-k 1,5,10,30,60 \
+  --model $model --provider $provider \
+  --skip-context-files \
+  --skip-memory \
+  --hot-pool \
+  --hot-pool-persist $expDir/hot_pool.json \
+  --max-iterations 60 \
+  --log-jsonl $expDir/runs.jsonl \
+  --print-summary \
+  --resume
+```
+
+**Summarize**
+
+```bash
+python3 benchmark/scripts/aggregate_skillsbench_runs.py \
+  $expDir/runs.jsonl \
+  --pass-k 1,5,10,30,60 \
+  --max-user-iterations 60 \
+  --split-part test \
+  --print-summary \
+  -o $expDir/summary.json
+```
+
+HermesSkills: same commands with `--no-hot-pool` and without `--hot-pool-persist`.  
+A-MEM: replace the hot-pool flags with `--amem` on warmup and `--amem --amem-sync-every 20` on test.  
+DC: replace them with `--dc --dc-freeze` on warmup and `--dc --dc-sync-every 0` on test.
+
+### 4.2 AppWorld — TipsWarm
+
+**Warmup (train)**
+
+```bash
+exp=appworld_hot_train
+expDir=benchmark/runs/$exp
+python3 benchmark/scripts/run_appworld_with_hermes.py \
+  --dataset train --all \
+  --model $model \
+  --experiment-dir $expDir \
+  --isolate-hermes-home --skip-context-files --skip-memory \
+  --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --experiment-name $exp \
+  --log-jsonl $expDir/runs.jsonl \
+  --resume --print-summary
+```
+
+**Test (`test_normal`)**
+
+```bash
+exp2=appworld_hot_train_unseen
+expDir2=benchmark/runs/$exp2
+cp -r $expDir $expDir2
+exp=$exp2
+expDir=$expDir2
+rm -f $expDir/runs.jsonl
+
+python3 benchmark/scripts/run_appworld_with_hermes.py \
+  --dataset test_normal --all \
+  --model $model \
+  --experiment-dir $expDir \
+  --isolate-hermes-home --skip-context-files --skip-memory \
+  --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --experiment-name $exp \
+  --log-jsonl $expDir/runs.jsonl \
+  --resume --print-summary
+```
+
+**Summarize** (budget *k* = AppWorld `execute()` steps)
+
+```bash
+python3 benchmark/scripts/aggregate_skillsbench_runs.py \
+  $expDir/runs.jsonl \
+  --pass-k 1,10,20,40 --max-user-iterations 40 --auc-max-k 40 \
+  -o $expDir/summary.json --print-summary
+```
+
+Swap in `--no-hot-pool`, `--amem` / `--amem-sync-every 20`, or `--dc --dc-freeze` / `--dc --dc-sync-every 0` as in §4.1.
+
+### 4.3 ALFWorld — TipsWarm
+
+ALFWorld needs `--tools` so skill tools (and therefore TipsWarm) are in the loop.
+
+**Warmup**
+
+```bash
+export ALFWORLD_DATA=/path/to/alfworld/data
+expDir=benchmark/runs/alfworld_hot_train
+python3 benchmark/scripts/run_alfworld_with_hermes.py --all \
+  --experiment-dir $expDir \
+  --isolate-hermes-home \
+  --split train --limit 50 \
+  --model $model \
+  --skip-context-files --skip-memory \
+  --tools --hot-pool \
+  --hot-pool-persist $expDir/hot_pool.json \
+  --max-steps 50 \
+  --log-jsonl $expDir/runs.jsonl \
+  --print-summary --resume
+```
+
+**Test (`valid_unseen`)**
+
+```bash
+expDir2=benchmark/runs/alfworld_hot_train_unseen
+cp -r $expDir $expDir2
+rm -f $expDir2/runs.jsonl
+expDir=$expDir2
+python3 benchmark/scripts/run_alfworld_with_hermes.py --all \
+  --experiment-dir $expDir \
+  --isolate-hermes-home \
+  --split valid_unseen \
+  --model $model \
+  --skip-context-files --skip-memory \
+  --tools --hot-pool \
+  --hot-pool-persist $expDir/hot_pool.json \
+  --max-steps 50 \
+  --log-jsonl $expDir/runs.jsonl \
+  --print-summary --resume
+```
+
+The driver prints Success@k / AUC / final / cost at the end of a batch and writes `$expDir/summary.json`. To re-aggregate later:
+
+```bash
+python3 benchmark/scripts/aggregate_skillsbench_runs.py \
+  $expDir/runs.jsonl \
+  --pass-k 1,5,10,30,50 --max-user-iterations 50 --auc-max-k 50 \
+  -o $expDir/summary.json --print-summary
+```
+
+`--amem` and `--dc` enable `--tools` automatically if you omit it. Use the same freeze / `sync-every` flags as the other benchmarks.
+
+---
+
+## 5. Reported results
+
+Git indexes **`benchmark/runs/*/summary.json`**, **`benchmark/runs/*/hot_pool.json`** (TipsWarm), and **`benchmark/runs/*.csv`**. JSONL logs, `hermes_home/`, and task copies stay untracked.
+
+Headline numbers below are copied from those CSVs (one row per seed; empty method names in the CSV are the same method as the previous named row). Token / iteration / time columns are **cost-to-succeed** among tasks that finish within the budget (SkillsBench, AppWorld) unless the CSV header says otherwise.
+
+### SkillsBench (Qwen3.6-27B)
+
+Source: [`benchmark/runs/skillsbench_main.csv`](benchmark/runs/skillsbench_main.csv). Pass@k is Hermes API turns; *k* ∈ {1,10,30,60}.
+
+| Method | Seed | macro AUC | micro AUC | P@1 | P@10 | P@30 | P@60 | tokens | iters | time (s) |
+|--------|------|-----------|-----------|-----|------|------|------|--------|-------|----------|
+| A-MEM | 1 | 0.5232 | 0.6304 | 0.0000 | 0.2174 | 0.6087 | 0.7826 | 1.65e6±1.69e6 | 20.9±13.4 | 8044±9769 |
+| DC | 1 | 0.5268 | 0.6331 | 0.1304 | 0.2609 | 0.6957 | 0.6957 | 6.10e5±4.01e5 | 15.6±9.0 | 1169±1081 |
+| DC | 2 | 0.4587 | 0.5861 | 0.0435 | 0.2609 | 0.6087 | 0.6957 | 9.85e5±7.84e5 | 21.4±15.1 | 1656±1077 |
+| DC | 3 | 0.2659 | 0.4324 | 0.0435 | 0.0435 | 0.3043 | 0.6087 | 1.58e6±9.44e5 | 34.8±18.1 | 2256±1828 |
+| HermesSkills | 1 | 0.4803 | 0.5289 | 0.0455 | 0.2273 | 0.6818 | 0.8182 | 1.10e6±6.18e5 | 25.8±13.8 | 1977±1077 |
+| HermesSkills | 2 | 0.4167 | 0.5379 | 0.0435 | 0.2174 | 0.6087 | 0.8261 | 1.33e6±8.66e5 | 30.7±18.0 | 2549±1456 |
+| HermesSkills | 3 | 0.4703 | 0.6665 | 0.0435 | 0.2174 | 0.6957 | 0.8261 | 1.18e6±7.54e5 | 26.8±15.4 | 1699±1026 |
+| TipsWarm | 1 | 0.5101 | 0.5785 | 0.0435 | 0.2174 | 0.7391 | 0.8261 | 1.24e6±8.02e5 | 25.3±14.3 | 1283±876 |
+| TipsWarm | 2 | 0.5312 | 0.6057 | 0.0435 | 0.3913 | 0.6957 | 0.8261 | 1.38e6±1.36e6 | 22.4±18.3 | 1452±951 |
+| TipsWarm | 3 | 0.5565 | 0.6083 | 0.0870 | 0.3043 | 0.7391 | 0.8696 | 1.33e6±1.09e6 | 24.2±14.9 | 1574±1085 |
+
+DeepSeek vs Qwen (SkillsBench only): [`benchmark/runs/skillsbench_model.csv`](benchmark/runs/skillsbench_model.csv).
+
+### AppWorld (`test_normal`)
+
+Source: [`benchmark/runs/appworld.csv`](benchmark/runs/appworld.csv). Success@k is `execute()` steps; *k* ∈ {1,10,20,40}.
+
+| Method | Seed | macro AUC | micro AUC | S@1 | S@10 | S@20 | S@40 |
+|--------|------|-----------|-----------|-----|------|------|------|
+| A-MEM | 1 | 0.3757 | 0.5071 | 0.0000 | 0.2275 | 0.4551 | 0.5629 |
+| DC | 1 | 0.3804 | 0.4668 | 0.0000 | 0.2036 | 0.4611 | 0.5808 |
+| DC | 2 | 0.3350 | 0.4563 | 0.0000 | 0.2024 | 0.3988 | 0.5000 |
+| DC | 3 | 0.3516 | 0.4793 | 0.0000 | 0.2083 | 0.4167 | 0.5238 |
+| HermesSkills | 1 | 0.4390 | 0.5076 | 0.0000 | 0.1905 | 0.5298 | 0.6726 |
+| HermesSkills | 2 | 0.3978 | 0.4687 | 0.0000 | 0.1726 | 0.4583 | 0.6250 |
+| HermesSkills | 3 | 0.4277 | 0.4718 | 0.0000 | 0.1845 | 0.4821 | 0.6845 |
+| TipsWarm | 1 | 0.4616 | 0.4854 | 0.0000 | 0.2202 | 0.5476 | 0.7202 |
+| TipsWarm | 2 | 0.4280 | 0.4849 | 0.0000 | 0.1845 | 0.4821 | 0.6786 |
+| TipsWarm | 3 | 0.4413 | 0.4866 | 0.0000 | 0.1497 | 0.5030 | 0.7305 |
+
+### ALFWorld (`valid_unseen`)
+
+Source: [`benchmark/runs/alfworld.csv`](benchmark/runs/alfworld.csv). Success@k is env steps; *k* ∈ {1,10,30,50}.
+
+| Method | Seed | macro AUC | S@1 | S@10 | S@30 | S@50 |
+|--------|------|-----------|-----|------|------|------|
+| A-MEM | 1 | 0.6507 | 0.0000 | 0.4403 | 0.8284 | 0.8731 |
+| DC | 1 | 0.7407 | 0.0000 | 0.5672 | 0.9030 | 0.9701 |
+| DC | 2 | 0.7345 | 0.0000 | 0.5896 | 0.9179 | 0.9552 |
+| DC | 3 | 0.7378 | 0.0000 | 0.5597 | 0.9104 | 0.9701 |
+| HermesSkills | 1 | 0.7061 | 0.0000 | 0.5000 | 0.8731 | 0.9403 |
+| HermesSkills | 2 | 0.7284 | 0.0000 | 0.5373 | 0.8881 | 0.9851 |
+| HermesSkills | 3 | 0.7090 | 0.0000 | 0.5075 | 0.8657 | 0.9776 |
+| TipsWarm | 1 | 0.7181 | 0.0000 | 0.5000 | 0.8955 | 0.9701 |
+| TipsWarm | 2 | 0.7133 | 0.0000 | 0.5149 | 0.8955 | 0.9851 |
+| TipsWarm | 3 | 0.6901 | 0.0000 | 0.4552 | 0.8657 | 0.9776 |
+
+### Indexed run directories
+
+Each cell is the git-tracked `summary.json`. TipsWarm cells also have `hot_pool.json` in the same directory.
+
+**SkillsBench (test)**
+
+| Method | Seed 1 | Seed 2 | Seed 3 |
+|--------|--------|--------|--------|
+| A-MEM | [summary](benchmark/runs/skillsbench_amem_train0824_test/summary.json) | — | — |
+| DC | [summary](benchmark/runs/skillsbench_dc_train0906_test1/summary.json) | [summary](benchmark/runs/skillsbench_dc_train0906_test2/summary.json) | [summary](benchmark/runs/skillsbench_dc_train0906_test3/summary.json) |
+| HermesSkills | [summary](benchmark/runs/skillsbench_no_hot_train0907_test1/summary.json) | [summary](benchmark/runs/skillsbench_no_hot_train0907_test2/summary.json) | [summary](benchmark/runs/skillsbench_no_hot_train0907_test3/summary.json) |
+| TipsWarm | [summary](benchmark/runs/skillsbench_hot_train0917_test1/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0917_test1/hot_pool.json) | [summary](benchmark/runs/skillsbench_hot_train0917_test2/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0917_test2/hot_pool.json) | [summary](benchmark/runs/skillsbench_hot_train0917_test3/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0917_test3/hot_pool.json) |
+
+DeepSeek SkillsBench: HermesSkills [`ds_test1`](benchmark/runs/skillsbench_no_hot_train0911_ds_test1/summary.json) / [`ds_test2`](benchmark/runs/skillsbench_no_hot_train0911_ds_test2/summary.json) / [`ds_test3`](benchmark/runs/skillsbench_no_hot_train0911_ds_test3/summary.json); TipsWarm [`ds_test1`](benchmark/runs/skillsbench_hot_train0911_ds_test1/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0911_ds_test1/hot_pool.json) / [`ds_test2`](benchmark/runs/skillsbench_hot_train0911_ds_test2/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0911_ds_test2/hot_pool.json) / [`ds_test3`](benchmark/runs/skillsbench_hot_train0911_ds_test3/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0911_ds_test3/hot_pool.json).
+
+**AppWorld (`test_normal`)**
+
+| Method | Seed 1 | Seed 2 | Seed 3 |
+|--------|--------|--------|--------|
+| A-MEM | [summary](benchmark/runs/appworld_amem0824_unseen/summary.json) | — | — |
+| DC | [summary](benchmark/runs/appworld_dc0909_test/summary.json) | [summary](benchmark/runs/appworld_dc0909_test2/summary.json) | [summary](benchmark/runs/appworld_dc0909_test3/summary.json) |
+| HermesSkills | [summary](benchmark/runs/appworld_no_hot_train0821_unseen1/summary.json) | [summary](benchmark/runs/appworld_no_hot_train0821_unseen2/summary.json) | [summary](benchmark/runs/appworld_no_hot_train0821_unseen3/summary.json) |
+| TipsWarm | [summary](benchmark/runs/appworld_hot_train0901_unseen/summary.json) · [pool](benchmark/runs/appworld_hot_train0901_unseen/hot_pool.json) | [summary](benchmark/runs/appworld_hot_train0901_unseen2/summary.json) · [pool](benchmark/runs/appworld_hot_train0901_unseen2/hot_pool.json) | [summary](benchmark/runs/appworld_hot_train0901_unseen3/summary.json) · [pool](benchmark/runs/appworld_hot_train0901_unseen3/hot_pool.json) |
+
+**ALFWorld (`valid_unseen`)**
+
+| Method | Seed 1 | Seed 2 | Seed 3 |
+|--------|--------|--------|--------|
+| A-MEM | [summary](benchmark/runs/alfworld_amem_train0824_unseen0828/summary.json) | — | — |
+| DC | [summary](benchmark/runs/alfworld_dc_train0906_unseen/summary.json) | [summary](benchmark/runs/alfworld_dc_train0906_unseen2/summary.json) | [summary](benchmark/runs/alfworld_dc_train0906_unseen3/summary.json) |
+| HermesSkills | [summary](benchmark/runs/alfworld_no_hot_train0820_unseen/summary.json) | [summary](benchmark/runs/alfworld_no_hot_train0820_unseen2/summary.json) | [summary](benchmark/runs/alfworld_no_hot_train0820_unseen3/summary.json) |
+| TipsWarm | [summary](benchmark/runs/alfworld_hot_train0825_unseen/summary.json) · [pool](benchmark/runs/alfworld_hot_train0825_unseen/hot_pool.json) | [summary](benchmark/runs/alfworld_hot_train0825_unseen2/summary.json) · [pool](benchmark/runs/alfworld_hot_train0825_unseen2/hot_pool.json) | [summary](benchmark/runs/alfworld_hot_train0825_unseen3/summary.json) · [pool](benchmark/runs/alfworld_hot_train0825_unseen3/hot_pool.json) |
+
+A fuller directory list (train snapshots, ablations, hottest-pool transfers) is in [`benchmark/runs/README.md`](benchmark/runs/README.md).
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
-Built by [Nous Research](https://nousresearch.com).
+Hermes Agent is MIT — see [LICENSE](LICENSE). Vendored benchmarks keep their own licenses (SkillsBench Apache-2.0, AppWorld Apache-2.0, ALFWorld as upstream).

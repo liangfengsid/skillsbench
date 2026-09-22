@@ -2,7 +2,11 @@
 
 Hermes ships evaluation harnesses under `benchmark/` for running **`AIAgent`** against public benchmarks and comparing runs. All **Hermes-specific drivers** live in [`scripts/`](scripts/). Vendored benchmark trees (`skillsbench/`, `alfworld/`, `appworld/`) keep their upstream docs.
 
+**Paper reproduction (TipsWarm / HermesSkills / A-MEM / DC)** — isolated `$expDir`, copy-workspace test, and reported tables — is in the root [`README.md`](../README.md). This file is the **flag and option reference** plus extra experiments (single-task smokes, split generators, telemetry).
+
 **Run commands from the Hermes repo root** unless noted otherwise.
+
+**Default for any experiment you intend to keep:** `--experiment-dir $expDir --isolate-hermes-home`, and persist method state under `$expDir` (`hot_pool.json`, `amem/`, `dcheatsheet/`). Do not pass a live `~/.hermes` skills tree into an A/B run.
 
 ## Prerequisites
 
@@ -31,35 +35,21 @@ source .venv/bin/activate   # or: source venv/bin/activate
 
 ### A-Mem baseline (SkillsBench, ALFWorld, AppWorld)
 
-A-Mem is **not** a skill factory. It is a long-term episode-memory baseline vs the hot-skill pool: same Hermes agent, skill tools on, hot-skill off, notes injected via `<memory-context>`. Implementation: memory plugin [`plugins/memory/amem/`](../plugins/memory/amem/) + `--amem` on the three Hermes drivers.
+A-Mem is **not** a skill factory. It is a long-term episode-memory baseline vs TipsWarm: same Hermes agent, skill tools on, hot-skill off, notes injected via `<memory-context>`. Implementation: memory plugin [`plugins/memory/amem/`](../plugins/memory/amem/) + `--amem` on the three Hermes drivers.
 
 ```bash
 pip install -e ".[amem]"
 # Prefetch MiniLM first (export HF_ENDPOINT=https://hf-mirror.com if huggingface.co is blocked).
 # Steps: baselines/amem/README.md  →  Prefetch MiniLM
-
-python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --amem --experiment-dir benchmark/runs/exp_amem_train \
-  --isolate-hermes-home \
-  --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \
-  --log-jsonl benchmark/runs/exp_amem_train/runs.jsonl --resume --print-summary
 ```
 
-Copy-paste train/eval for all three benchmarks: [`baselines/amem/README.md`](baselines/amem/README.md).
+Copy-paste train/eval (including `$expDir` and `--amem-sync-every 20` on test): [`baselines/amem/README.md`](baselines/amem/README.md). Root [`README.md`](../README.md) has the same pattern next to TipsWarm.
 
 ### Dynamic Cheatsheet baseline (SkillsBench, ALFWorld, AppWorld)
 
-Dynamic Cheatsheet is **not** a skill factory. It is a self-curated solution notebook vs the hot-skill pool: same Hermes agent (the *generator*), skill tools on, hot-skill off, official curator prompts, cheatsheet injected via `<memory-context>`. Implementation: memory plugin [`plugins/memory/dcheatsheet/`](../plugins/memory/dcheatsheet/) + `--dc` on the three Hermes drivers.
+Dynamic Cheatsheet is **not** a skill factory. It is a self-curated solution notebook vs TipsWarm: same Hermes agent (the *generator*), skill tools on, hot-skill off, official curator prompts, cheatsheet injected via `<memory-context>`. Implementation: memory plugin [`plugins/memory/dcheatsheet/`](../plugins/memory/dcheatsheet/) + `--dc` on the three Hermes drivers.
 
-```bash
-python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --dc --experiment-dir benchmark/runs/exp_dc_train \
-  --isolate-hermes-home \
-  --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \
-  --log-jsonl benchmark/runs/exp_dc_train/runs.jsonl --resume --print-summary
-```
-
-Copy-paste train/eval for all three benchmarks: [`baselines/dcheatsheet/README.md`](baselines/dcheatsheet/README.md). `--dc` cannot combine with `--hot-pool` or `--amem`.
+Paper protocol: warmup `--dc --dc-freeze`; after copying `$expDir`, test `--dc --dc-sync-every 0`. `--dc` cannot combine with `--hot-pool` or `--amem`. Copy-paste: [`baselines/dcheatsheet/README.md`](baselines/dcheatsheet/README.md).
 
 ### Shared metrics (Hermes and baselines)
 
@@ -130,67 +120,56 @@ Task authoring and BenchFlow CLI: [`skillsbench/README.md`](skillsbench/README.m
 
 Defaults: `--hermes-root` = repo root; `--skillsbench-root` = `benchmark/skillsbench/`; `--prompt-tasks-base` = absolute path to `benchmark/skillsbench/tasks/`.
 
+**Canonical paper commands** (TipsWarm warmup → copy workspace → test → aggregate) are in the root [`README.md`](../README.md). The snippets below are extra options.
+
 ```bash
+expDir=benchmark/runs/skillsbench_hot_train
+model=Qwen/Qwen3.6-27B
+provider=openrouter
+
 # List task ids (no Hermes import)
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --list-tasks
 
-# Single task — hot pool on + persist (treatment)
-python3 benchmark/scripts/run_skillsbench_with_hermes.py \
-  --task adaptive-cruise-control \
-  --model Qwen/Qwen3.6-27B \
-  --skill-nudge-interval 10 \
-  --memory-nudge-interval 10 \
-  --hot-pool \
-  --hot-pool-persist benchmark/skillsbench_hot_pool.json \
-  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl \
-  --print-summary
-
-# Single task — hot pool off (control)
-python3 benchmark/scripts/run_skillsbench_with_hermes.py \
-  --task adaptive-cruise-control \
-  --model Qwen/Qwen3.6-27B \
-  --skill-nudge-interval 10 \
-  --memory-nudge-interval 10 \
-  --no-hot-pool \
-  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl \
-  --print-summary
-
-# Batch (sorted task order; continues after errors)
+# Isolated workspace is the default you should use for anything you keep.
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --model Qwen/Qwen3.6-27B \
-  --hot-pool \
-  --hot-pool-persist benchmark/skillsbench_hot_pool.json \
-  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
-
-# Batch — hot pool off
-python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --model Qwen/Qwen3.6-27B \
-  --no-hot-pool \
-  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
-
-# Isolated experiment workspace (recommended for multi-run / A/B):
-# copies selected tasks under DIR/skillsbench/tasks/ so agent outputs do not
-# pollute the shared SkillsBench tree; defaults hot-pool JSON to DIR/hot_pool.json.
-# Hermes keeps using ~/.hermes unless you pass --isolate-hermes-home
-# (then repo skills/ is copied into DIR/hermes_home/skills — not ~/.hermes/skills;
-# config/.env/SOUL symlink to ~/.hermes).
-python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --experiment-dir benchmark/runs/exp_hot_train \
+  --experiment-dir $expDir \
+  --isolate-hermes-home \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part train \
-  --model Qwen/Qwen3.6-27B \
-  --hot-pool \
-  --log-jsonl benchmark/runs/exp_hot_train/runs.jsonl \
-  --print-summary
+  --pass-k 1,5,10,30,60 \
+  --model $model --provider $provider \
+  --skip-context-files --skip-memory \
+  --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --max-iterations 60 \
+  --log-jsonl $expDir/runs.jsonl \
+  --print-summary --resume
+
+# Single task smoke (still isolated)
+python3 benchmark/scripts/run_skillsbench_with_hermes.py \
+  --task adaptive-cruise-control \
+  --experiment-dir $expDir --isolate-hermes-home \
+  --model $model --provider $provider \
+  --skip-context-files --skip-memory \
+  --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --log-jsonl $expDir/runs.jsonl --print-summary
+
+# HermesSkills (no tip pool)
+python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --experiment-dir $expDir --isolate-hermes-home \
+  --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \
+  --model $model --no-hot-pool \
+  --skip-context-files --skip-memory \
+  --log-jsonl $expDir/runs.jsonl --print-summary --resume
 
 # Slice of tasks: [start, end) in sorted order
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --experiment-dir $expDir --isolate-hermes-home \
   --start-task-index 0 --end-task-index 10 \
-  --model Qwen/Qwen3.6-27B \
-  --hot-pool \
-  --hot-pool-persist benchmark/skillsbench_hot_pool.json \
-  --log-jsonl benchmark/hermes_skillsbench_runs.jsonl
+  --model $model --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --log-jsonl $expDir/runs.jsonl
 ```
+
+`--experiment-dir DIR` copies selected tasks under `DIR/skillsbench/tasks/` so agent outputs do not pollute the shared SkillsBench tree. `--isolate-hermes-home` sandboxes `HERMES_HOME=DIR/hermes_home`: **copy** repo `skills/` (not `~/.hermes/skills`); **symlink** `config.yaml` / `.env` / `SOUL.md` to real `~/.hermes`. With `--hot-pool` and no `--hot-pool-persist`, the pool defaults to `DIR/hot_pool.json`.
 
 **Useful flags**
 
@@ -211,9 +190,9 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 | `--dc-persist DIR` | `DIR/dcheatsheet` with `--experiment-dir` | DC `cheatsheet.txt` + `episodes.jsonl` |
 | `--dc-mode {cu,rs,curetr}` | `cu` | DC-Cu (generate then curate), DC-RS, or CU plus retrieved examples |
 | `--dc-k K` | 3 | Retrieved prior episodes for `rs` / `curetr` |
-| `--experiment-dir DIR` | off | Per-experiment **task** workspace (`DIR/skillsbench/tasks/`); does not isolate Hermes by default |
+| `--experiment-dir DIR` | off | Per-experiment **task** workspace (`DIR/skillsbench/tasks/`). Pair with `--isolate-hermes-home` (paper default). |
 | `--reset-task-workspaces` | off | With `--experiment-dir`: refresh task copies / wipe prior agent outputs (also re-seeds isolated skills from repo `skills/`) |
-| `--isolate-hermes-home` | off | Sandbox `HERMES_HOME=DIR/hermes_home`: **copy** repo `skills/` (not `~/.hermes/skills`); **symlink** `config.yaml` / `.env` / `SOUL.md` to real `~/.hermes` |
+| `--isolate-hermes-home` | off | **Pass this for any kept run.** Sandbox `HERMES_HOME=DIR/hermes_home`: **copy** repo `skills/` (not `~/.hermes/skills`); **symlink** `config.yaml` / `.env` / `SOUL.md` to real `~/.hermes` |
 | `--no-batch-review-prompt` | off | Use default Hermes review prompt instead of SkillsBench batch appendix |
 | `--no-wait-background-review` | off | Exit without waiting for end-of-turn skill/memory review |
 | `--background-review-timeout SEC` | 180 | Max wait for background review per task |
@@ -232,23 +211,25 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 
 ```bash
 # Train split (65 tasks): pass@k + hot pool learning + full metrics logging
+expDir=benchmark/runs/skillsbench_hot_train
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --experiment-dir $expDir --isolate-hermes-home \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part train \
-  --pass-k 1,5,10,70 \
+  --pass-k 1,5,10,30,60 \
   --model Qwen/Qwen3.6-27B \
-  --hot-pool \
-  --hot-pool-persist benchmark/runs/stratified_train_pool.json \
-  --log-jsonl benchmark/runs/stratified_train.jsonl \
-  --print-summary
+  --skip-context-files --skip-memory \
+  --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --log-jsonl $expDir/runs.jsonl \
+  --print-summary --resume
 
 # Aggregate the same JSONL later (or combine multiple run files)
 python3 benchmark/scripts/aggregate_skillsbench_runs.py \
-  benchmark/runs/stratified_train.jsonl \
-  --pass-k 1,5,10,70 \
+  $expDir/runs.jsonl \
+  --pass-k 1,5,10,30,60 --max-user-iterations 60 \
   --split-part train \
   --print-summary \
-  -o benchmark/runs/stratified_train_summary.json
+  -o $expDir/summary.json
 ```
 
 **Final evaluation** — after the conversation ends, host pytest runs against `tests/test_outputs.py` (container paths `/root`, `/app`, `/tests`, `/logs` remapped into the staged workspace). Logged as `evaluation` on each JSONL row:
@@ -351,26 +332,31 @@ python3 benchmark/scripts/make_skillsbench_splits.py \
   -o benchmark/skillsbench_splits/stratified_v1.json
 ```
 
-Run a partition with the Hermes driver:
+Run a partition with the Hermes driver (copy the train workspace before the test split — see root [`README.md`](../README.md)):
 
 ```bash
-# Train split — skill updates / hot pool learning
+expDir=benchmark/runs/skillsbench_hot_train
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --experiment-dir $expDir --isolate-hermes-home \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part train \
-  --hot-pool \
-  --hot-pool-persist benchmark/runs/stratified_train_pool.json \
-  --log-jsonl benchmark/runs/stratified_train.jsonl \
-  --model Qwen/Qwen3.6-27B
+  --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --skip-context-files --skip-memory \
+  --log-jsonl $expDir/runs.jsonl \
+  --model Qwen/Qwen3.6-27B --resume
 
-# Test split — inject key points from train pool file
+expDir2=benchmark/runs/skillsbench_hot_train_test
+cp -r $expDir $expDir2
+rm -f $expDir2/runs.jsonl
+expDir=$expDir2
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
+  --experiment-dir $expDir --isolate-hermes-home \
   --split-file benchmark/skillsbench_splits/stratified_v1.json \
   --split-part test \
-  --hot-pool \
-  --hot-pool-persist benchmark/runs/stratified_train_pool.json \
-  --log-jsonl benchmark/runs/stratified_test.jsonl \
-  --model Qwen/Qwen3.6-27B
+  --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --skip-context-files --skip-memory \
+  --log-jsonl $expDir/runs.jsonl \
+  --model Qwen/Qwen3.6-27B --resume
 ```
 
 Category-holdout test (unseen domains):
@@ -397,6 +383,8 @@ Hot pool injects recently learned skill **key points** ephemerally each API turn
 | `--hot-pool-inject-retrieve` / `--no-hot-pool-inject-retrieve` | Scope matching at inject (`inject_retrieve`). Default follows config (on). `--no-…` injects without query/scope retrieve ranking |
 | `--hot-pool-outcome-feedback` / `--no-hot-pool-outcome-feedback` | Contribution attribution after host eval (`outcome_feedback`). `--no-…` skips the side-channel judge |
 | `--hot-pool-inject-filter-utilities` / `--no-hot-pool-inject-filter-utilities` | Utility screen at inject (`inject_filter_utilities`). `--no-…` does not omit/rank by stored utilities. Pair with `--no-hot-pool-outcome-feedback` to A/B without credit assignment |
+| `--hot-pool-max-entries N` | Store cap (`max_entries`). Default follows config (12). `N >= 0` |
+| `--hot-pool-inject-k N` | Per-turn inject quota (`inject_k`). Default follows config (4). `0` injects every tip that passes the skill gate |
 | `--amem` / `--amem-persist` / `--amem-k` | A-Mem baseline (see [baselines/amem](baselines/amem/README.md)); cannot combine with `--hot-pool` or `--dc` |
 | `--dc` / `--dc-persist` / `--dc-mode` / `--dc-k` | Dynamic Cheatsheet baseline (see [baselines/dcheatsheet](baselines/dcheatsheet/README.md)); cannot combine with `--hot-pool` or `--amem` |
 
@@ -441,7 +429,7 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py \
 
 JSONL rows record `hot_pool_enabled` (`true` / `false` / `null`) and `hot_pool_persist`. When the pool is active, `hot_pool_telemetry.inject` shows `point_count`, `skills_injected`, and `points_injected`. With `skip_if_in_history` (default on), pool skills already opened via `skill_view` are omitted from the inject block to avoid duplicating the full skill body; that is **not** “hot off.” Read `inject.skills_excluded_in_history` and `inject.points_excluded_in_history` for how many retained tips were skipped for that reason (`point_count==0` with nonzero exclusions still means the tips lived in the transcript via `skill_view`).
 
-Env vars (set by the driver): `HERMES_HOT_POOL_ENABLED=0|1`, `HERMES_HOT_POOL_PERSIST=1`, `HERMES_HOT_POOL_PATH=/path/to/pool.json`, and optionally `HERMES_HOT_POOL_INJECT_RETRIEVE`, `HERMES_HOT_POOL_OUTCOME_FEEDBACK`, `HERMES_HOT_POOL_INJECT_FILTER_UTILITIES` (`0`/`1`).
+Env vars (set by the driver): `HERMES_HOT_POOL_ENABLED=0|1`, `HERMES_HOT_POOL_PERSIST=1`, `HERMES_HOT_POOL_PATH=/path/to/pool.json`, and optionally `HERMES_HOT_POOL_INJECT_RETRIEVE`, `HERMES_HOT_POOL_OUTCOME_FEEDBACK`, `HERMES_HOT_POOL_INJECT_FILTER_UTILITIES` (`0`/`1`), `HERMES_HOT_POOL_MAX_ENTRIES`, and `HERMES_HOT_POOL_INJECT_K` (non-negative integers; `INJECT_K=0` means no inject cap).
 
 A/B without scope matching or credit assignment (pool still injects):
 
@@ -457,15 +445,14 @@ python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
 
 Hermes runs **write into** `benchmark/skillsbench/tasks/<task-id>/` (solution files, `mass_report.json`, local verify scripts, etc.). Leftover artifacts make iteration counts unreliable — a later run may “verify existing output” in fewer steps while a dirty tree inflates or deflates comparisons.
 
-**Preferred:** use `--experiment-dir DIR` so each experiment gets its own copy under `DIR/skillsbench/tasks/` (shared SkillsBench tree stays clean). Hermes still uses `~/.hermes` unless you pass `--isolate-hermes-home` (writable **copy** of repo `skills/` under `DIR/hermes_home/skills/` — not the live `~/.hermes/skills` tree; `config.yaml` / `.env` / `SOUL.md` stay linked to the real home).
+**Preferred:** use `--experiment-dir $expDir --isolate-hermes-home` so each experiment gets its own copy under `$expDir/skillsbench/tasks/` (shared SkillsBench tree stays clean). Also reset the nested git between runs:
 
 ```bash
-python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --experiment-dir benchmark/runs/exp_control \
-  --split-file benchmark/skillsbench_splits/stratified_v1.json \
-  --split-part train \
-  --no-hot-pool \
-  --log-jsonl benchmark/runs/exp_control/runs.jsonl
+cd benchmark/skillsbench
+git restore .
+git clean -fdn
+git clean -fd
+cd ../..
 ```
 
 Alternatively, `benchmark/skillsbench/` is a **nested git checkout**. Reset one task or the whole tree before a clean comparison:
@@ -559,33 +546,36 @@ pip install -e ".[alfworld]"
 # optional, if you want `import alfworld` without the driver path hack:
 pip install -e benchmark/alfworld
 
-export ALFWORLD_DATA=/data/liangfeng/alfwordData   # this machine's download path
+export ALFWORLD_DATA=/path/to/alfworld/data
+expDir=benchmark/runs/alfworld_hot_train
+model=Qwen/Qwen3.6-27B
 
 python3 benchmark/scripts/run_alfworld_with_hermes.py --list-tasks --split valid_unseen
 
 # Smoke: one unseen game
 python3 benchmark/scripts/run_alfworld_with_hermes.py \
   --split valid_unseen --limit 1 \
-  --model Qwen/Qwen3.6-27B \
-  --log-jsonl benchmark/runs/alfworld_smoke/runs.jsonl \
+  --experiment-dir $expDir --isolate-hermes-home \
+  --model $model \
+  --log-jsonl $expDir/runs.jsonl \
   --print-summary
 
-# Official-style eval split (valid_unseen, 50 env steps).
-# After the batch: prints Success@k / AUC / final / cost (default --print-batch-summary)
-# and writes DIR/summary.json. Budget k = env steps (default pass-k 1,5,10,30,50;
-# --auc-max-k defaults to --max-steps).
-python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen \
-  --model Qwen/Qwen3.6-27B --max-steps 50 \
-  --pass-k 1,5,10,30,50 --auc-max-k 50 \
-  --experiment-dir benchmark/runs/alfworld_unseen \
-  --log-jsonl benchmark/runs/alfworld_unseen/runs.jsonl \
+# Paper-style warmup (train, 50 games). Full copy-to-unseen protocol: root README.md
+python3 benchmark/scripts/run_alfworld_with_hermes.py --all \
+  --experiment-dir $expDir --isolate-hermes-home \
+  --split train --limit 50 \
+  --model $model \
+  --skip-context-files --skip-memory \
+  --tools --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --max-steps 50 \
+  --log-jsonl $expDir/runs.jsonl \
   --resume --print-summary
 
-# Re-aggregate an existing ALFWorld JSONL (same schema as the end-of-batch line)
+# Re-aggregate an existing ALFWorld JSONL
 python3 benchmark/scripts/aggregate_skillsbench_runs.py \
-  benchmark/runs/alfworld_unseen/runs.jsonl \
+  $expDir/runs.jsonl \
   --pass-k 1,5,10,30,50 --max-user-iterations 50 --auc-max-k 50 \
-  -o benchmark/runs/alfworld_unseen/summary.json --print-summary
+  -o $expDir/summary.json --print-summary
 ```
 
 `--task` ids look like `pick_and_place_simple-Mug-None-Desk-1/trial_T…`. Default is **no Hermes tools** (pure text policy). Pass `--tools` / `--hot-pool` if you want skills in the loop. `--amem` and `--dc` are paper memory baselines (each forces `--no-hot-pool` and enables `--tools` so skill tools stay on); see [`baselines/amem/README.md`](baselines/amem/README.md) and [`baselines/dcheatsheet/README.md`](baselines/dcheatsheet/README.md). With `--isolate-hermes-home`, skills are seeded from repo `skills/` (not `~/.hermes/skills`). JSONL uses `evaluation.task_success` so `aggregate_skillsbench_runs.py` still works. Per-task lines use `--print-summary`; batch Success@k / AUC use `--print-batch-summary` (on by default; `--no-print-batch-summary` to silence). Override budgets with `--pass-k` / `--auc-max-k` / `--summary-output`.
@@ -606,60 +596,28 @@ Hot-pool / experiment isolation mirrors ALFWorld and SkillsBench: `--hot-pool` /
 pip install -e benchmark/appworld
 # Fix broken editable IPython if import fails: pip install --force-reinstall ipython
 
+exp=appworld_hot_train
+expDir=benchmark/runs/$exp
+model=Qwen/Qwen3.6-27B
+
 python3 benchmark/scripts/run_appworld_with_hermes.py --list-tasks --dataset train
 
-# 1) Train — generate / grow hot pool.
-# After the batch: prints Success@k / AUC / final / cost (default --print-batch-summary)
-# and writes DIR/summary.json. Budget k = AppWorld execute() steps
-# (default pass-k 1,5,10,30,40; --auc-max-k defaults to --max-steps).
+# 1) Train — generate / grow hot pool. Copy-to-test_normal: root README.md
 python3 benchmark/scripts/run_appworld_with_hermes.py \
   --dataset train --all \
-  --model Qwen/Qwen3.6-27B \
-  --max-steps 40 --pass-k 1,5,10,30,40 --auc-max-k 40 \
-  --experiment-dir benchmark/runs/appworld_hot_train \
-  --isolate-hermes-home --hot-pool \
-  --experiment-name hermes-train \
-  --log-jsonl benchmark/runs/appworld_hot_train/runs.jsonl \
+  --model $model \
+  --experiment-dir $expDir \
+  --isolate-hermes-home --skip-context-files --skip-memory \
+  --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --experiment-name $exp \
+  --log-jsonl $expDir/runs.jsonl \
   --resume --print-summary
 
-# 2) Unseen test — inject frozen train pool (do not rebuild on test_*)
-python3 benchmark/scripts/run_appworld_with_hermes.py \
-  --dataset test_normal --all \
-  --model Qwen/Qwen3.6-27B \
-  --max-steps 40 --pass-k 1,5,10,30,40 --auc-max-k 40 \
-  --experiment-dir benchmark/runs/appworld_hot_test \
-  --isolate-hermes-home \
-  --hot-pool --hot-pool-persist benchmark/runs/appworld_hot_train/hot_pool.json \
-  --experiment-name hermes-test \
-  --log-jsonl benchmark/runs/appworld_hot_test/runs.jsonl \
-  --resume --print-summary
-
-# 3) Optional train-repeat — same frozen pool on train again
-python3 benchmark/scripts/run_appworld_with_hermes.py \
-  --dataset train --all \
-  --model Qwen/Qwen3.6-27B \
-  --experiment-dir benchmark/runs/appworld_hot_train_repeat \
-  --isolate-hermes-home \
-  --hot-pool --hot-pool-persist benchmark/runs/appworld_hot_train/hot_pool.json \
-  --experiment-name hermes-train-repeat \
-  --log-jsonl benchmark/runs/appworld_hot_train_repeat/runs.jsonl \
-  --resume --print-summary
-
-# Control (no hot pool) on unseen test
-python3 benchmark/scripts/run_appworld_with_hermes.py \
-  --dataset test_normal --all \
-  --model Qwen/Qwen3.6-27B \
-  --experiment-dir benchmark/runs/appworld_no_hot_test \
-  --isolate-hermes-home --no-hot-pool \
-  --experiment-name hermes-no-hot-test \
-  --log-jsonl benchmark/runs/appworld_no_hot_test/runs.jsonl \
-  --resume --print-summary
-
-# Re-aggregate an existing AppWorld JSONL (run rows; eval-only rows merge steps from runs)
+# Re-aggregate an existing AppWorld JSONL
 python3 benchmark/scripts/aggregate_skillsbench_runs.py \
-  benchmark/runs/appworld_hot_test/runs.jsonl \
-  --pass-k 1,5,10,30,40 --max-user-iterations 40 --auc-max-k 40 \
-  -o benchmark/runs/appworld_hot_test/summary.json --print-summary
+  $expDir/runs.jsonl \
+  --pass-k 1,10,20,40 --max-user-iterations 40 --auc-max-k 40 \
+  -o $expDir/summary.json --print-summary
 ```
 
 **AppWorld data:** from `benchmark/appworld/`, run `appworld download data` once (sets up `data/` under `APPWORLD_ROOT`; default is the AppWorld repo root). See [`appworld/README.md`](appworld/README.md) for `APPWORLD_ROOT` and full setup.

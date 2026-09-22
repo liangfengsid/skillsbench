@@ -235,6 +235,26 @@ def test_apply_hot_pool_cli_overrides_scope_and_attribution(monkeypatch):
     assert os.environ.get("HERMES_HOT_POOL_INJECT_FILTER_UTILITIES") == "0"
 
 
+def test_apply_hot_pool_cli_overrides_size(monkeypatch):
+    mod = _load_module()
+    monkeypatch.setenv("HERMES_HOT_POOL_MAX_ENTRIES", "12")
+    monkeypatch.setenv("HERMES_HOT_POOL_INJECT_K", "4")
+    mod.apply_hot_pool_cli_overrides(
+        hot_pool=True,
+        hot_pool_persist=None,
+        max_entries=24,
+        inject_k=0,
+    )
+    import os
+
+    assert os.environ.get("HERMES_HOT_POOL_MAX_ENTRIES") == "24"
+    assert os.environ.get("HERMES_HOT_POOL_INJECT_K") == "0"
+
+    mod.apply_hot_pool_cli_overrides(hot_pool=False, hot_pool_persist=None)
+    assert "HERMES_HOT_POOL_MAX_ENTRIES" not in os.environ
+    assert "HERMES_HOT_POOL_INJECT_K" not in os.environ
+
+
 def test_build_batch_metrics_summary_matches_aggregator(tmp_path):
     """Batch summary uses full JSONL + same kwargs as aggregate_skillsbench_runs."""
     import json

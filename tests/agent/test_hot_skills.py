@@ -278,6 +278,24 @@ def test_load_hot_skills_config_env_inject_and_outcome_overrides(monkeypatch):
     assert cfg["inject_filter_utilities"] is False
 
 
+def test_load_hot_skills_config_env_size_overrides(monkeypatch):
+    monkeypatch.setenv("HERMES_HOT_POOL_MAX_ENTRIES", "24")
+    monkeypatch.setenv("HERMES_HOT_POOL_INJECT_K", "0")
+    cfg = load_hot_skills_config(
+        {"hot_pool": {"max_entries": 12, "inject_k": 4}}
+    )
+    assert cfg["max_entries"] == 24
+    assert cfg["inject_k"] == 0
+
+    monkeypatch.setenv("HERMES_HOT_POOL_MAX_ENTRIES", "nope")
+    monkeypatch.delenv("HERMES_HOT_POOL_INJECT_K")
+    cfg_bad = load_hot_skills_config(
+        {"hot_pool": {"max_entries": 12, "inject_k": 4}}
+    )
+    assert cfg_bad["max_entries"] == 12
+    assert cfg_bad["inject_k"] == 4
+
+
 def test_global_pool_max_entries_is_retain_and_inject():
     cfg = {
         "enabled": True,

@@ -52,4 +52,4 @@ Env vars (set by the drivers):
 - `HERMES_AMEM_LLM_MODEL` / `HERMES_AMEM_API_KEY` / `HERMES_AMEM_API_BASE`
 - `HERMES_AMEM_EMBED_MODEL` (default `all-MiniLM-L6-v2`)
 
-See [`benchmark/baselines/amem/README.md`](../../../benchmark/baselines/amem/README.md) for train → freeze → eval commands.
+See [`benchmark/baselines/amem/README.md`](../../../benchmark/baselines/amem/README.md) for copy-workspace train → test (`--amem-sync-every 20`) commands.

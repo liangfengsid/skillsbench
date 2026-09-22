@@ -1,7 +1,7 @@
 {
   "schema": "hermes.hot_skill_pool.v1",
-  "updated_at": 1790024001.131444,
-  "global_turn": 163,
+  "updated_at": 1790053284.9023094,
+  "global_turn": 156,
   "order": [
     "skillsbench-host-grading"
   ],
@@ -9,16 +9,16 @@
     "skillsbench-host-grading": {
       "name": "skillsbench-host-grading",
       "key_points": [
-        "Deliverables must be at the task root — the host stages the task directory (`tasks/<id>/`) to `/app/` in the container. Place output files directly in the task root (e.g., `tasks/<id>/report.json`), NOT in `solution/`, `output/`, or on t...",
-        "Output path must match test's OUTPUT_FILE path — always check `test_outputs.py` for the exact path the test reads (e.g., `OUTPUT_FILE = \"openipf_output.xlsx\"` relative to CWD). The host stages the task directory to `/app/` and runs tests...",
-        "Solution script output path — don't confuse the Dockerfile input mount point (e.g., `/root/data/`) with the test output path. The solution reads input from the Dockerfile mount but MUST write output to the path `test_outputs.py` imports."
+        "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`.",
+        "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks.",
+        "If test.sh generates ground truth at runtime and test_outputs.py needs it, provide ground_truth/ in the task directory — host verification runs pytest directly (not test.sh), so runtime generation never happens. Pre-generate using the sa..."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_nu_test2/hermes_home/skills/software-development/skillsbench-host-grading",
-      "skill_md_mtime": 1790023999.221853,
-      "recorded_turn": 163,
-      "description": "",
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_nu_test3/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_md_mtime": 1790052639.6190016,
+      "recorded_turn": 153,
+      "description": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
       "tags": [],
-      "scope": "skillsbench-host-grading",
+      "scope": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
       "point_utilities": [
         {
           "n_labeled": 0,

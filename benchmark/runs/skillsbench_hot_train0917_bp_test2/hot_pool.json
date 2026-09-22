@@ -1,0 +1,111 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1790063305.1595836,
+  "global_turn": 131,
+  "order": [
+    "pdf-redaction",
+    "pdf-form-filling"
+  ],
+  "entries": {
+    "pdf-redaction": {
+      "name": "pdf-redaction",
+      "key_points": [
+        "ALWAYS verify with pdftotext, not PyMuPDF — redaction may look correct in a viewer but pdftotext (used by most verifiers) extracts differently. Run `pdftotext redacted.pdf -` and grep for sensitive text.",
+        "NEVER use draw_rect or overlay rectangles for redaction — `page.draw_rect()` draws on top of text but doesn't remove it from extraction. Only `add_redact_annot()` + `apply_redactions()` actually removes text."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_bp_test2/hermes_home/skills/pdf-redaction",
+      "skill_md_mtime": 1790042587.313052,
+      "recorded_turn": 127,
+      "description": "Redact text from PDFs for anonymization, blind review, or privacy — PyMuPDF search+annotate pipeline with verification.",
+      "tags": [
+        "PDF",
+        "Redaction",
+        "Anonymization",
+        "Privacy",
+        "PyMuPDF"
+      ],
+      "scope": "Redact text from PDFs for anonymization, blind review, or privacy — PyMuPDF search+annotate pipeline with verification.",
+      "point_utilities": [
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 1,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 2.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 2.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 1,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 2.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 2.0
+        }
+      ]
+    },
+    "pdf-form-filling": {
+      "name": "pdf-form-filling",
+      "key_points": [
+        "ALWAYS use `set_field()` for form fields, not text overlays — form values have their own extraction layer; drawing text over a field doesn't change the field value in extracted text.",
+        "NEVER assume PDF text extraction matches visual layout — text is extracted by content stream order, not reading order; search for substrings, don't expect line structure.",
+        "NEVER rely on visual inspection alone — a PDF may look correct in a viewer but fail text extraction checks; always verify programmatically."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_bp_test2/hermes_home/skills/pdf-form-filling",
+      "skill_md_mtime": 1790061323.6791432,
+      "recorded_turn": 127,
+      "description": "",
+      "tags": [],
+      "scope": "pdf-form-filling",
+      "point_utilities": [
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 1,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 2.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 2.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 1,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 2.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 2.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 1,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 2.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 2.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 36,
+    "inject_success": 30,
+    "no_inject_n": 37,
+    "no_inject_success": 32,
+    "throttled": false,
+    "episodes_since_inject": 0
+  }
+}

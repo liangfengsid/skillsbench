@@ -466,7 +466,28 @@ def load_hot_skills_config(skills_cfg: Optional[dict] = None) -> dict:
         flag = _hot_pool_env_flag(env_name)
         if flag is not None:
             cfg[key] = flag
+    for env_name, key in (
+        ("HERMES_HOT_POOL_MAX_ENTRIES", "max_entries"),
+        ("HERMES_HOT_POOL_INJECT_K", "inject_k"),
+    ):
+        n = _hot_pool_env_int(env_name)
+        if n is not None:
+            cfg[key] = max(0, n)
     return cfg
+
+
+def _hot_pool_env_int(name: str) -> Optional[int]:
+    """Parse a non-negative int env override. None means 'leave config as-is'."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        return None
+    if n < 0:
+        return None
+    return n
 
 
 def _hot_pool_env_flag(name: str) -> Optional[bool]:

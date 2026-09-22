@@ -1,7 +1,7 @@
 {
   "schema": "hermes.hot_skill_pool.v1",
-  "updated_at": 1789968323.2218015,
-  "global_turn": 126,
+  "updated_at": 1790013809.5668693,
+  "global_turn": 154,
   "order": [
     "skillsbench-host-grading"
   ],
@@ -9,16 +9,30 @@
     "skillsbench-host-grading": {
       "name": "skillsbench-host-grading",
       "key_points": [
-        "ALWAYS write deliverables to task dir (`tasks/<id>/`), never to host's `/root/` — verifier only stages task dir to `<stage>/root/`.",
-        "ALWAYS read `tests/test_outputs.py` before writing output — it defines schema, field names, tolerance, and paths."
+        "ALWAYS write deliverables to task dir (`tasks/<id>/`) — verifier only stages task dir to `<stage>/root/`; files written to host `/root/` are invisible.",
+        "MUST match the expected JSON schema exactly — field names, types, and structure must match what `test_outputs.py` asserts.",
+        "NEVER skip the output format — tests check `assert \"key\" in submission` before checking values. Missing keys fail immediately.",
+        "DO NOT edit `tests/` or `solution/` directories — excluded from staging; changes won't affect the verifier.",
+        "ALWAYS match output paths from instruction.md exactly — `/root/answers.json` means `tasks/<id>/answers.json` for staging."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_ns_test2/hermes_home/skills/software-development/skillsbench-host-grading",
-      "skill_md_mtime": 1789968206.808207,
-      "recorded_turn": 126,
-      "description": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_ns_test2/hermes_home/skills/skillsbench-host-grading",
+      "skill_md_mtime": 1790013776.7183313,
+      "recorded_turn": 154,
+      "description": "",
       "tags": [],
-      "scope": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
+      "scope": "skillsbench-host-grading",
       "point_utilities": [
+        {
+          "n_labeled": 6,
+          "helpful": 4,
+          "harmful": 1,
+          "irrelevant": 1,
+          "success_sum": 5.0,
+          "reward_sum": 5.0,
+          "iterations_sum": 123.0,
+          "n_success": 5,
+          "iterations_when_success_sum": 104.0
+        },
         {
           "n_labeled": 0,
           "helpful": 0,
@@ -40,15 +54,37 @@
           "iterations_sum": 0.0,
           "n_success": 0,
           "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 1,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 12.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 12.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
         }
       ]
     }
   },
   "inject_cohort": {
-    "inject_n": 34,
-    "inject_success": 30,
-    "no_inject_n": 38,
-    "no_inject_success": 33,
+    "inject_n": 48,
+    "inject_success": 41,
+    "no_inject_n": 40,
+    "no_inject_success": 34,
     "throttled": false,
     "episodes_since_inject": 0
   }

@@ -1,6 +1,6 @@
-# Dynamic Cheatsheet baseline (vs hot-skill)
+# Dynamic Cheatsheet baseline (vs TipsWarm)
 
-[Dynamic Cheatsheet](https://github.com/suzgunmirac/dynamic-cheatsheet) (Suzgun et al., 2025, [arXiv:2504.07952](https://arxiv.org/abs/2504.07952)) is a **self-curated solution notebook** baseline for Hermes, not a skill-generation method. Compare it to the hot-skill pool on the same `AIAgent` backbone:
+[Dynamic Cheatsheet](https://github.com/suzgunmirac/dynamic-cheatsheet) (Suzgun et al., 2025, [arXiv:2504.07952](https://arxiv.org/abs/2504.07952)) is a **self-curated solution notebook** baseline for Hermes, not a skill-generation method. Compare it to TipsWarm on the same `AIAgent` backbone:
 
 - **Same agent** (`run_agent.AIAgent`) — Hermes is the *generator*
 - **Skill tools stay on** (`skill_view` / `skill_manage`)
@@ -11,7 +11,15 @@
 
 Default `--dc-mode cu` is DC-Cu (generate, then curate). `--dc-mode rs` is DC-RS (retrieve similar episodes, curate, then generate). `--dc-mode curetr` injects the current sheet plus retrieved examples, then curates like CU.
 
+Paper protocol (all three benchmarks):
+
+- **Warmup:** `--dc --dc-freeze` (inject only; no curator writes)
+- **Test** after `cp -r $expDir $expDir2`: `--dc --dc-sync-every 0` (one curator pass per episode)
+
+`--dc-freeze` sets `HERMES_DC_READONLY=1` and **ignores** `--dc-sync-every`.
+
 Plugin: [`plugins/memory/dcheatsheet/`](../../../plugins/memory/dcheatsheet/).
+Canonical copy-workspace commands also live in the root [`README.md`](../../../README.md).
 
 ## Install
 
@@ -28,93 +36,95 @@ Without MiniLM, retrieval falls back to the most recent episodes.
 
 ## Protocol
 
-Train (grow the cheatsheet) on the training split, then evaluate transfer with the **same persist dir**:
+Use `--experiment-dir $expDir --isolate-hermes-home`. `--experiment-dir` defaults `--dc-persist` to `$expDir/dcheatsheet`.
 
 ```
-DIR/dcheatsheet/cheatsheet.txt
-DIR/dcheatsheet/episodes.jsonl
+$expDir/dcheatsheet/cheatsheet.txt
+$expDir/dcheatsheet/episodes.jsonl
 ```
-
-`--experiment-dir DIR` defaults `--dc-persist` to `DIR/dcheatsheet`. For a held-out eval, point `--dc-persist` at the **train** store (same pattern as `--hot-pool-persist PATH` / `--amem-persist`).
-
-Use `--isolate-hermes-home` so skills are a copy of repo `skills/`, not `~/.hermes/skills`.
 
 `--dc` + `--hot-pool` and `--dc` + `--amem` are rejected.
 
-Curator writes are batched like A-Mem: `--dc-sync-every` (default **5**)
-flushes every N buffered turns; `0` = one curation per episode; `1` = legacy
-per-turn curator calls.
-
-**Held-out eval must use `--dc-freeze`** (sets `HERMES_DC_READONLY=1`):
-inject the train cheatsheet only — no curator writes. Point `--dc-persist`
-at the train snapshot (or a copy). Without freeze, eval keeps curating and
-pays the curator LLM tax.
+`--dc-sync-every` (default **5**) flushes every N buffered turns; `0` = one curation per episode; `1` = legacy per-turn curator calls.
 
 ## SkillsBench
 
 ```bash
-# Train — grow the cheatsheet
+model=Qwen/Qwen3.6-27B
+provider=openrouter
+
+expDir=benchmark/runs/skillsbench_dc_train
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --dc --experiment-dir benchmark/runs/exp_dc_train \
-  --isolate-hermes-home \
+  --dc --dc-freeze --experiment-dir $expDir --isolate-hermes-home \
   --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part train \
-  --log-jsonl benchmark/runs/exp_dc_train/runs.jsonl \
-  --resume --print-summary
+  --pass-k 1,5,10,30,60 --model $model --provider $provider \
+  --skip-context-files --skip-memory --max-iterations 60 \
+  --log-jsonl $expDir/runs.jsonl --resume --print-summary
 
-# Test — frozen cheatsheet from train
+expDir2=benchmark/runs/skillsbench_dc_train_test
+cp -r $expDir $expDir2
+rm -f $expDir2/runs.jsonl
+expDir=$expDir2
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --all \
-  --dc --dc-freeze --dc-persist benchmark/runs/exp_dc_train/dcheatsheet \
-  --experiment-dir benchmark/runs/exp_dc_test \
-  --isolate-hermes-home \
+  --dc --dc-sync-every 0 \
+  --experiment-dir $expDir --isolate-hermes-home \
   --split-file benchmark/skillsbench_splits/stratified_v1.json --split-part test \
-  --log-jsonl benchmark/runs/exp_dc_test/runs.jsonl \
-  --resume --print-summary
+  --pass-k 1,5,10,30,60 --model $model --provider $provider \
+  --skip-context-files --skip-memory --max-iterations 60 \
+  --log-jsonl $expDir/runs.jsonl --resume --print-summary
 ```
-
-Hot-skill counterpart: same commands with `--hot-pool` / `--hot-pool-persist` instead of `--dc`.
 
 ## ALFWorld
 
-DC comparison uses **`--tools`** (skill tools). `--dc` enables `--tools` automatically if you omit it.
+`--dc` enables `--tools` if you omit it.
 
 ```bash
-export ALFWORLD_DATA=/data/liangfeng/alfwordData
+export ALFWORLD_DATA=/path/to/alfworld/data
+model=Qwen/Qwen3.6-27B
+expDir=benchmark/runs/alfworld_dc_train
+python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split train --limit 50 \
+  --model $model --dc --dc-freeze --tools --max-steps 50 \
+  --experiment-dir $expDir --isolate-hermes-home \
+  --skip-context-files --skip-memory --resume --print-summary
 
-# Train
-python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split train \
-  --model Qwen/Qwen3.6-27B --dc --tools --max-steps 50 \
-  --experiment-dir benchmark/runs/alfworld_dc_train \
-  --isolate-hermes-home --resume --print-summary
-
-# Unseen eval (frozen train cheatsheet)
+expDir2=benchmark/runs/alfworld_dc_train_unseen
+cp -r $expDir $expDir2
+rm -f $expDir2/runs.jsonl
+expDir=$expDir2
 python3 benchmark/scripts/run_alfworld_with_hermes.py --all --split valid_unseen \
-  --model Qwen/Qwen3.6-27B --dc --dc-freeze --tools --max-steps 50 \
-  --dc-persist benchmark/runs/alfworld_dc_train/dcheatsheet \
-  --experiment-dir benchmark/runs/alfworld_dc_unseen \
-  --isolate-hermes-home --resume --print-summary
+  --model $model --dc --dc-sync-every 0 --tools --max-steps 50 \
+  --experiment-dir $expDir --isolate-hermes-home \
+  --skip-context-files --skip-memory --resume --print-summary
 ```
 
 ## AppWorld
 
-Official splits: grow the cheatsheet on **`train`**, transfer on **`test_normal`**. Each `--all` task runs in a subprocess; `cheatsheet.txt` + `episodes.jsonl` under `--dc-persist` carry state across workers.
+Official splits: **`train`** then **`test_normal`**.
 
 ```bash
-# Train
+model=Qwen/Qwen3.6-27B
+exp=appworld_dc_train
+expDir=benchmark/runs/$exp
 python3 benchmark/scripts/run_appworld_with_hermes.py \
-  --dataset train --all --model Qwen/Qwen3.6-27B --dc \
-  --experiment-dir benchmark/runs/appworld_dc_train \
-  --isolate-hermes-home --experiment-name hermes-dc-train \
-  --log-jsonl benchmark/runs/appworld_dc_train/runs.jsonl \
-  --resume --print-summary
+  --dataset train --all --model $model --dc --dc-freeze \
+  --experiment-dir $expDir --isolate-hermes-home \
+  --skip-context-files --skip-memory \
+  --experiment-name $exp \
+  --log-jsonl $expDir/runs.jsonl --resume --print-summary
 
-# test_normal — frozen train store
+exp2=appworld_dc_train_unseen
+expDir2=benchmark/runs/$exp2
+cp -r $expDir $expDir2
+exp=$exp2
+expDir=$expDir2
+rm -f $expDir/runs.jsonl
 python3 benchmark/scripts/run_appworld_with_hermes.py \
-  --dataset test_normal --all --model Qwen/Qwen3.6-27B --dc --dc-freeze \
-  --dc-persist benchmark/runs/appworld_dc_train/dcheatsheet \
-  --experiment-dir benchmark/runs/appworld_dc_test \
-  --isolate-hermes-home --experiment-name hermes-dc-test \
-  --log-jsonl benchmark/runs/appworld_dc_test/runs.jsonl \
-  --resume --print-summary
+  --dataset test_normal --all --model $model \
+  --dc --dc-sync-every 0 \
+  --experiment-dir $expDir --isolate-hermes-home \
+  --skip-context-files --skip-memory \
+  --experiment-name $exp \
+  --log-jsonl $expDir/runs.jsonl --resume --print-summary
 ```
 
 ## JSONL

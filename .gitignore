@@ -72,12 +72,14 @@ website/static/api/skills-index.json
 models-dev-upstream/
 
 # Local / generated (SkillsBench runs, one-off scripts, experiments).
-# Keep run artifacts out of git, but track per-experiment summary.json
-# and hot_pool.json.
+# Keep run artifacts out of git, but track per-experiment summary.json,
+# hot_pool.json, and result CSVs.
 benchmark/runs/**
 !benchmark/runs/*/
 !benchmark/runs/*/summary.json
 !benchmark/runs/*/hot_pool.json
+!benchmark/runs/*.csv
+!benchmark/runs/README.md
 jobs/
 edit_pdf.py
 inspect_pdf.py
