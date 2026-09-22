@@ -1,7 +1,7 @@
 {
   "schema": "hermes.hot_skill_pool.v1",
-  "updated_at": 1790063858.9796395,
-  "global_turn": 140,
+  "updated_at": 1790113270.1930866,
+  "global_turn": 154,
   "order": [
     "skillsbench-host-grading"
   ],
@@ -9,46 +9,34 @@
     "skillsbench-host-grading": {
       "name": "skillsbench-host-grading",
       "key_points": [
-        "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`.",
-        "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks."
+        "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`."
       ],
       "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_bp_test1/hermes_home/skills/software-development/skillsbench-host-grading",
-      "skill_md_mtime": 1790063680.755708,
-      "recorded_turn": 139,
-      "description": "",
+      "skill_md_mtime": 1790104425.4716885,
+      "recorded_turn": 153,
+      "description": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
       "tags": [],
-      "scope": "skillsbench-host-grading",
+      "scope": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
       "point_utilities": [
         {
-          "n_labeled": 5,
-          "helpful": 4,
+          "n_labeled": 2,
+          "helpful": 1,
           "harmful": 0,
           "irrelevant": 1,
-          "success_sum": 5.0,
-          "reward_sum": 5.0,
-          "iterations_sum": 187.0,
-          "n_success": 5,
-          "iterations_when_success_sum": 187.0
-        },
-        {
-          "n_labeled": 5,
-          "helpful": 3,
-          "harmful": 1,
-          "irrelevant": 1,
-          "success_sum": 4.0,
-          "reward_sum": 4.0,
-          "iterations_sum": 224.0,
-          "n_success": 4,
-          "iterations_when_success_sum": 164.0
+          "success_sum": 2.0,
+          "reward_sum": 2.0,
+          "iterations_sum": 84.0,
+          "n_success": 2,
+          "iterations_when_success_sum": 84.0
         }
       ]
     }
   },
   "inject_cohort": {
-    "inject_n": 41,
-    "inject_success": 35,
-    "no_inject_n": 39,
-    "no_inject_success": 33,
+    "inject_n": 48,
+    "inject_success": 42,
+    "no_inject_n": 40,
+    "no_inject_success": 34,
     "throttled": false,
     "episodes_since_inject": 0
   }

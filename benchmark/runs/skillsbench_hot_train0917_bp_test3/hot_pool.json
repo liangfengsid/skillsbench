@@ -1,0 +1,60 @@
+{
+  "schema": "hermes.hot_skill_pool.v1",
+  "updated_at": 1790121007.3562317,
+  "global_turn": 158,
+  "order": [
+    "skillsbench-host-grading"
+  ],
+  "entries": {
+    "skillsbench-host-grading": {
+      "name": "skillsbench-host-grading",
+      "key_points": [
+        "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`.",
+        "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks."
+      ],
+      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_bp_test3/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_md_mtime": 1790120586.3827522,
+      "recorded_turn": 158,
+      "description": "SkillsBench host verification grading protocol",
+      "tags": [
+        "skillsbench",
+        "benchmark",
+        "host-verification",
+        "grading"
+      ],
+      "scope": "SkillsBench host verification grading protocol",
+      "point_utilities": [
+        {
+          "n_labeled": 1,
+          "helpful": 1,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 23.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 23.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 1,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 23.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 23.0
+        }
+      ]
+    }
+  },
+  "inject_cohort": {
+    "inject_n": 47,
+    "inject_success": 41,
+    "no_inject_n": 38,
+    "no_inject_success": 32,
+    "throttled": false,
+    "episodes_since_inject": 0
+  }
+}
