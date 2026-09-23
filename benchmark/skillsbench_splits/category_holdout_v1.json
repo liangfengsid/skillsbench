@@ -3,7 +3,7 @@
   "protocol": "category_holdout",
   "seed": 42,
   "generated_at": "2026-07-02T09:17:22.066879+00:00",
-  "skillsbench_tasks_dir": "/home/liangfeng/git/hermes-agent/benchmark/skillsbench/tasks",
+  "skillsbench_tasks_dir": "benchmark/skillsbench/tasks",
   "total_tasks": 88,
   "train": [
     "3d-scan-calc",

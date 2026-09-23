@@ -580,7 +580,7 @@ python3 benchmark/scripts/aggregate_skillsbench_runs.py \
 
 `--task` ids look like `pick_and_place_simple-Mug-None-Desk-1/trial_T…`. Default is **no Hermes tools** (pure text policy). Pass `--tools` / `--hot-pool` if you want skills in the loop. `--amem` and `--dc` are paper memory baselines (each forces `--no-hot-pool` and enables `--tools` so skill tools stay on); see [`baselines/amem/README.md`](baselines/amem/README.md) and [`baselines/dcheatsheet/README.md`](baselines/dcheatsheet/README.md). With `--isolate-hermes-home`, skills are seeded from repo `skills/` (not `~/.hermes/skills`). JSONL uses `evaluation.task_success` so `aggregate_skillsbench_runs.py` still works. Per-task lines use `--print-summary`; batch Success@k / AUC use `--print-batch-summary` (on by default; `--no-print-batch-summary` to silence). Override budgets with `--pass-k` / `--auc-max-k` / `--summary-output`.
 
-If `ALFWORLD_DATA` is unset, the driver also looks at `/data/liangfeng/alfwordData` and `/data/liangfeng/alfworldData`.
+Set `ALFWORLD_DATA` (or pass `--alfworld-data`) to the PDDL/game-file root. If that is unset, the driver also checks `~/.cache/alfworld`.
 
 ---
 
@@ -753,9 +753,7 @@ CSV: [skillsbench_ablation.csv](runs/skillsbench_ablation.csv). **NONE** and **A
 | **NW** | Inherits the HermesSkills warmup skill bundle | [summary](runs/skillsbench_no_hot_train0907_hottest1/summary.json) · [pool](runs/skillsbench_no_hot_train0907_hottest1/hot_pool.json) | [summary](runs/skillsbench_no_hot_train0907_hottest2/summary.json) · [pool](runs/skillsbench_no_hot_train0907_hottest2/hot_pool.json) | [summary](runs/skillsbench_no_hot_train0907_hottest3/summary.json) · [pool](runs/skillsbench_no_hot_train0907_hottest3/hot_pool.json) |
 | **NS** | No scope matching (`--no-hot-pool-inject-retrieve`) | [summary](runs/skillsbench_hot_train0917_ns_test1/summary.json) · [pool](runs/skillsbench_hot_train0917_ns_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_ns_test2/summary.json) · [pool](runs/skillsbench_hot_train0917_ns_test2/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_ns_test3/summary.json) · [pool](runs/skillsbench_hot_train0917_ns_test3/hot_pool.json) |
 | **NU** | No utility attribution or screening (`--no-hot-pool-outcome-feedback --no-hot-pool-inject-filter-utilities`) | [summary](runs/skillsbench_hot_train0917_nu_test1/summary.json) · [pool](runs/skillsbench_hot_train0917_nu_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_nu_test2/summary.json) · [pool](runs/skillsbench_hot_train0917_nu_test2/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_nu_test3/summary.json) · [pool](runs/skillsbench_hot_train0917_nu_test3/hot_pool.json) |
-| **BP** | Store 16, inject 8 (`--hot-pool-max-entries 16 --hot-pool-inject-k 8`) | [summary](runs/skillsbench_hot_train0917_bp_test1/summary.json) · [pool](runs/skillsbench_hot_train0917_bp_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_bp_test2/summary.json) · [pool](runs/skillsbench_hot_train0917_bp_test2/hot_pool.json) | [pool](runs/skillsbench_hot_train0917_bp_test3/hot_pool.json) |
-
-BP seed 3 has a pool file only. Its `summary.json` is not in the tree, and that seed is not in the ablation CSV.
+| **BP** | Store 16, inject 8 (`--hot-pool-max-entries 16 --hot-pool-inject-k 8`) | [summary](runs/skillsbench_hot_train0917_bp_test1/summary.json) · [pool](runs/skillsbench_hot_train0917_bp_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_bp_test2/summary.json) · [pool](runs/skillsbench_hot_train0917_bp_test2/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_bp_test3/summary.json) · [pool](runs/skillsbench_hot_train0917_bp_test3/hot_pool.json) |
 
 ### AppWorld (`test_normal`)
 

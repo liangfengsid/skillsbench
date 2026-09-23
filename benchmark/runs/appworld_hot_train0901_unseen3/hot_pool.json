@@ -13,7 +13,7 @@
         "Always paginate fully — loop until empty response, don't hardcode page counts",
         "Use standard library only — no `os.system`, no external packages like `spotipy`"
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/appworld_hot_train0901/hermes_home/skills/productivity/api-sandbox-tasks",
+      "skill_dir": "benchmark/runs/appworld_hot_train0901/hermes_home/skills/productivity/api-sandbox-tasks",
       "skill_md_mtime": 1788300817.3099158,
       "recorded_turn": 1714,
       "description": "Complete tasks in the interactive Python API sandbox (apis.*) that connects to third-party apps via a supervised REPL environment.",

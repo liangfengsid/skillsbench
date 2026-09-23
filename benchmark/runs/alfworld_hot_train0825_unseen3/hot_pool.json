@@ -12,7 +12,7 @@
         "Don't try commands not in the admissible list — they will fail",
         "You must be at a location before acting on it: `open cabinet 3` from cabinet 2 fails with \"Nothing happens.\" Always `go to` the target first, then `open`/`take`/`put`."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/alfworld_hot_train0825_unseen3/hermes_home/skills/gaming/alfworld-player",
+      "skill_dir": "benchmark/runs/alfworld_hot_train0825_unseen3/hermes_home/skills/gaming/alfworld-player",
       "skill_md_mtime": 1788491968.561221,
       "recorded_turn": 3022,
       "description": "Play ALFWorld/ALFRED text household simulator — systematic exploration and command selection.",

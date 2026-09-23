@@ -12,7 +12,7 @@
         "When the instruction names an absolute container dir (e.g. `/root/output/<f>`), ALWAYS mirror it as a same-named top-level task-dir dir (`output/<f>`) so the remapped test path resolves after staging.",
         "A passing host run MUST show `tests_total > 0` with `tests_failed == 0`; a `main()`-only script collecting 0 items reports exit 5 and scores 0."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0911_ds/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0911_ds/hermes_home/skills/software-development/skillsbench-host-grading",
       "skill_md_mtime": 1789164329.8409517,
       "recorded_turn": 76,
       "description": "",

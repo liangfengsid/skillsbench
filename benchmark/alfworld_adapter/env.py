@@ -33,8 +33,6 @@ SPLIT_ALIASES = {
 }
 
 _CANDIDATE_DATA_DIRS = (
-    Path("/data/liangfeng/alfwordData"),  # existing checkout (typo in folder name)
-    Path("/data/liangfeng/alfworldData"),
     Path.home() / ".cache" / "alfworld",
 )
 

@@ -15,7 +15,7 @@
         "DO NOT modify test files — they are read-only oracle files, not editable scaffolding",
         "ALWAYS read test.sh first — it tells you exactly what the verifier runs and where"
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test4/hermes_home/skills/software-development/skillsbench-live-server-tasks",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0917_test4/hermes_home/skills/software-development/skillsbench-live-server-tasks",
       "skill_md_mtime": 1789876050.958889,
       "recorded_turn": 162,
       "description": "SkillsBench tasks that run a live server (Docker + httpx/Playwright tests) — how to read the test harness, fix performance/functionality, and pass host verification.",
@@ -75,7 +75,7 @@
         "NEVER place outputs inside `tests/` or `environment/` — they're excluded from staging to `/root/`",
         "ALWAYS save deliverables at the task root level — e.g., `task_dir/annotations.json` stages to `<stage>/root/annotations.json`. Also `task_dir/output/...` works."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_test4/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0917_test4/hermes_home/skills/software-development/skillsbench-host-grading",
       "skill_md_mtime": 1789890149.5468268,
       "recorded_turn": 162,
       "description": "",

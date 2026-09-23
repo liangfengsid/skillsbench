@@ -15,7 +15,7 @@ Requires:
   - Hermes venv (``from run_agent import AIAgent``)
   - ``pip install -e ".[alfworld]"`` and the vendored tree on PYTHONPATH
     (this script adds ``benchmark/alfworld`` automatically)
-  - Game files via ``ALFWORLD_DATA`` (this machine: ``/data/liangfeng/alfwordData``)
+  - Game files via ``ALFWORLD_DATA`` (or ``--alfworld-data``; else ``~/.cache/alfworld``)
 
 Examples (from Hermes repo root):
 
@@ -496,7 +496,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--alfworld-data",
         default=None,
-        help="ALFWORLD_DATA root (PDDL/game files). Default: $ALFWORLD_DATA or /data/liangfeng/alfwordData.",
+        help="ALFWORLD_DATA root (PDDL/game files). Default: $ALFWORLD_DATA, else ~/.cache/alfworld.",
     )
     parser.add_argument(
         "--task-types",

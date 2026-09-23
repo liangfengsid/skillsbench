@@ -16,7 +16,7 @@
         "Graded deliverables MUST live as top-level entries of the task dir (`tasks/<id>/`), because `stage_task_for_host_eval` copies those into `<stage>/root/` (which `/root` and `/app` remap to). `environment/`, `solution/`, `tests/`, `instruc...",
         "When the instruction names an absolute container dir (e.g. `/root/output/<f>`), ALWAYS mirror it as a same-named top-level task-dir dir (`output/<f>`) so the remapped test path resolves after staging."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0911_ds_test5/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0911_ds_test5/hermes_home/skills/software-development/skillsbench-host-grading",
       "skill_md_mtime": 1789403756.8176777,
       "recorded_turn": 103,
       "description": "",

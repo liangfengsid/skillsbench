@@ -12,7 +12,7 @@
         "Never guess IDs or tokens — always look them up via APIs",
         "Always process all pages — paginated APIs return partial results; loop until empty response"
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/appworld_hot_train0901_unseen/hermes_home/skills/productivity/api-sandbox-tasks",
+      "skill_dir": "benchmark/runs/appworld_hot_train0901_unseen/hermes_home/skills/productivity/api-sandbox-tasks",
       "skill_md_mtime": 1788508532.5739899,
       "recorded_turn": 5193,
       "description": "",

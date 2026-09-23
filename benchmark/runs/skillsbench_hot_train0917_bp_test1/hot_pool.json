@@ -11,7 +11,7 @@
       "key_points": [
         "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_bp_test1/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0917_bp_test1/hermes_home/skills/software-development/skillsbench-host-grading",
       "skill_md_mtime": 1790104425.4716885,
       "recorded_turn": 153,
       "description": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",

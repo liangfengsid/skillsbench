@@ -16,7 +16,7 @@
         "Read observations carefully: items on the current location are listed — act on them before moving away",
         "One command per turn: never combine actions or add commentary"
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/alfworld_hot_train0825/hermes_home/skills/gaming/alfworld-player",
+      "skill_dir": "benchmark/runs/alfworld_hot_train0825/hermes_home/skills/gaming/alfworld-player",
       "skill_md_mtime": 1787638568.973357,
       "recorded_turn": 419,
       "description": "Play ALFWorld/ALFRED text household simulator — systematic exploration and command selection.",

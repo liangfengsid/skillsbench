@@ -13,7 +13,7 @@
         "ALWAYS verify environment/baseline/ and environment/workspace/ are complete — placeholders aren't enough; tests compare baseline↔workspace. Copy complete directory trees from the running container to the task directory.",
         "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_ns_test3/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0917_ns_test3/hermes_home/skills/software-development/skillsbench-host-grading",
       "skill_md_mtime": 1790089472.2994218,
       "recorded_turn": 156,
       "description": "How SkillsBench host verification works — where deliverables must live, what the verifier checks, and common pitfalls.",
@@ -51,7 +51,7 @@
         "ALWAYS prefer local/offline tools over cloud APIs (e.g., local `openai-whisper` over OpenAI Whisper API) — containers may lack API keys or network access.",
         "ALWAYS verify recall/precision locally against the test's matching algorithm before submitting — tolerance windows, word normalization, and equivalence groups matter as much as raw counts."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_ns_test3/hermes_home/skills/skillsbench-host-verification",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0917_ns_test3/hermes_home/skills/skillsbench-host-verification",
       "skill_md_mtime": 1790089640.286391,
       "recorded_turn": 160,
       "description": "",

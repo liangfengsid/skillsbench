@@ -12,7 +12,7 @@
         "Don't try commands not in the admissible list — they will fail",
         "Don't include quotes, numbering, or explanations — reply with bare command only"
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/alfworld_hot_train0825_unseen2/hermes_home/skills/gaming/alfworld-player",
+      "skill_dir": "benchmark/runs/alfworld_hot_train0825_unseen2/hermes_home/skills/gaming/alfworld-player",
       "skill_md_mtime": 1788415792.5366561,
       "recorded_turn": 2834,
       "description": "Play ALFWorld/ALFRED text household simulator — systematic exploration and command selection.",

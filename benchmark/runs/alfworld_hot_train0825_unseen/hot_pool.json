@@ -18,7 +18,7 @@
         "LOOP DETECTION — hard rule: If you've issued `look` 3+ times consecutively (or the same command 3+ times in a row), STOP immediately. Do NOT issue it again. Instead, check: (1) Have I completed the task? If yes, stop entirely. (2) If not...",
         "open/close loops: If you find yourself alternating `open cabinet X` → `close cabinet X` → `open cabinet X`, STOP. You've already done what's needed. Check task completion and stop entirely."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/alfworld_hot_train0825_unseen/hermes_home/skills/gaming/alfworld-player",
+      "skill_dir": "benchmark/runs/alfworld_hot_train0825_unseen/hermes_home/skills/gaming/alfworld-player",
       "skill_md_mtime": 1787683923.1497128,
       "recorded_turn": 2796,
       "description": "",

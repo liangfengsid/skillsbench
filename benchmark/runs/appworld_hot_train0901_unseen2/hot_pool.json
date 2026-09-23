@@ -15,7 +15,7 @@
         "Never guess IDs — always search to resolve them",
         "Never skip `show_api_doc` — API names/params vary (e.g. `song_id` vs `id`, `page_index` vs `offset`)"
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/appworld_hot_train0901_unseen2/hermes_home/skills/productivity/multi-app-api-workflow",
+      "skill_dir": "benchmark/runs/appworld_hot_train0901_unseen2/hermes_home/skills/productivity/multi-app-api-workflow",
       "skill_md_mtime": 1788684089.7728753,
       "recorded_turn": 5269,
       "description": "Pattern for working with multiple connected apps (Spotify, Venmo, Gmail, etc.) via APIs to complete cross-app tasks.",
@@ -76,7 +76,7 @@
         "Always paginate fully — loop until empty response, don't hardcode page counts",
         "Use standard library only — no `os.system`, no external packages like `spotipy`"
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/appworld_hot_train0901_unseen2/hermes_home/skills/productivity/api-sandbox-tasks",
+      "skill_dir": "benchmark/runs/appworld_hot_train0901_unseen2/hermes_home/skills/productivity/api-sandbox-tasks",
       "skill_md_mtime": 1788602342.3222513,
       "recorded_turn": 5269,
       "description": "Complete tasks in the interactive Python API sandbox (apis.*) that connects to third-party apps via a supervised REPL environment.",

@@ -329,6 +329,16 @@ def resolve_split_task_ids(path: Path, part: str) -> List[str]:
     return list(data[part])
 
 
+def _display_tasks_dir(tasks_dir: Path) -> str:
+    """Repo-relative path so split JSON does not embed a home directory."""
+    resolved = tasks_dir.expanduser().resolve()
+    repo = _SCRIPT.parents[2]
+    try:
+        return str(resolved.relative_to(repo))
+    except ValueError:
+        return resolved.name
+
+
 def write_defaults(out_dir: Path, tasks_dir: Path, seed: int) -> None:
     tasks = discover_task_metadata(tasks_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -346,8 +356,8 @@ def write_defaults(out_dir: Path, tasks_dir: Path, seed: int) -> None:
             test_ratio=0.25,
             min_category_tasks=int(kwargs.get("min_category_tasks", 3)),
         )
-        doc["skillsbench_tasks_dir"] = str(tasks_dir.resolve())
-        doc["tasks_dir"] = str(tasks_dir.resolve())
+        doc["skillsbench_tasks_dir"] = _display_tasks_dir(tasks_dir)
+        doc["tasks_dir"] = _display_tasks_dir(tasks_dir)
         doc["name"] = filename.replace(".json", "")
         out_path = out_dir / filename
         out_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -432,8 +442,8 @@ def main() -> int:
         min_category_tasks=args.min_category_tasks,
         holdout_categories=holdout,
     )
-    doc["skillsbench_tasks_dir"] = str(tasks_dir)
-    doc["tasks_dir"] = str(tasks_dir)
+    doc["skillsbench_tasks_dir"] = _display_tasks_dir(tasks_dir)
+    doc["tasks_dir"] = _display_tasks_dir(tasks_dir)
     doc["name"] = args.output or f"{args.protocol}_seed{args.seed}"
 
     text = json.dumps(doc, indent=2, ensure_ascii=False) + "\n"

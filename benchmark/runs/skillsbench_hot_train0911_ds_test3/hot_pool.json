@@ -15,7 +15,7 @@
         "A passing host run MUST show `tests_total > 0` with `tests_failed == 0`; a `main()`-only script collecting 0 items reports exit 5 and scores 0.",
         "Deliverables the instruction names by absolute container path (e.g. `/root/results.json`) MUST be staged as same-named top-level task-dir entries (`results.json`); the stager remaps `/root` → `<stage>/root`, nothing else places them there."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0911_ds_test8/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0911_ds_test8/hermes_home/skills/software-development/skillsbench-host-grading",
       "skill_md_mtime": 1789458087.1383379,
       "recorded_turn": 105,
       "description": "",

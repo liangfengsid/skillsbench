@@ -1,29 +1,92 @@
 {
   "schema": "hermes.hot_skill_pool.v1",
-  "updated_at": 1790121838.69359,
-  "global_turn": 159,
+  "updated_at": 1790129230.6918159,
+  "global_turn": 162,
   "order": [
+    "video-audio-processing",
     "skillsbench-host-grading"
   ],
   "entries": {
-    "skillsbench-host-grading": {
-      "name": "skillsbench-host-grading",
+    "video-audio-processing": {
+      "name": "video-audio-processing",
       "key_points": [
-        "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`.",
-        "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks."
+        "NEVER use first-spike detection for silence/opening boundaries — brief music cues, sound effects, or intro jingles during silence create false detections. Require sustained activity (5+ consecutive seconds above baseline).",
+        "NEVER rely on smoothed signals for boundary detection — Gaussian/rolling smoothing of energy curves leaks future rise energy into the silence region, shifting boundaries earlier than the actual start of activity.",
+        "NEVER use `filter_complex` for 4+ segments — long filter chains cause media type mismatch errors (`[Parsed_concat_...]`) and parsing failures. Use intermediate files + concat demuxer.",
+        "ALWAYS verify duration with ffprobe, not theoretical calculations — compressed video duration may differ from theoretical segment sums due to encoder padding, GOP alignment, or keyframe placement.",
+        "ALWAYS check actual media duration with ffprobe before processing — files may be shorter/longer than expected; `file -i` or metadata claims may be inaccurate.",
+        "ALWAYS use `-safe 0` with concat demuxer — prevents \"Invalid data\" errors when file paths contain relative components or special characters.",
+        "Extract audio once, reuse for all analysis — `ffmpeg -vn -ar 16000 -ac 1 -c:a pcm_s16le` gives clean, consistent audio for energy computation."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_bp_test3/hermes_home/skills/software-development/skillsbench-host-grading",
-      "skill_md_mtime": 1790121784.5598543,
-      "recorded_turn": 159,
-      "description": "SkillsBench host verification grading protocol",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0917_bp_test3/hermes_home/skills/media/video-audio-processing",
+      "skill_md_mtime": 1790125483.6469119,
+      "recorded_turn": 162,
+      "description": "ffmpeg-based video/audio processing: silence detection, clip extraction, concatenation, duration verification.",
       "tags": [
-        "skillsbench",
-        "benchmark",
-        "host-verification",
-        "grading"
+        "ffmpeg",
+        "video",
+        "audio",
+        "silence-detection",
+        "clip-extraction",
+        "media-processing"
       ],
-      "scope": "SkillsBench host verification grading protocol",
+      "scope": "ffmpeg-based video/audio processing: silence detection, clip extraction, concatenation, duration verification.",
       "point_utilities": [
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
+        {
+          "n_labeled": 0,
+          "helpful": 0,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 0.0,
+          "reward_sum": 0.0,
+          "iterations_sum": 0.0,
+          "n_success": 0,
+          "iterations_when_success_sum": 0.0
+        },
         {
           "n_labeled": 0,
           "helpful": 0,
@@ -47,11 +110,48 @@
           "iterations_when_success_sum": 0.0
         }
       ]
+    },
+    "skillsbench-host-grading": {
+      "name": "skillsbench-host-grading",
+      "key_points": [
+        "ALWAYS write deliverables to the task directory (`tasks/<id>/`), NOT to `/root/` on the host filesystem. The host verifier only stages files from the task directory to `<stage>/root/`.",
+        "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks."
+      ],
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0917_bp_test3/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_md_mtime": 1790129163.0834508,
+      "recorded_turn": 162,
+      "description": "",
+      "tags": [],
+      "scope": "skillsbench-host-grading",
+      "point_utilities": [
+        {
+          "n_labeled": 1,
+          "helpful": 1,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 44.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 44.0
+        },
+        {
+          "n_labeled": 1,
+          "helpful": 1,
+          "harmful": 0,
+          "irrelevant": 0,
+          "success_sum": 1.0,
+          "reward_sum": 1.0,
+          "iterations_sum": 44.0,
+          "n_success": 1,
+          "iterations_when_success_sum": 44.0
+        }
+      ]
     }
   },
   "inject_cohort": {
-    "inject_n": 48,
-    "inject_success": 42,
+    "inject_n": 50,
+    "inject_success": 44,
     "no_inject_n": 38,
     "no_inject_success": 32,
     "throttled": false,

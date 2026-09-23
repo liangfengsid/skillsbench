@@ -13,7 +13,7 @@
         "Output path must match test's OUTPUT_FILE path — always check `test_outputs.py` for the exact path the test reads (e.g., `OUTPUT_FILE = \"openipf_output.xlsx\"` relative to CWD). The host stages the task directory to `/app/` and runs tests...",
         "Solution script output path — don't confuse the Dockerfile input mount point (e.g., `/root/data/`) with the test output path. The solution reads input from the Dockerfile mount but MUST write output to the path `test_outputs.py` imports."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_nu_test2/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0917_nu_test2/hermes_home/skills/software-development/skillsbench-host-grading",
       "skill_md_mtime": 1790023999.221853,
       "recorded_turn": 163,
       "description": "",

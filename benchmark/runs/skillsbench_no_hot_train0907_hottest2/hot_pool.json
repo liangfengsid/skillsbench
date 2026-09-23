@@ -11,7 +11,7 @@
       "key_points": [
         "Testing only inside container, not on host: The driver runs BOTH container and host verifiers. A deliverable that works in the container but isn't at the source task root will fail host-side tests."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_no_hot_train0907_hottest2/hermes_home/skills/skillsbench-host-grading",
+      "skill_dir": "benchmark/runs/skillsbench_no_hot_train0907_hottest2/hermes_home/skills/skillsbench-host-grading",
       "skill_md_mtime": 1789506080.446988,
       "recorded_turn": 30,
       "description": "",

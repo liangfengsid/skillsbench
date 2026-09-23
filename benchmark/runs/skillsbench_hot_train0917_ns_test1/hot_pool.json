@@ -13,7 +13,7 @@
         "DO NOT rely on solution/ to generate deliverables — `solution/` is excluded from staging. Run your script and commit the output to the task root. You MAY inspect solution/ files to understand expected schemas and structure.",
         "ALWAYS read `tests/test_outputs.py` before writing output — it defines the exact JSON schema, field names, tolerance (e.g., `rel_tol=0.001`), and file paths the verifier checks."
       ],
-      "skill_dir": "/home/liangfeng/git/hermes-agent/benchmark/runs/skillsbench_hot_train0917_ns_test1/hermes_home/skills/software-development/skillsbench-host-grading",
+      "skill_dir": "benchmark/runs/skillsbench_hot_train0917_ns_test1/hermes_home/skills/software-development/skillsbench-host-grading",
       "skill_md_mtime": 1790003722.002992,
       "recorded_turn": 155,
       "description": "",
