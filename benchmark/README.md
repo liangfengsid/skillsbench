@@ -718,6 +718,67 @@ See [`appworld/README.md`](appworld/README.md) for environment setup and leaderb
 
 ---
 
+## Reported run files
+
+Headline numbers live in the [root README](../README.md#5-reported-results). This section is the file index. Git tracks `runs/*/summary.json`, `runs/*/hot_pool.json`, and `runs/*.csv`. JSONL logs and `hermes_home/` stay untracked. Naming rules: [`runs/README.md`](runs/README.md).
+
+### SkillsBench (Qwen, test)
+
+| Method | Seed 1 | Seed 2 | Seed 3 |
+|--------|--------|--------|--------|
+| A-MEM | [summary](runs/skillsbench_amem_train0824_test/summary.json) | — | — |
+| DC | [summary](runs/skillsbench_dc_train0906_test1/summary.json) | [summary](runs/skillsbench_dc_train0906_test2/summary.json) | [summary](runs/skillsbench_dc_train0906_test3/summary.json) |
+| HermesSkills (**NONE**) | [summary](runs/skillsbench_no_hot_train0907_test1/summary.json) | [summary](runs/skillsbench_no_hot_train0907_test2/summary.json) | [summary](runs/skillsbench_no_hot_train0907_test3/summary.json) |
+| TipsWarm (**ALL**) | [summary](runs/skillsbench_hot_train0917_test1/summary.json) · [pool](runs/skillsbench_hot_train0917_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_test2/summary.json) · [pool](runs/skillsbench_hot_train0917_test2/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_test3/summary.json) · [pool](runs/skillsbench_hot_train0917_test3/hot_pool.json) |
+
+CSV: [skillsbench_main.csv](runs/skillsbench_main.csv).
+
+### SkillsBench, DeepSeek vs Qwen
+
+Headline numbers: [root README](../README.md#skillsbench-deepseek-vs-qwen). CSV: [skillsbench_model.csv](runs/skillsbench_model.csv). Qwen seeds are the HermesSkills and TipsWarm rows in the table above.
+
+| Method | Seed 1 | Seed 2 | Seed 3 |
+|--------|--------|--------|--------|
+| HermesSkills-DS | [summary](runs/skillsbench_no_hot_train0911_ds_test1/summary.json) | [summary](runs/skillsbench_no_hot_train0911_ds_test2/summary.json) | [summary](runs/skillsbench_no_hot_train0911_ds_test3/summary.json) |
+| TipsWarm-DS | [summary](runs/skillsbench_hot_train0911_ds_test1/summary.json) · [pool](runs/skillsbench_hot_train0911_ds_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0911_ds_test2/summary.json) · [pool](runs/skillsbench_hot_train0911_ds_test2/hot_pool.json) | [summary](runs/skillsbench_hot_train0911_ds_test3/summary.json) · [pool](runs/skillsbench_hot_train0911_ds_test3/hot_pool.json) |
+| HermesSkills-Qwen | [summary](runs/skillsbench_no_hot_train0907_test1/summary.json) | [summary](runs/skillsbench_no_hot_train0907_test2/summary.json) | [summary](runs/skillsbench_no_hot_train0907_test3/summary.json) |
+| TipsWarm-Qwen | [summary](runs/skillsbench_hot_train0917_test1/summary.json) · [pool](runs/skillsbench_hot_train0917_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_test2/summary.json) · [pool](runs/skillsbench_hot_train0917_test2/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_test3/summary.json) · [pool](runs/skillsbench_hot_train0917_test3/hot_pool.json) |
+
+### SkillsBench ablations (Qwen, test)
+
+CSV: [skillsbench_ablation.csv](runs/skillsbench_ablation.csv). **NONE** and **ALL** are the HermesSkills and TipsWarm rows above.
+
+| Label | Setting | Seed 1 | Seed 2 | Seed 3 |
+|-------|---------|--------|--------|--------|
+| **NW** | Inherits the HermesSkills warmup skill bundle | [summary](runs/skillsbench_no_hot_train0907_hottest1/summary.json) · [pool](runs/skillsbench_no_hot_train0907_hottest1/hot_pool.json) | [summary](runs/skillsbench_no_hot_train0907_hottest2/summary.json) · [pool](runs/skillsbench_no_hot_train0907_hottest2/hot_pool.json) | [summary](runs/skillsbench_no_hot_train0907_hottest3/summary.json) · [pool](runs/skillsbench_no_hot_train0907_hottest3/hot_pool.json) |
+| **NS** | No scope matching (`--no-hot-pool-inject-retrieve`) | [summary](runs/skillsbench_hot_train0917_ns_test1/summary.json) · [pool](runs/skillsbench_hot_train0917_ns_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_ns_test2/summary.json) · [pool](runs/skillsbench_hot_train0917_ns_test2/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_ns_test3/summary.json) · [pool](runs/skillsbench_hot_train0917_ns_test3/hot_pool.json) |
+| **NU** | No utility attribution or screening (`--no-hot-pool-outcome-feedback --no-hot-pool-inject-filter-utilities`) | [summary](runs/skillsbench_hot_train0917_nu_test1/summary.json) · [pool](runs/skillsbench_hot_train0917_nu_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_nu_test2/summary.json) · [pool](runs/skillsbench_hot_train0917_nu_test2/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_nu_test3/summary.json) · [pool](runs/skillsbench_hot_train0917_nu_test3/hot_pool.json) |
+| **BP** | Store 16, inject 8 (`--hot-pool-max-entries 16 --hot-pool-inject-k 8`) | [summary](runs/skillsbench_hot_train0917_bp_test1/summary.json) · [pool](runs/skillsbench_hot_train0917_bp_test1/hot_pool.json) | [summary](runs/skillsbench_hot_train0917_bp_test2/summary.json) · [pool](runs/skillsbench_hot_train0917_bp_test2/hot_pool.json) | [pool](runs/skillsbench_hot_train0917_bp_test3/hot_pool.json) |
+
+BP seed 3 has a pool file only. Its `summary.json` is not in the tree, and that seed is not in the ablation CSV.
+
+### AppWorld (`test_normal`)
+
+| Method | Seed 1 | Seed 2 | Seed 3 |
+|--------|--------|--------|--------|
+| A-MEM | [summary](runs/appworld_amem0824_unseen/summary.json) | — | — |
+| DC | [summary](runs/appworld_dc0909_test/summary.json) | [summary](runs/appworld_dc0909_test2/summary.json) | [summary](runs/appworld_dc0909_test3/summary.json) |
+| HermesSkills | [summary](runs/appworld_no_hot_train0821_unseen1/summary.json) | [summary](runs/appworld_no_hot_train0821_unseen2/summary.json) | [summary](runs/appworld_no_hot_train0821_unseen3/summary.json) |
+| TipsWarm | [summary](runs/appworld_hot_train0901_unseen/summary.json) · [pool](runs/appworld_hot_train0901_unseen/hot_pool.json) | [summary](runs/appworld_hot_train0901_unseen2/summary.json) · [pool](runs/appworld_hot_train0901_unseen2/hot_pool.json) | [summary](runs/appworld_hot_train0901_unseen3/summary.json) · [pool](runs/appworld_hot_train0901_unseen3/hot_pool.json) |
+
+CSV: [appworld.csv](runs/appworld.csv).
+
+### ALFWorld (`valid_unseen`)
+
+| Method | Seed 1 | Seed 2 | Seed 3 |
+|--------|--------|--------|--------|
+| A-MEM | [summary](runs/alfworld_amem_train0824_unseen0828/summary.json) | — | — |
+| DC | [summary](runs/alfworld_dc_train0906_unseen/summary.json) | [summary](runs/alfworld_dc_train0906_unseen2/summary.json) | [summary](runs/alfworld_dc_train0906_unseen3/summary.json) |
+| HermesSkills | [summary](runs/alfworld_no_hot_train0820_unseen/summary.json) | [summary](runs/alfworld_no_hot_train0820_unseen2/summary.json) | [summary](runs/alfworld_no_hot_train0820_unseen3/summary.json) |
+| TipsWarm | [summary](runs/alfworld_hot_train0825_unseen/summary.json) · [pool](runs/alfworld_hot_train0825_unseen/hot_pool.json) | [summary](runs/alfworld_hot_train0825_unseen2/summary.json) · [pool](runs/alfworld_hot_train0825_unseen2/hot_pool.json) | [summary](runs/alfworld_hot_train0825_unseen3/summary.json) · [pool](runs/alfworld_hot_train0825_unseen3/hot_pool.json) |
+
+CSV: [alfworld.csv](runs/alfworld.csv).
+
 ## Output files
 
 JSONL logs are usually written under `benchmark/`:

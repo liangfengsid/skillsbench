@@ -13,6 +13,7 @@ JSONL logs, `hermes_home/`, task copies, A-MEM Chroma trees, and DC `episodes.js
 | File | Contents |
 |------|----------|
 | [skillsbench_main.csv](skillsbench_main.csv) | SkillsBench, Qwen3.6-27B, four methods |
+| [skillsbench_ablation.csv](skillsbench_ablation.csv) | SkillsBench ablations: NONE, NW, NS, NU, BP, ALL |
 | [skillsbench_model.csv](skillsbench_model.csv) | SkillsBench, DeepSeek vs Qwen, HermesSkills / TipsWarm |
 | [appworld.csv](appworld.csv) | AppWorld `test_normal` |
 | [alfworld.csv](alfworld.csv) | ALFWorld `valid_unseen` |
@@ -28,12 +29,17 @@ JSONL logs, `hermes_home/`, task copies, A-MEM Chroma trees, and DC `episodes.js
 
 Train (warmup) dirs omit `_test` / `_unseen`. Eval dirs append `_test*`, `_unseen*`, or `_hottest*` (HermesSkills warmup, TipsWarm inject on the test split).
 
-## Other indexed TipsWarm pools
+## SkillsBench ablations
 
-SkillsBench ablations and transfers (pool only, or pool + summary):
+Per-seed `summary.json` / `hot_pool.json` links are in [`../README.md`](../README.md#skillsbench-ablations-qwen-test).
 
-- [`skillsbench_hot_train0917/hot_pool.json`](skillsbench_hot_train0917/hot_pool.json) — train snapshot
-- [`skillsbench_hot_train0911_ds/hot_pool.json`](skillsbench_hot_train0911_ds/hot_pool.json) — DeepSeek train snapshot
-- [`skillsbench_no_hot_train0907_hottest1`](skillsbench_no_hot_train0907_hottest1/summary.json) / [hottest2](skillsbench_no_hot_train0907_hottest2/summary.json) / [hottest3](skillsbench_no_hot_train0907_hottest3/summary.json) — HermesSkills train, TipsWarm at test
-- [`skillsbench_hot_train0917_ns_test1/hot_pool.json`](skillsbench_hot_train0917_ns_test1/hot_pool.json), [`ns_test2`](skillsbench_hot_train0917_ns_test2/hot_pool.json) — no-scope retrieve
-- [`skillsbench_hot_train0917_nu_test1/hot_pool.json`](skillsbench_hot_train0917_nu_test1/hot_pool.json), [`nu_test2`](skillsbench_hot_train0917_nu_test2/hot_pool.json) — no-utility inject filter
+| Label | Setting | Directories |
+|-------|---------|-------------|
+| **NONE** | Default HermesSkills | `skillsbench_no_hot_train0907_test*` |
+| **ALL** | Default TipsWarm | `skillsbench_hot_train0917_test*` |
+| **NW** | Inherits the HermesSkills warmup skill bundle | `skillsbench_no_hot_train0907_hottest*` |
+| **NS** | No scope matching at inject | `skillsbench_hot_train0917_ns_test*` |
+| **NU** | No utility attribution or screening | `skillsbench_hot_train0917_nu_test*` |
+| **BP** | Store cap 16, inject quota 8 | `skillsbench_hot_train0917_bp_test*` |
+
+Other indexed pools: [`skillsbench_hot_train0917/hot_pool.json`](skillsbench_hot_train0917/hot_pool.json) (Qwen train snapshot), [`skillsbench_hot_train0911_ds/hot_pool.json`](skillsbench_hot_train0911_ds/hot_pool.json) (DeepSeek train snapshot).

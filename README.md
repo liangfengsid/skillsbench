@@ -336,7 +336,59 @@ Source: [`benchmark/runs/skillsbench_main.csv`](benchmark/runs/skillsbench_main.
 | TipsWarm | 2 | 0.5312 | 0.6057 | 0.0435 | 0.3913 | 0.6957 | 0.8261 | 1.38e6±1.36e6 | 22.4±18.3 | 1452±951 |
 | TipsWarm | 3 | 0.5565 | 0.6083 | 0.0870 | 0.3043 | 0.7391 | 0.8696 | 1.33e6±1.09e6 | 24.2±14.9 | 1574±1085 |
 
-DeepSeek vs Qwen (SkillsBench only): [`benchmark/runs/skillsbench_model.csv`](benchmark/runs/skillsbench_model.csv).
+### SkillsBench, DeepSeek vs Qwen
+
+Source: [`benchmark/runs/skillsbench_model.csv`](benchmark/runs/skillsbench_model.csv). Same test split and turn budget as the Qwen table above. DeepSeek rows in the CSV are already rounded and have no ±. Qwen rows match the HermesSkills and TipsWarm seeds above. Run files: [`benchmark/README.md`](benchmark/README.md#skillsbench-deepseek-vs-qwen).
+
+| Method | Seed | macro AUC | micro AUC | P@1 | P@10 | P@30 | P@60 | tokens | iters | time (s) |
+|--------|------|-----------|-----------|-----|------|------|------|--------|-------|----------|
+| HermesSkills-DS | 1 | 0.572 | 0.662 | 0.087 | 0.217 | 0.870 | 1.000 | 1.99e6 | 26.7 | 1091 |
+| HermesSkills-DS | 2 | 0.570 | 0.655 | 0.043 | 0.174 | 0.870 | 1.000 | 1.61e6 | 26.8 | 994 |
+| HermesSkills-DS | 3 | 0.530 | 0.657 | 0.043 | 0.174 | 0.739 | 1.000 | 2.19e6 | 29.2 | 1156 |
+| TipsWarm-DS | 1 | 0.643 | 0.761 | 0.043 | 0.391 | 0.870 | 1.000 | 1.35e6 | 22.4 | 812 |
+| TipsWarm-DS | 2 | 0.640 | 0.754 | 0.043 | 0.391 | 0.826 | 1.000 | 1.33e6 | 22.6 | 1006 |
+| TipsWarm-DS | 3 | 0.695 | 0.771 | 0.043 | 0.391 | 1.000 | 1.000 | 1.05e6 | 19.3 | 687 |
+| HermesSkills-Qwen | 1 | 0.4803 | 0.5289 | 0.0455 | 0.2273 | 0.6818 | 0.8182 | 1.10e6±6.18e5 | 25.8±13.8 | 1977±1077 |
+| HermesSkills-Qwen | 2 | 0.4167 | 0.5379 | 0.0435 | 0.2174 | 0.6087 | 0.8261 | 1.33e6±8.66e5 | 30.7±18.0 | 2549±1456 |
+| HermesSkills-Qwen | 3 | 0.4703 | 0.6665 | 0.0435 | 0.2174 | 0.6957 | 0.8261 | 1.18e6±7.54e5 | 26.8±15.4 | 1699±1026 |
+| TipsWarm-Qwen | 1 | 0.5101 | 0.5785 | 0.0435 | 0.2174 | 0.7391 | 0.8261 | 1.24e6±8.02e5 | 25.3±14.3 | 1283±876 |
+| TipsWarm-Qwen | 2 | 0.5312 | 0.6057 | 0.0435 | 0.3913 | 0.6957 | 0.8261 | 1.38e6±1.36e6 | 22.4±18.3 | 1452±951 |
+| TipsWarm-Qwen | 3 | 0.5565 | 0.6083 | 0.0870 | 0.3043 | 0.7391 | 0.8696 | 1.33e6±1.09e6 | 24.2±14.9 | 1574±1085 |
+
+### SkillsBench ablations (Qwen3.6-27B)
+
+Source: [`benchmark/runs/skillsbench_ablation.csv`](benchmark/runs/skillsbench_ablation.csv). Same split, budget, and columns as the table above. **NONE** and **ALL** are the HermesSkills and TipsWarm rows. Micro pass@k is in the CSV.
+
+| Label | What changes | Driver flags |
+|-------|----------------|--------------|
+| **NONE** | Default HermesSkills (no tip pool) | `--no-hot-pool` |
+| **ALL** | Default TipsWarm | `--hot-pool --hot-pool-persist` |
+| **NW** | Test agent inherits the HermesSkills warmup skill bundle | HermesSkills train, then TipsWarm on that skill bundle |
+| **NS** | No scope matching at inject | `--no-hot-pool-inject-retrieve` |
+| **NU** | No utility attribution and no utility screen | `--no-hot-pool-outcome-feedback --no-hot-pool-inject-filter-utilities` |
+| **BP** | Larger pool: 16 tips stored, 8 injected | `--hot-pool-max-entries 16 --hot-pool-inject-k 8` |
+
+| Label | Seed | macro AUC | micro AUC | P@1 | P@10 | P@30 | P@60 | tokens | iters | time (s) |
+|-------|------|-----------|-----------|-----|------|------|------|--------|-------|----------|
+| NONE | 1 | 0.4803 | 0.5289 | 0.0455 | 0.2273 | 0.6818 | 0.8182 | 1.10e6±6.18e5 | 25.8±13.8 | 1977±1077 |
+| NONE | 2 | 0.4167 | 0.5379 | 0.0435 | 0.2174 | 0.6087 | 0.8261 | 1.33e6±8.66e5 | 30.7±18.0 | 2549±1456 |
+| NONE | 3 | 0.4703 | 0.6665 | 0.0435 | 0.2174 | 0.6957 | 0.8261 | 1.18e6±7.54e5 | 26.8±15.4 | 1699±1026 |
+| NW | 1 | 0.5696 | 0.7226 | 0.0435 | 0.0435 | 0.8261 | 0.8696 | 9.22e5±6.56e5 | 21.7±13.3 | 2998±2121 |
+| NW | 2 | 0.5630 | 0.7562 | 0.2174 | 0.3913 | 0.7391 | 0.8696 | 9.56e5±8.36e5 | 22.2±18.2 | 1420±800 |
+| NW | 3 | 0.5210 | 0.6686 | 0.0870 | 0.2609 | 0.7826 | 0.8261 | 1.01e6±6.88e5 | 23.2±13.9 | 1588±675 |
+| NS | 1 | 0.4478 | 0.5969 | 0.0435 | 0.1739 | 0.6087 | 0.8261 | 1.38e6±1.05e6 | 28.5±16.8 | 2754±2399 |
+| NS | 2 | 0.5616 | 0.7584 | 0.0435 | 0.3043 | 0.7826 | 0.8261 | 1.05e6±1.21e6 | 20.2±13.4 | 2199±3046 |
+| NS | 3 | 0.5297 | 0.6579 | 0.0435 | 0.3043 | 0.6522 | 0.8696 | 1.58e6±1.54e6 | 24.5±16.1 | 3295±2635 |
+| NU | 1 | 0.3906 | 0.4965 | 0.0435 | 0.2174 | 0.5652 | 0.8261 | 1.52e6±1.27e6 | 32.6±20.9 | 1561±1303 |
+| NU | 2 | 0.5312 | 0.6937 | 0.0435 | 0.3913 | 0.6957 | 0.8261 | 1.38e6±1.21e6 | 22.4±16.4 | 1661±1131 |
+| NU | 3 | 0.4391 | 0.5953 | 0.0000 | 0.2174 | 0.6957 | 0.8261 | 1.22e6±7.35e5 | 29.1±16.0 | 1362±737 |
+| BP | 1 | 0.4746 | 0.6629 | 0.0435 | 0.1739 | 0.6957 | 0.8696 | 1.49e6±1.41e6 | 28.3±16.4 | 3653±3726 |
+| BP | 2 | 0.4993 | 0.5804 | 0.0435 | 0.2174 | 0.7391 | 0.8696 | 1.51e6±1.34e6 | 27.0±15.2 | 1898±1348 |
+| ALL | 1 | 0.5101 | 0.5785 | 0.0435 | 0.2174 | 0.7391 | 0.8261 | 1.24e6±8.02e5 | 25.3±14.3 | 1283±876 |
+| ALL | 2 | 0.5312 | 0.6057 | 0.0435 | 0.3913 | 0.6957 | 0.8261 | 1.38e6±1.36e6 | 22.4±18.3 | 1452±951 |
+| ALL | 3 | 0.5565 | 0.6083 | 0.0870 | 0.3043 | 0.7391 | 0.8696 | 1.33e6±1.09e6 | 24.2±14.9 | 1574±1085 |
+
+BP seed 3 is not in the CSV yet. Its `summary.json` is not in the tree either.
 
 ### AppWorld (`test_normal`)
 
@@ -372,40 +424,7 @@ Source: [`benchmark/runs/alfworld.csv`](benchmark/runs/alfworld.csv). Success@k 
 | TipsWarm | 2 | 0.7133 | 0.0000 | 0.5149 | 0.8955 | 0.9851 |
 | TipsWarm | 3 | 0.6901 | 0.0000 | 0.4552 | 0.8657 | 0.9776 |
 
-### Indexed run directories
-
-Each cell is the git-tracked `summary.json`. TipsWarm cells also have `hot_pool.json` in the same directory.
-
-**SkillsBench (test)**
-
-| Method | Seed 1 | Seed 2 | Seed 3 |
-|--------|--------|--------|--------|
-| A-MEM | [summary](benchmark/runs/skillsbench_amem_train0824_test/summary.json) | — | — |
-| DC | [summary](benchmark/runs/skillsbench_dc_train0906_test1/summary.json) | [summary](benchmark/runs/skillsbench_dc_train0906_test2/summary.json) | [summary](benchmark/runs/skillsbench_dc_train0906_test3/summary.json) |
-| HermesSkills | [summary](benchmark/runs/skillsbench_no_hot_train0907_test1/summary.json) | [summary](benchmark/runs/skillsbench_no_hot_train0907_test2/summary.json) | [summary](benchmark/runs/skillsbench_no_hot_train0907_test3/summary.json) |
-| TipsWarm | [summary](benchmark/runs/skillsbench_hot_train0917_test1/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0917_test1/hot_pool.json) | [summary](benchmark/runs/skillsbench_hot_train0917_test2/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0917_test2/hot_pool.json) | [summary](benchmark/runs/skillsbench_hot_train0917_test3/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0917_test3/hot_pool.json) |
-
-DeepSeek SkillsBench: HermesSkills [`ds_test1`](benchmark/runs/skillsbench_no_hot_train0911_ds_test1/summary.json) / [`ds_test2`](benchmark/runs/skillsbench_no_hot_train0911_ds_test2/summary.json) / [`ds_test3`](benchmark/runs/skillsbench_no_hot_train0911_ds_test3/summary.json); TipsWarm [`ds_test1`](benchmark/runs/skillsbench_hot_train0911_ds_test1/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0911_ds_test1/hot_pool.json) / [`ds_test2`](benchmark/runs/skillsbench_hot_train0911_ds_test2/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0911_ds_test2/hot_pool.json) / [`ds_test3`](benchmark/runs/skillsbench_hot_train0911_ds_test3/summary.json) · [pool](benchmark/runs/skillsbench_hot_train0911_ds_test3/hot_pool.json).
-
-**AppWorld (`test_normal`)**
-
-| Method | Seed 1 | Seed 2 | Seed 3 |
-|--------|--------|--------|--------|
-| A-MEM | [summary](benchmark/runs/appworld_amem0824_unseen/summary.json) | — | — |
-| DC | [summary](benchmark/runs/appworld_dc0909_test/summary.json) | [summary](benchmark/runs/appworld_dc0909_test2/summary.json) | [summary](benchmark/runs/appworld_dc0909_test3/summary.json) |
-| HermesSkills | [summary](benchmark/runs/appworld_no_hot_train0821_unseen1/summary.json) | [summary](benchmark/runs/appworld_no_hot_train0821_unseen2/summary.json) | [summary](benchmark/runs/appworld_no_hot_train0821_unseen3/summary.json) |
-| TipsWarm | [summary](benchmark/runs/appworld_hot_train0901_unseen/summary.json) · [pool](benchmark/runs/appworld_hot_train0901_unseen/hot_pool.json) | [summary](benchmark/runs/appworld_hot_train0901_unseen2/summary.json) · [pool](benchmark/runs/appworld_hot_train0901_unseen2/hot_pool.json) | [summary](benchmark/runs/appworld_hot_train0901_unseen3/summary.json) · [pool](benchmark/runs/appworld_hot_train0901_unseen3/hot_pool.json) |
-
-**ALFWorld (`valid_unseen`)**
-
-| Method | Seed 1 | Seed 2 | Seed 3 |
-|--------|--------|--------|--------|
-| A-MEM | [summary](benchmark/runs/alfworld_amem_train0824_unseen0828/summary.json) | — | — |
-| DC | [summary](benchmark/runs/alfworld_dc_train0906_unseen/summary.json) | [summary](benchmark/runs/alfworld_dc_train0906_unseen2/summary.json) | [summary](benchmark/runs/alfworld_dc_train0906_unseen3/summary.json) |
-| HermesSkills | [summary](benchmark/runs/alfworld_no_hot_train0820_unseen/summary.json) | [summary](benchmark/runs/alfworld_no_hot_train0820_unseen2/summary.json) | [summary](benchmark/runs/alfworld_no_hot_train0820_unseen3/summary.json) |
-| TipsWarm | [summary](benchmark/runs/alfworld_hot_train0825_unseen/summary.json) · [pool](benchmark/runs/alfworld_hot_train0825_unseen/hot_pool.json) | [summary](benchmark/runs/alfworld_hot_train0825_unseen2/summary.json) · [pool](benchmark/runs/alfworld_hot_train0825_unseen2/hot_pool.json) | [summary](benchmark/runs/alfworld_hot_train0825_unseen3/summary.json) · [pool](benchmark/runs/alfworld_hot_train0825_unseen3/hot_pool.json) |
-
-A fuller directory list (train snapshots, ablations, hottest-pool transfers) is in [`benchmark/runs/README.md`](benchmark/runs/README.md).
+Per-run `summary.json` and `hot_pool.json` links (main methods, DeepSeek, and the SkillsBench ablations) are in [`benchmark/README.md`](benchmark/README.md#reported-run-files). Directory naming is also listed in [`benchmark/runs/README.md`](benchmark/runs/README.md).
 
 ---
 
