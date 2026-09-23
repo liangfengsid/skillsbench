@@ -35,11 +35,11 @@ Per-seed `summary.json` / `hot_pool.json` links are in [`../README.md`](../READM
 
 | Label | Setting | Directories |
 |-------|---------|-------------|
-| **NONE** | Default HermesSkills | `skillsbench_no_hot_train0907_test*` |
-| **ALL** | Default TipsWarm | `skillsbench_hot_train0917_test*` |
-| **NW** | Inherits the HermesSkills warmup skill bundle | `skillsbench_no_hot_train0907_hottest*` |
-| **NS** | No scope matching at inject | `skillsbench_hot_train0917_ns_test*` |
-| **NU** | No utility attribution or screening | `skillsbench_hot_train0917_nu_test*` |
-| **BP** | Store cap 16, inject quota 8 | `skillsbench_hot_train0917_bp_test*` |
+| **NONE** | Default HermesSkills | `skillsbench_no_hot_train_test*` |
+| **ALL** | Default TipsWarm | `skillsbench_hot_train_test*` |
+| **NW** | Inherits the HermesSkills warmup skill bundle | `skillsbench_no_hot_train_hottest*` |
+| **NS** | No scope matching at inject | `skillsbench_hot_train_ns_test*` |
+| **NU** | No utility attribution or screening | `skillsbench_hot_train_nu_test*` |
+| **BP** | Store cap 16, inject quota 8 | `skillsbench_hot_train_bp_test*` |
 
-Other indexed pools: [`skillsbench_hot_train0917/hot_pool.json`](skillsbench_hot_train0917/hot_pool.json) (Qwen train snapshot), [`skillsbench_hot_train0911_ds/hot_pool.json`](skillsbench_hot_train0911_ds/hot_pool.json) (DeepSeek train snapshot).
+Other indexed pools: [`skillsbench_hot_train/hot_pool.json`](skillsbench_hot_train/hot_pool.json) (Qwen train snapshot), [`skillsbench_hot_train_ds/hot_pool.json`](skillsbench_hot_train_ds/hot_pool.json) (DeepSeek train snapshot).

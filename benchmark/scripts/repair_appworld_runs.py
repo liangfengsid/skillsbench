@@ -14,14 +14,14 @@ stdio / background-review races):
 Examples::
 
   python3 benchmark/scripts/repair_appworld_runs.py list-infra \\
-      benchmark/runs/appworld_no_hot_train0821/runs.jsonl
+      benchmark/runs/appworld_no_hot_train/runs.jsonl
 
   python3 benchmark/scripts/repair_appworld_runs.py strip-for-rerun \\
-      benchmark/runs/appworld_no_hot_train0821/runs.jsonl \\
-      --output benchmark/runs/appworld_no_hot_train0821/runs.prererun.jsonl
+      benchmark/runs/appworld_no_hot_train/runs.jsonl \\
+      --output benchmark/runs/appworld_no_hot_train/runs.prererun.jsonl
 
   python3 benchmark/scripts/repair_appworld_runs.py compact \\
-      benchmark/runs/appworld_no_hot_train0821/runs.jsonl \\
+      benchmark/runs/appworld_no_hot_train/runs.jsonl \\
       --in-place
 """
 
