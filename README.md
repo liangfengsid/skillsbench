@@ -16,7 +16,7 @@ If your checkout is **hermes-agent** with SkillsBench at `benchmark/skillsbench/
 - **BenchFlow in the same venv as Hermes:** from the Hermes repo root: `pip install -e ".[skillsbench]"` — installs the `benchflow` optional extra on `hermes-agent` (aligned with this subproject’s dependency pin).
 - **Editable `skillsbench` + dev tooling:** `cd benchmark/skillsbench` and `pip install -e .` or `uv sync` per that directory’s `pyproject.toml` (includes dev groups / `uv` sources when you opt into them).
 
-The Hermes driver lives in the main repo at [`../scripts/run_skillsbench_with_hermes.py`](../scripts/run_skillsbench_with_hermes.py) (run from Hermes root as `python3 benchmark/scripts/run_skillsbench_with_hermes.py`); see **[`../README.md`](../README.md)** (benchmark hub) and **Running tasks with Hermes** below.
+The Hermes driver lives in the main repo at [`../scripts/run_skillsbench_with_hermes.py`](../scripts/run_skillsbench_with_hermes.py) (run from the TipsWarm / Hermes repo root as `python3 benchmark/scripts/run_skillsbench_with_hermes.py`). **Paper reproduction** (`$expDir`, `--isolate-hermes-home`, copy-workspace test): root [`../../README.md`](../../README.md). Extra flags: [`../README.md`](../README.md).
 
 ## What is SkillsBench?
 
@@ -67,20 +67,21 @@ let [`direnv`](https://direnv.net/) load them automatically.
 
 **Examples**
 
+Paper-style isolated runs use `$expDir` and `--isolate-hermes-home` — copy from the root [`README.md`](../../README.md). Extra options:
+
 ```bash
-# From Hermes repo root — list task ids (no Hermes import)
+# From repo root — list task ids (no Hermes import)
 python3 benchmark/scripts/run_skillsbench_with_hermes.py --list-tasks
 
-# Single task: log full run_conversation payload as JSON Lines
+expDir=benchmark/runs/skillsbench_hot_train
+# Isolated single task
 python3 benchmark/scripts/run_skillsbench_with_hermes.py \
   --task adaptive-cruise-control \
-  --skill-nudge-interval 10 \
-  --memory-nudge-interval 10 \
-  --log-jsonl ./hermes_skillsbench_runs.jsonl \
+  --experiment-dir $expDir --isolate-hermes-home \
+  --skip-context-files --skip-memory \
+  --hot-pool --hot-pool-persist $expDir/hot_pool.json \
+  --log-jsonl $expDir/runs.jsonl \
   --print-summary
-
-# All tasks sequentially (continues after errors; use --stop-on-error to abort)
-python3 benchmark/scripts/run_skillsbench_with_hermes.py --all --log-jsonl ./hermes_skillsbench_runs.jsonl
 ```
 
 **Hot skill key points (cross-task pool + telemetry)**
